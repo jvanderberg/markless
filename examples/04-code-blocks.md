@@ -187,7 +187,7 @@ LIMIT 10;
 
 ```json
 {
-  "name": "gander",
+  "name": "markless",
   "version": "0.1.0",
   "dependencies": {
     "ratatui": "0.30",
@@ -231,7 +231,7 @@ services:
 
 ```toml
 [package]
-name = "gander"
+name = "markless"
 version = "0.1.0"
 edition = "2021"
 

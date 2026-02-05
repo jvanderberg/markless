@@ -8,5 +8,5 @@ Cargo.lock
 .vscode/
 *.log
 coverage/
-.ganderrc
+.marklessrc
 TEST-README.md

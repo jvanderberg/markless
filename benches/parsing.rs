@@ -1,7 +1,7 @@
 //! Benchmarks for markdown parsing.
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use gander::document::Document;
+use markless::document::Document;
 
 fn bench_parse_simple(c: &mut Criterion) {
     let md = "# Hello\n\nWorld";

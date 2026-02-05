@@ -58,7 +58,7 @@ pub fn load_image(base_path: &Path, image_path: &str) -> Option<DynamicImage> {
 
 /// Whether terminal output should be treated as truecolor-capable.
 pub fn supports_truecolor_terminal() -> bool {
-    if let Ok(force) = std::env::var("GANDER_TRUECOLOR") {
+    if let Ok(force) = std::env::var("MARKLESS_TRUECOLOR") {
         let value = force.to_ascii_lowercase();
         return matches!(value.as_str(), "1" | "true" | "yes" | "on");
     }

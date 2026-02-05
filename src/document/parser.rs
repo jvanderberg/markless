@@ -17,7 +17,7 @@ use super::types::{
 /// # Example
 ///
 /// ```
-/// use gander::document::Document;
+/// use markless::document::Document;
 ///
 /// let doc = Document::parse("# Hello\n\nWorld").unwrap();
 /// assert!(doc.line_count() >= 3); // heading + empty + paragraph + trailing empty

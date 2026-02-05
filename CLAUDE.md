@@ -1,4 +1,4 @@
-# Gander - Claude Code Instructions
+# Markless - Claude Code Instructions
 
 **Follow Strict RED/GREEN TDD in all development.**
 
@@ -10,7 +10,7 @@
 
 ## Project Overview
 
-Gander is a Rust TUI markdown viewer with:
+Markless is a Rust TUI markdown viewer with:
 - Image support (Kitty, Sixel, iTerm2, half-block fallback)
 - Table of contents sidebar
 - File watching / live reload

@@ -1,8 +1,8 @@
-//! # Gander
+//! # Markless
 //!
 //! A terminal markdown viewer with image support.
 //!
-//! Gander renders markdown files in the terminal with:
+//! Markless renders markdown files in the terminal with:
 //! - Syntax-highlighted code blocks
 //! - Image support (Kitty, Sixel, half-block fallback)
 //! - Table of contents sidebar
@@ -10,7 +10,7 @@
 //!
 //! ## Architecture
 //!
-//! Gander uses The Elm Architecture (TEA) pattern:
+//! Markless uses The Elm Architecture (TEA) pattern:
 //! - **Model**: Application state
 //! - **Message**: Events and actions
 //! - **Update**: Pure state transitions

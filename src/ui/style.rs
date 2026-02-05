@@ -112,7 +112,7 @@ fn fg_color_for_terminal(fg: crate::document::InlineColor) -> Color {
 }
 
 fn supports_truecolor() -> bool {
-    if let Ok(force) = std::env::var("GANDER_TRUECOLOR") {
+    if let Ok(force) = std::env::var("MARKLESS_TRUECOLOR") {
         let value = force.to_ascii_lowercase();
         return matches!(value.as_str(), "1" | "true" | "yes" | "on");
     }

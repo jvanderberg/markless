@@ -1,11 +1,11 @@
-//! Gander - A terminal markdown viewer with image support.
+//! Markless - A terminal markdown viewer with image support.
 //!
 //! # Usage
 //!
 //! ```bash
-//! gander README.md
-//! gander --watch README.md
-//! gander --no-toc README.md
+//! markless README.md
+//! markless --watch README.md
+//! markless --no-toc README.md
 //! ```
 
 use std::path::PathBuf;
@@ -16,17 +16,17 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-use gander::app::App;
-use gander::config::{
+use markless::app::App;
+use markless::config::{
     clear_config_flags, global_config_path, load_config_flags, local_override_path,
     parse_flag_tokens, save_config_flags, ConfigFlags, ThemeMode,
 };
-use gander::highlight::{set_background_mode, HighlightBackground};
-use gander::perf;
+use markless::highlight::{set_background_mode, HighlightBackground};
+use markless::perf;
 
 /// A terminal markdown viewer with image support
 #[derive(Parser, Debug)]
-#[command(name = "gander", version, about, long_about = None)]
+#[command(name = "markless", version, about, long_about = None)]
 struct Cli {
     /// Markdown file to view
     #[arg(value_name = "FILE")]
@@ -64,11 +64,11 @@ struct Cli {
     #[arg(long)]
     force_half_cell: bool,
 
-    /// Save current command-line flags as defaults in .ganderrc
+    /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
     save: bool,
 
-    /// Clear saved defaults in .ganderrc
+    /// Clear saved defaults in .marklessrc
     #[arg(long)]
     clear: bool,
 
@@ -200,7 +200,7 @@ fn relaunch_with_theme(mode: HighlightBackground, raw_args: &[String]) -> Result
 
     let status = Command::new(exe).args(args).status()?;
     if !status.success() {
-        anyhow::bail!("failed to relaunch gander with detected theme");
+        anyhow::bail!("failed to relaunch markless with detected theme");
     }
     Ok(())
 }
@@ -263,7 +263,7 @@ fn main() -> Result<()> {
     let render_debug_log_path = effective
         .render_debug_log
         .clone()
-        .or_else(|| std::env::var_os("GANDER_RENDER_DEBUG_LOG").map(PathBuf::from));
+        .or_else(|| std::env::var_os("MARKLESS_RENDER_DEBUG_LOG").map(PathBuf::from));
     if let Err(err) = perf::set_debug_log_path(render_debug_log_path.as_deref()) {
         eprintln!(
             "[warn] Failed to initialize render debug log {}: {}",

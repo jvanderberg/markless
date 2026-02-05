@@ -1,7 +1,7 @@
 //! Benchmarks for document rendering.
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use gander::document::Document;
+use markless::document::Document;
 
 fn bench_visible_lines(c: &mut Criterion) {
     let md = include_str!("../tests/fixtures/simple.md");

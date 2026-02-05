@@ -66,7 +66,7 @@ pub fn set_debug_log_path(path: Option<&Path>) -> std::io::Result<()> {
         logger.start = Instant::now();
         logger.writer = Some(BufWriter::new(file));
         if let Some(writer) = logger.writer.as_mut() {
-            writeln!(writer, "gander render debug log start")?;
+            writeln!(writer, "markless render debug log start")?;
             writer.flush()?;
         }
     } else {
@@ -122,7 +122,7 @@ mod tests {
         set_debug_log_path(None).unwrap();
 
         let content = std::fs::read_to_string(temp_file.path()).unwrap();
-        assert!(content.contains("gander render debug log start"));
+        assert!(content.contains("markless render debug log start"));
         assert!(content.contains("test.event: hello world"));
     }
 }

@@ -44,7 +44,7 @@ pub fn global_config_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            return PathBuf::from(appdata).join("gander").join("config");
+            return PathBuf::from(appdata).join("markless").join("config");
         }
     }
 
@@ -54,7 +54,7 @@ pub fn global_config_path() -> PathBuf {
             return PathBuf::from(home)
                 .join("Library")
                 .join("Application Support")
-                .join("gander")
+                .join("markless")
                 .join("config");
         }
     }
@@ -62,18 +62,18 @@ pub fn global_config_path() -> PathBuf {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            return PathBuf::from(xdg).join("gander").join("config");
+            return PathBuf::from(xdg).join("markless").join("config");
         }
         if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(".config").join("gander").join("config");
+            return PathBuf::from(home).join(".config").join("markless").join("config");
         }
     }
 
-    PathBuf::from(".ganderrc")
+    PathBuf::from(".marklessrc")
 }
 
 pub fn local_override_path() -> PathBuf {
-    PathBuf::from(".ganderrc")
+    PathBuf::from(".marklessrc")
 }
 
 pub fn load_config_flags(path: &Path) -> Result<ConfigFlags> {
@@ -93,7 +93,7 @@ pub fn load_config_flags(path: &Path) -> Result<ConfigFlags> {
 
 pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     let mut lines = Vec::new();
-    lines.push("# gander defaults (saved with --save)".to_string());
+    lines.push("# markless defaults (saved with --save)".to_string());
     if flags.watch {
         lines.push("--watch".to_string());
     }
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn test_parse_flag_tokens_extracts_known_flags() {
         let args = vec![
-            "gander".to_string(),
+            "markless".to_string(),
             "--watch".to_string(),
             "--toc".to_string(),
             "--no-images".to_string(),
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn test_save_load_and_clear_config() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join(".ganderrc");
+        let path = dir.path().join(".marklessrc");
         let flags = ConfigFlags {
             watch: true,
             toc: true,

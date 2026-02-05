@@ -919,11 +919,11 @@ fn paging_perf_test_rendering() {
         max_ms
     );
 
-    let max_limit_ms = std::env::var("GANDER_PERF_MAX_FRAME_MS")
+    let max_limit_ms = std::env::var("MARKLESS_PERF_MAX_FRAME_MS")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(50.0);
-    let total_limit_ms = std::env::var("GANDER_PERF_TOTAL_MS")
+    let total_limit_ms = std::env::var("MARKLESS_PERF_TOTAL_MS")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(1500.0);

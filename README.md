@@ -1,6 +1,6 @@
-# Gander
+# Markless
 
-Gander is a terminal markdown viewer with image support. It is focused on fast navigation, clear rendering, and sensible defaults for long documents.
+Markless is a terminal markdown viewer with image support. It is focused on fast navigation, clear rendering, and sensible defaults for long documents.
 
 ## Screenshots
 
@@ -32,13 +32,13 @@ cargo install --path .
 ### Production (from crates.io)
 
 ```bash
-cargo install gander
+cargo install markless
 ```
 
 ## Usage
 
 ```bash
-gander README.md
+markless README.md
 ```
 
 ## Command Line Options
@@ -55,8 +55,8 @@ gander README.md
 - `--clear`  Clear saved defaults in the global config
 
 Config files:
-- Global (macOS): `~/Library/Application Support/gander/config`
-- Local override: `.ganderrc` in the current directory
+- Global (macOS): `~/Library/Application Support/markless/config`
+- Local override: `.marklessrc` in the current directory
 
 ## Key Bindings
 

@@ -15,7 +15,7 @@ use std::ops::Range;
 /// # Example
 ///
 /// ```
-/// use gander::ui::viewport::Viewport;
+/// use markless::ui::viewport::Viewport;
 ///
 /// let mut vp = Viewport::new(80, 24, 100);
 /// assert_eq!(vp.visible_range(), 0..24);

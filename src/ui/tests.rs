@@ -13,7 +13,7 @@ fn create_test_terminal() -> Terminal<TestBackend> {
 }
 
 fn should_run_image_tests() -> bool {
-    std::env::var("GANDER_RUN_IMAGE_TESTS")
+    std::env::var("MARKLESS_RUN_IMAGE_TESTS")
         .ok()
         .as_deref()
         .is_some_and(|v| v == "1")
@@ -156,7 +156,7 @@ fn test_help_overlay_shows_config_paths_full_width() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_load_nearby_images_with_real_file() {
     if !should_run_image_tests() {
         return;
@@ -206,7 +206,7 @@ fn test_load_nearby_images_with_real_file() {
 // ==================== NEW TDD TESTS FOR IMAGE LAYOUT ====================
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_does_not_overlap_text_below() {
     if !should_run_image_tests() {
         return;
@@ -290,7 +290,7 @@ fn test_image_reserves_fixed_height_in_document() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_size_stable_during_scroll() {
     if !should_run_image_tests() {
         return;
@@ -351,7 +351,7 @@ fn test_image_size_stable_during_scroll() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_clips_not_resizes_when_scrolling() {
     if !should_run_image_tests() {
         return;
@@ -423,7 +423,7 @@ fn measure_image_width(buffer: &ratatui::buffer::Buffer) -> u16 {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_scrolls_off_top_of_screen() {
     if !should_run_image_tests() {
         return;
@@ -475,7 +475,7 @@ fn test_image_scrolls_off_top_of_screen() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_partially_visible_when_scrolled_off_top() {
     if !should_run_image_tests() {
         return;
@@ -552,7 +552,7 @@ fn test_image_partially_visible_when_scrolled_off_top() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_partially_visible_when_near_bottom() {
     if !should_run_image_tests() {
         return;
@@ -624,7 +624,7 @@ fn test_image_partially_visible_when_near_bottom() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_width_is_65_percent_of_viewport() {
     if !should_run_image_tests() {
         return;
@@ -686,7 +686,7 @@ fn test_image_width_is_65_percent_of_viewport() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_height_based_on_scaled_dimensions() {
     if !should_run_image_tests() {
         return;
@@ -751,7 +751,7 @@ fn test_image_height_based_on_scaled_dimensions() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_wide_image_renders_at_correct_height() {
     if !should_run_image_tests() {
         return;
@@ -808,7 +808,7 @@ fn test_wide_image_renders_at_correct_height() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_document_reserves_scaled_image_height() {
     if !should_run_image_tests() {
         return;
@@ -847,7 +847,7 @@ fn test_document_reserves_scaled_image_height() {
 }
 
 #[test]
-#[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
+#[ignore = "requires image rendering; set MARKLESS_RUN_IMAGE_TESTS=1"]
 fn test_image_rescales_on_viewport_resize() {
     if !should_run_image_tests() {
         return;

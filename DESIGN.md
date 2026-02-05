@@ -1,10 +1,10 @@
-# Gander - Design Document
+# Markless - Design Document
 
-This document describes the current architecture and behavior of Gander as implemented in the codebase. It is intentionally pragmatic and scoped to what exists today.
+This document describes the current architecture and behavior of Markless as implemented in the codebase. It is intentionally pragmatic and scoped to what exists today.
 
 ## Overview
 
-Gander is a terminal markdown viewer that renders CommonMark with selected GFM extensions, supports inline images, and provides fast navigation for long documents. It uses ratatui/crossterm for UI, comrak for markdown parsing, syntect for syntax highlighting, and notify for file watching.
+Markless is a terminal markdown viewer that renders CommonMark with selected GFM extensions, supports inline images, and provides fast navigation for long documents. It uses ratatui/crossterm for UI, comrak for markdown parsing, syntect for syntax highlighting, and notify for file watching.
 
 ## Goals
 
@@ -140,8 +140,8 @@ File watching uses `notify`. When enabled, changes reload the document and reflo
 
 Flags can be saved to a global config and overridden locally.
 
-Global (macOS): `~/Library/Application Support/gander/config`
-Local: `.ganderrc` in the current directory
+Global (macOS): `~/Library/Application Support/markless/config`
+Local: `.marklessrc` in the current directory
 
 Saved flags are merged with CLI flags (CLI wins on conflicting options).
 

@@ -368,7 +368,7 @@ LIMIT 10;
 
 ```json
 {
-  "name": "gander",
+  "name": "markless",
   "version": "0.1.0",
   "dependencies": {
     "ratatui": "0.30",
@@ -412,7 +412,7 @@ services:
 
 ```toml
 [package]
-name = "gander"
+name = "markless"
 version = "0.1.0"
 edition = "2021"
 
@@ -980,7 +980,7 @@ Configuration
 ---
 
 
-# Gander - Terminal Markdown Viewer
+# Markless - Terminal Markdown Viewer
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]()
@@ -1003,14 +1003,14 @@ A fast, feature-rich terminal-based markdown viewer with image support.
 ### From Cargo
 
 ```bash
-cargo install gander
+cargo install markless
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/example/gander
-cd gander
+git clone https://github.com/example/markless
+cd markless
 cargo build --release
 ```
 
@@ -1018,13 +1018,13 @@ cargo build --release
 
 ```bash
 # View a markdown file
-gander README.md
+markless README.md
 
 # Enable file watching
-gander --watch document.md
+markless --watch document.md
 
 # Show table of contents
-gander --toc notes.md
+markless --toc notes.md
 ```
 
 ## Keyboard Shortcuts
@@ -1045,7 +1045,7 @@ gander --toc notes.md
 
 ## Configuration
 
-Create `~/.config/gander/config.toml`:
+Create `~/.config/markless/config.toml`:
 
 ```toml
 [display]
@@ -1081,7 +1081,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-Made with ❤️ by the Gander team
+Made with ❤️ by the Markless team
 
 
 ---
