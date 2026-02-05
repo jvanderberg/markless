@@ -1,0 +1,93 @@
+[package]
+name = "gander"
+version = "0.1.0"
+edition = "2024"
+authors = ["Josh V"]
+description = "A terminal markdown viewer with image support"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/joshv/gander"
+keywords = ["markdown", "tui", "terminal", "viewer", "pager"]
+categories = ["command-line-utilities", "text-processing"]
+
+[dependencies]
+# TUI framework
+ratatui = "0.30"
+crossterm = "0.29"
+
+# Markdown parsing
+comrak = { version = "0.31", default-features = false, features = ["shortcodes"] }
+
+# Image rendering
+ratatui-image = { version = "10", default-features = false, features = ["image-defaults", "crossterm"] }
+image = "0.25"
+
+# Syntax highlighting
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "fs", "sync", "time", "macros"] }
+
+# File watching
+notify = "7"
+notify-debouncer-mini = "0.5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Unicode handling
+unicode-width = "0.2"
+textwrap = "0.16"
+
+[dev-dependencies]
+# Testing
+pretty_assertions = "1"
+insta = "1"
+proptest = "1"
+test-case = "3"
+mockall = "0.13"
+tempfile = "3"
+
+# Benchmarking
+criterion = "0.5"
+
+[[bench]]
+name = "parsing"
+harness = false
+
+[[bench]]
+name = "rendering"
+harness = false
+
+[features]
+default = ["sixel", "kitty"]
+sixel = []
+kitty = []
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Allow some pedantic lints
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+# These are noisy for TUI apps
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
