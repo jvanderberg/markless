@@ -1,5 +1,6 @@
 //! Core document types.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 /// A parsed and rendered markdown document.
@@ -15,6 +16,8 @@ pub struct Document {
     images: Vec<ImageRef>,
     /// Link references
     links: Vec<LinkRef>,
+    /// Footnote definition lines by label
+    footnotes: HashMap<String, usize>,
     /// Code blocks for lazy syntax highlighting
     code_blocks: Vec<CodeBlockRef>,
 }
@@ -28,6 +31,7 @@ impl Document {
             headings: Vec::new(),
             images: Vec::new(),
             links: Vec::new(),
+            footnotes: HashMap::new(),
             code_blocks: Vec::new(),
         }
     }
@@ -39,6 +43,7 @@ impl Document {
         headings: Vec<HeadingRef>,
         images: Vec<ImageRef>,
         links: Vec<LinkRef>,
+        footnotes: HashMap<String, usize>,
         code_blocks: Vec<CodeBlockRef>,
     ) -> Self {
         Self {
@@ -47,6 +52,7 @@ impl Document {
             headings,
             images,
             links,
+            footnotes,
             code_blocks,
         }
     }
@@ -71,11 +77,41 @@ impl Document {
         &self.links
     }
 
+    pub fn footnote_line(&self, name: &str) -> Option<usize> {
+        self.footnotes.get(name).copied()
+    }
+
+    pub fn resolve_internal_anchor(&self, anchor: &str) -> Option<usize> {
+        let target = anchor.trim();
+        if target.is_empty() {
+            return None;
+        }
+        let normalized = normalize_anchor(target);
+        self.headings
+            .iter()
+            .find_map(|h| {
+                if h.id.as_deref().is_some_and(|id| id == target) {
+                    return Some(h.line);
+                }
+                let slug = normalize_anchor(&h.text);
+                if slug == normalized {
+                    Some(h.line)
+                } else {
+                    None
+                }
+            })
+    }
+
     /// Get visible lines for rendering.
     ///
     /// Returns lines from `offset` to `offset + count`.
     pub fn visible_lines(&self, offset: usize, count: usize) -> Vec<&RenderedLine> {
         self.lines.iter().skip(offset).take(count).collect()
+    }
+
+    /// Get a specific rendered line by index.
+    pub fn line_at(&self, index: usize) -> Option<&RenderedLine> {
+        self.lines.get(index)
     }
 
     /// Get the source text.
@@ -307,6 +343,22 @@ fn spans_char_len(spans: &[InlineSpan]) -> usize {
     spans.iter().map(|s| s.text().chars().count()).sum()
 }
 
+fn normalize_anchor(s: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in s.chars() {
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() {
+            out.push(lower);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
 fn truncate_spans_to_chars(spans: &[InlineSpan], max_len: usize) -> Vec<InlineSpan> {
     let mut out = Vec::new();
     let mut remaining = max_len;
@@ -360,7 +412,15 @@ mod tests {
             RenderedLine::new("Line 4".to_string(), LineType::Paragraph),
             RenderedLine::new("Line 5".to_string(), LineType::Paragraph),
         ];
-        let doc = Document::new("source".to_string(), lines, vec![], vec![], vec![], vec![]);
+        let doc = Document::new(
+            "source".to_string(),
+            lines,
+            vec![],
+            vec![],
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
 
         let visible = doc.visible_lines(1, 2);
         assert_eq!(visible.len(), 2);
@@ -374,7 +434,15 @@ mod tests {
             RenderedLine::new("Line 1".to_string(), LineType::Paragraph),
             RenderedLine::new("Line 2".to_string(), LineType::Paragraph),
         ];
-        let doc = Document::new("source".to_string(), lines, vec![], vec![], vec![], vec![]);
+        let doc = Document::new(
+            "source".to_string(),
+            lines,
+            vec![],
+            vec![],
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
 
         let visible = doc.visible_lines(0, 10);
         assert_eq!(visible.len(), 2);

@@ -10,6 +10,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -17,6 +19,7 @@ use clap::Parser;
 use gander::app::App;
 use gander::highlight::{set_background_mode, HighlightBackground};
 use gander::perf;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 /// A terminal markdown viewer with image support
 #[derive(Parser, Debug)]
@@ -61,6 +64,7 @@ struct Cli {
     /// Clear saved defaults in .ganderrc
     #[arg(long)]
     clear: bool,
+
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +241,160 @@ fn parse_theme(s: &str) -> Option<ThemeMode> {
     }
 }
 
+// Query the terminal background using OSC 11.
+// We talk to /dev/tty so the terminal responds even when stdout is piped.
+fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+
+    #[cfg(unix)]
+    let mut io = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+    #[cfg(unix)]
+    let reader = io.try_clone()?;
+
+    #[cfg(not(unix))]
+    let mut io = std::io::stdout();
+    #[cfg(not(unix))]
+    let reader = std::io::stdin();
+
+    // OSC 11 query: ESC ] 11 ; ? BEL
+    io.write_all(b"\x1b]11;?\x07")?;
+    io.flush()?;
+
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; 256];
+        let mut collected: Vec<u8> = Vec::new();
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => continue,
+                Ok(n) => {
+                    collected.extend_from_slice(&buf[..n]);
+                    if collected.contains(&b'\x07')
+                        || collected.windows(2).any(|w| w == b"\x1b\\")
+                    {
+                        let _ = tx.send(collected);
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut collected = Vec::new();
+    if let Ok(bytes) = rx.recv_timeout(Duration::from_millis(75)) {
+        collected = bytes;
+    }
+
+    let mut found: Option<(u8, u8, u8)> = None;
+    if !collected.is_empty() {
+        let text = String::from_utf8_lossy(&collected);
+        if text.contains("rgb:") {
+            found = parse_osc11_reply(&text);
+        }
+    }
+
+    Ok(found)
+}
+
+fn theme_from_rgb(r: u8, g: u8, b: u8) -> HighlightBackground {
+    let luma = (0.2126 * r as f32) + (0.7152 * g as f32) + (0.0722 * b as f32);
+    if luma >= 140.0 {
+        HighlightBackground::Light
+    } else {
+        HighlightBackground::Dark
+    }
+}
+
+fn detect_theme() -> Option<HighlightBackground> {
+    let _raw = enable_raw_mode();
+    let result = query_terminal_background();
+    let _ = disable_raw_mode();
+    result.ok().flatten().map(|(r, g, b)| theme_from_rgb(r, g, b))
+}
+
+fn relaunch_with_theme(mode: HighlightBackground, raw_args: &[String]) -> Result<()> {
+    let exe = std::env::current_exe().context("current exe")?;
+    let tokens = raw_args.get(1..).unwrap_or_default();
+    let mut args: Vec<String> = Vec::with_capacity(tokens.len() + 2);
+    let mut i = 0;
+    let mut saw_theme = false;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if token == "--theme" {
+            saw_theme = true;
+            i += 1;
+            if i < tokens.len() {
+                i += 1;
+            }
+            args.push("--theme".to_string());
+            args.push(match mode {
+                HighlightBackground::Light => "light".to_string(),
+                HighlightBackground::Dark => "dark".to_string(),
+            });
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--theme=") {
+            saw_theme = true;
+            if value == "auto" {
+                args.push(format!(
+                    "--theme={}",
+                    match mode {
+                        HighlightBackground::Light => "light",
+                        HighlightBackground::Dark => "dark",
+                    }
+                ));
+            } else {
+                args.push(token.clone());
+            }
+            i += 1;
+            continue;
+        }
+        args.push(token.clone());
+        i += 1;
+    }
+
+    if !saw_theme {
+        args.push("--theme".to_string());
+        args.push(match mode {
+            HighlightBackground::Light => "light".to_string(),
+            HighlightBackground::Dark => "dark".to_string(),
+        });
+    }
+
+    let status = Command::new(exe).args(args).status()?;
+    if !status.success() {
+        anyhow::bail!("failed to relaunch gander with detected theme");
+    }
+    Ok(())
+}
+
+fn parse_osc11_reply(reply: &str) -> Option<(u8, u8, u8)> {
+    // Expect: ESC ] 11 ; rgb:RRRR/GGGG/BBBB BEL or ST
+    let start = reply.find("rgb:")?;
+    let data = &reply[start + 4..];
+    let mut parts = data.split(|c| c == '/' || c == '\x07' || c == '\x1b');
+    let r = parts.next()?;
+    let g = parts.next()?;
+    let b = parts.next()?;
+    Some((parse_osc_component(r)?, parse_osc_component(g)?, parse_osc_component(b)?))
+}
+
+fn parse_osc_component(s: &str) -> Option<u8> {
+    let hex = s.trim();
+    if hex.len() >= 4 {
+        let v = u16::from_str_radix(&hex[..4], 16).ok()?;
+        Some((v >> 8) as u8)
+    } else if hex.len() == 2 {
+        u8::from_str_radix(hex, 16).ok()
+    } else {
+        None
+    }
+}
+
 fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -284,7 +442,12 @@ fn main() -> Result<()> {
     }
 
     match effective.theme.unwrap_or(ThemeMode::Auto) {
-        ThemeMode::Auto => set_background_mode(None),
+        ThemeMode::Auto => {
+            if let Some(mode) = detect_theme() {
+                return relaunch_with_theme(mode, &raw_args);
+            }
+            set_background_mode(None);
+        }
         ThemeMode::Light => set_background_mode(Some(HighlightBackground::Light)),
         ThemeMode::Dark => set_background_mode(Some(HighlightBackground::Dark)),
     }

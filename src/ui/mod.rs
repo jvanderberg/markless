@@ -55,7 +55,66 @@ pub fn render(model: &mut Model, frame: &mut Frame) {
 
     if model.help_visible {
         render_help_overlay(model, frame, area);
+    } else if model.link_picker_active() {
+        render_link_picker_overlay(model, frame, area);
     }
+}
+
+pub fn link_picker_rect(area: Rect, items_len: usize) -> Rect {
+    let popup_width = area.width.saturating_sub(16).max(44);
+    let needed_rows = (items_len as u16 * 2) + 4;
+    let popup_height = needed_rows.min(area.height.saturating_sub(4).max(8));
+    centered_popup_rect(popup_width, popup_height, area)
+}
+
+pub fn link_picker_content_top(popup: Rect) -> u16 {
+    // 1 row for border + 1 row for padding
+    popup.y + 2
+}
+
+fn render_link_picker_overlay(model: &Model, frame: &mut Frame, area: Rect) {
+    let items = &model.link_picker_items;
+    if items.is_empty() {
+        return;
+    }
+    let popup = link_picker_rect(area, items.len());
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (idx, link) in items.iter().enumerate() {
+        let title = if link.text.trim().is_empty() {
+            "(untitled link)"
+        } else {
+            link.text.as_str()
+        };
+        let left_margin = "   ";
+        let number = format!("{}: ", idx + 1);
+        lines.push(Line::from(vec![
+            Span::raw(left_margin),
+            Span::styled(number, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(title.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw(left_margin),
+            Span::raw("   "),
+            Span::styled(
+                link.url.clone(),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]));
+    }
+    lines.push(Line::raw(" "));
+    lines.push(Line::from(vec![
+        Span::raw("   "),
+        Span::styled("1-9 open · any key or click outside cancels", Style::default().fg(Color::Indexed(245))),
+    ]));
+
+    let block = Block::default()
+        .title("Open Link")
+        .borders(Borders::ALL)
+        .padding(Padding::uniform(1))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 fn render_help_overlay(model: &Model, frame: &mut Frame, area: Rect) {
@@ -96,8 +155,11 @@ TOC
 Other
   w                   Toggle watch
   r or R              Reload file
+  o                   Open visible links (1-9)
+                      title on first row, full URL on second
   q or Ctrl-c         Quit
-  ? or F1             Toggle help
+  ? or F1             Toggle help (closes on any key)
+  TODO: mouse drag    In-app select+copy while captured
 
 Config
   Global: {global_cfg}
@@ -177,7 +239,9 @@ fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
 fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     let search_active = model.search_query.is_some();
     let toast_active = model.active_toast().is_some();
-    let footer_rows = 1 + u16::from(search_active) + u16::from(toast_active);
+    let hover_active = model.hovered_link_url.is_some();
+    let footer_rows =
+        1 + u16::from(search_active) + u16::from(toast_active) + u16::from(hover_active);
     // Reserve last line for status bar (+ one search bar line when active).
     let doc_outer_area = Rect {
         height: area.height.saturating_sub(footer_rows),
@@ -198,6 +262,14 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
             + area
                 .height
                 .saturating_sub(1 + u16::from(search_active) + u16::from(toast_active)),
+        height: 1,
+        ..area
+    };
+    let hover_area = Rect {
+        y: area.y
+            + area.height.saturating_sub(
+                1 + u16::from(search_active) + u16::from(toast_active) + u16::from(hover_active),
+            ),
         height: 1,
         ..area
     };
@@ -410,6 +482,9 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     }
 
     // Render status bar
+    if hover_active {
+        render_hover_link_bar(model, frame, hover_area);
+    }
     if toast_active {
         render_toast_bar(model, frame, toast_area);
     }
@@ -417,6 +492,15 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
         render_search_bar(model, frame, search_area);
     }
     render_status_bar(model, frame, status_area);
+}
+
+fn render_hover_link_bar(model: &Model, frame: &mut Frame, area: Rect) {
+    let Some(url) = model.hovered_link_url.as_deref() else {
+        return;
+    };
+    let bar = Paragraph::new(format!("link: {url}"))
+        .style(Style::default().bg(Color::Blue).fg(Color::White));
+    frame.render_widget(bar, area);
 }
 
 fn highlight_spans(spans: &[Span<'_>], query: &str) -> Vec<Span<'static>> {

@@ -1,6 +1,6 @@
-# JLCImport
+# JLCImport.  szdfasdfasdfasdfasdf
 
-A KiCad 8/9 Action Plugin that imports symbols, footprints, and 3D models directly from LCSC/JLCPCB into your KiCad project or global library.
+A KiCad 8/9 Action Plugin that imports sdasdfsymbols, footprints, and 3D models directly from LCSC/JLCPCB into your KiCad project or global library.
 
 ![Search and details](images/search_results.png)
 

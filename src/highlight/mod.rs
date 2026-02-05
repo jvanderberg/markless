@@ -225,6 +225,16 @@ pub fn set_background_mode(mode: Option<HighlightBackground>) {
     *guard = mode;
 }
 
+pub fn set_background_mode_from_rgb(r: u8, g: u8, b: u8) {
+    let luma = (0.2126 * r as f32) + (0.7152 * g as f32) + (0.0722 * b as f32);
+    let mode = if luma >= 140.0 {
+        HighlightBackground::Light
+    } else {
+        HighlightBackground::Dark
+    };
+    set_background_mode(Some(mode));
+}
+
 fn background_mode() -> BackgroundMode {
     let lock = BACKGROUND_OVERRIDE.get_or_init(|| Mutex::new(None));
     if let Ok(guard) = lock.lock() {
@@ -236,6 +246,10 @@ fn background_mode() -> BackgroundMode {
         }
     }
     background_mode_from_colorfgbg(std::env::var("COLORFGBG").ok().as_deref())
+}
+
+pub fn is_light_background() -> bool {
+    background_mode() == BackgroundMode::Light
 }
 
 fn background_mode_from_colorfgbg(colorfgbg: Option<&str>) -> BackgroundMode {

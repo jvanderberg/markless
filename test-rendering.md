@@ -704,7 +704,7 @@ Each section is clearly delineated.
 
 ## Basic Footnotes
 
-Here is a sentence with a footnote[^1].
+Here is a sentence with a footnote[^123].
 
 Another sentence with a different footnote[^2].
 

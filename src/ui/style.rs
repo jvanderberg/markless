@@ -11,35 +11,36 @@ use crate::document::{InlineStyle, LineType};
 ///
 /// Uses semantic ANSI colors that respect the terminal's theme.
 pub fn style_for_line_type(line_type: &LineType) -> Style {
+    let light_bg = crate::highlight::is_light_background();
     match line_type {
         // Headings - bold with distinct colors per level
         LineType::Heading(1) => Style::default()
-            .fg(Color::Cyan)
+            .fg(if light_bg { Color::Indexed(24) } else { Color::Cyan })
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         LineType::Heading(2) => Style::default()
-            .fg(Color::Green)
+            .fg(if light_bg { Color::Indexed(22) } else { Color::Green })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(3) => Style::default()
-            .fg(Color::Yellow)
+            .fg(if light_bg { Color::Indexed(58) } else { Color::Yellow })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(4) => Style::default()
-            .fg(Color::Blue)
+            .fg(if light_bg { Color::Indexed(24) } else { Color::Blue })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(5) => Style::default()
-            .fg(Color::Magenta)
+            .fg(if light_bg { Color::Indexed(54) } else { Color::Magenta })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(_) => Style::default()
-            .fg(Color::Cyan)
+            .fg(if light_bg { Color::Indexed(24) } else { Color::Cyan })
             .add_modifier(Modifier::BOLD),
 
         // Code blocks - use a dimmer color, italic for differentiation
         LineType::CodeBlock => Style::default()
-            .fg(Color::Indexed(245)) // Gray that works on light/dark
+            .fg(if light_bg { Color::Indexed(238) } else { Color::Indexed(245) })
             .add_modifier(Modifier::DIM),
 
         // Block quotes - italic blue
         LineType::BlockQuote => Style::default()
-            .fg(Color::Blue)
+            .fg(if light_bg { Color::Indexed(24) } else { Color::Blue })
             .add_modifier(Modifier::ITALIC),
 
         // List items - slightly dimmed bullet, normal text
@@ -50,12 +51,12 @@ pub fn style_for_line_type(line_type: &LineType) -> Style {
 
         // Horizontal rule - dim
         LineType::HorizontalRule => Style::default()
-            .fg(Color::Indexed(240))
+            .fg(if light_bg { Color::Indexed(241) } else { Color::Indexed(240) })
             .add_modifier(Modifier::DIM),
 
         // Images - magenta italic to stand out as placeholder
         LineType::Image => Style::default()
-            .fg(Color::Magenta)
+            .fg(if light_bg { Color::Indexed(90) } else { Color::Magenta })
             .add_modifier(Modifier::ITALIC),
 
         // Normal text
@@ -87,9 +88,16 @@ pub fn style_for_inline(base: Style, inline: InlineStyle) -> Style {
     }
     if inline.link {
         style = style.add_modifier(Modifier::UNDERLINED);
+        if inline.fg.is_none() {
+            let light_bg = crate::highlight::is_light_background();
+            style = style.fg(if light_bg { Color::Blue } else { Color::LightBlue });
+        }
     }
     if inline.code && inline.fg.is_none() {
-        style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
+        let light_bg = crate::highlight::is_light_background();
+        style = style
+            .fg(if light_bg { Color::Indexed(88) } else { Color::Red })
+            .add_modifier(Modifier::BOLD);
     }
 
     style

@@ -74,6 +74,7 @@ pub fn parse_with_layout(
     let mut headings = Vec::new();
     let mut images = Vec::new();
     let mut links = Vec::new();
+    let mut footnotes = HashMap::new();
     let mut code_blocks = Vec::new();
 
     let wrap_width = width.max(1) as usize;
@@ -83,6 +84,7 @@ pub fn parse_with_layout(
         &mut headings,
         &mut images,
         &mut links,
+        &mut footnotes,
         &mut code_blocks,
         0,
         image_heights,
@@ -96,6 +98,7 @@ pub fn parse_with_layout(
         headings,
         images,
         links,
+        footnotes,
         code_blocks,
     ))
 }
@@ -125,6 +128,7 @@ fn process_node<'a>(
     headings: &mut Vec<HeadingRef>,
     images: &mut Vec<ImageRef>,
     links: &mut Vec<LinkRef>,
+    footnotes: &mut HashMap<String, usize>,
     code_blocks: &mut Vec<CodeBlockRef>,
     depth: usize,
     image_heights: &HashMap<String, usize>,
@@ -140,6 +144,7 @@ fn process_node<'a>(
                     headings,
                     images,
                     links,
+                    footnotes,
                     code_blocks,
                     depth,
                     image_heights,
@@ -314,6 +319,7 @@ fn process_node<'a>(
                     headings,
                     images,
                     links,
+                    footnotes,
                     code_blocks,
                     list_depth,
                     image_heights,
@@ -349,6 +355,7 @@ fn process_node<'a>(
                         headings,
                         images,
                         links,
+                        footnotes,
                         code_blocks,
                         depth,
                         image_heights,
@@ -428,6 +435,7 @@ fn process_node<'a>(
                             headings,
                             images,
                             links,
+                            footnotes,
                             code_blocks,
                             depth,
                             image_heights,
@@ -442,6 +450,7 @@ fn process_node<'a>(
                             headings,
                             images,
                             links,
+                            footnotes,
                             code_blocks,
                             depth,
                             image_heights,
@@ -480,13 +489,13 @@ fn process_node<'a>(
         }
 
         NodeValue::Table(_) => {
-            for line in render_table(node, wrap_width) {
-                lines.push(RenderedLine::new(line, LineType::Table));
-            }
+            lines.extend(render_table(node, wrap_width));
             lines.push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::FootnoteDefinition(def) => {
+            let line_num = lines.len();
+            footnotes.insert(def.name.clone(), line_num);
             let label = format!("[^{}]: ", def.name);
             let continuation = " ".repeat(label.len());
             let spans = collect_inline_spans(node);
@@ -541,6 +550,7 @@ fn process_node<'a>(
                     headings,
                     images,
                     links,
+                    footnotes,
                     code_blocks,
                     depth,
                     image_heights,
@@ -616,7 +626,13 @@ fn quote_prefix(depth: usize) -> String {
     prefix
 }
 
-fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<String> {
+#[derive(Debug, Clone)]
+struct TableCellRender {
+    text: String,
+    spans: Vec<InlineSpan>,
+}
+
+fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<RenderedLine> {
     let (alignments, mut rows, has_header) = collect_table_rows(table_node);
     if rows.is_empty() {
         return Vec::new();
@@ -629,14 +645,17 @@ fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<Strin
 
     for row in &mut rows {
         while row.len() < num_cols {
-            row.push(String::new());
+            row.push(TableCellRender {
+                text: String::new(),
+                spans: Vec::new(),
+            });
         }
     }
 
     let mut col_widths = vec![1_usize; num_cols];
     for row in &rows {
         for (idx, cell) in row.iter().enumerate() {
-            col_widths[idx] = col_widths[idx].max(display_width(cell));
+            col_widths[idx] = col_widths[idx].max(display_width(&cell.text));
         }
     }
 
@@ -653,23 +672,21 @@ fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<Strin
         }
     }
 
-    let top = render_table_border(&col_widths, '┌', '┬', '┐');
-    let mid = render_table_border(&col_widths, '├', '┼', '┤');
-    let bottom = render_table_border(&col_widths, '└', '┴', '┘');
+    let mid = render_table_inner_divider(&col_widths);
 
     let mut lines = Vec::new();
-    lines.push(top);
     for (idx, row) in rows.iter().enumerate() {
         lines.push(render_table_row(row, &col_widths, &alignments));
         if has_header && idx == 0 {
-            lines.push(mid.clone());
+            lines.push(RenderedLine::new(mid.clone(), LineType::Table));
         }
     }
-    lines.push(bottom);
     lines
 }
 
-fn collect_table_rows<'a>(table_node: &'a AstNode<'a>) -> (Vec<TableAlignment>, Vec<Vec<String>>, bool) {
+fn collect_table_rows<'a>(
+    table_node: &'a AstNode<'a>,
+) -> (Vec<TableAlignment>, Vec<Vec<TableCellRender>>, bool) {
     let alignments = match &table_node.data.borrow().value {
         NodeValue::Table(table) => table.alignments.clone(),
         _ => Vec::new(),
@@ -691,11 +708,9 @@ fn collect_table_rows<'a>(table_node: &'a AstNode<'a>) -> (Vec<TableAlignment>, 
             if !matches!(cell_node.data.borrow().value, NodeValue::TableCell) {
                 continue;
             }
-            let cell = extract_text(cell_node)
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            row_cells.push(cell);
+            let spans = normalize_inline_whitespace(collect_inline_spans(cell_node));
+            let text = spans_to_string(&spans);
+            row_cells.push(TableCellRender { text, spans });
         }
         rows.push(row_cells);
     }
@@ -703,67 +718,115 @@ fn collect_table_rows<'a>(table_node: &'a AstNode<'a>) -> (Vec<TableAlignment>, 
     (alignments, rows, has_header)
 }
 
-fn render_table_border(widths: &[usize], left: char, middle: char, right: char) -> String {
+fn render_table_inner_divider(widths: &[usize]) -> String {
     let mut out = String::new();
-    out.push(left);
     for (idx, width) in widths.iter().enumerate() {
         out.push_str(&"─".repeat(width + 2));
         if idx + 1 < widths.len() {
-            out.push(middle);
+            out.push('┼');
         }
     }
-    out.push(right);
     out
 }
 
-fn render_table_row(cells: &[String], widths: &[usize], alignments: &[TableAlignment]) -> String {
-    let mut out = String::new();
-    out.push('│');
+fn render_table_row(
+    cells: &[TableCellRender],
+    widths: &[usize],
+    alignments: &[TableAlignment],
+) -> RenderedLine {
+    let mut spans = Vec::new();
     for idx in 0..widths.len() {
-        let content = cells.get(idx).map_or("", std::string::String::as_str);
-        let content = truncate_text(content, widths[idx]);
-        let padding = widths[idx].saturating_sub(display_width(&content));
+        let cell = cells.get(idx).cloned().unwrap_or(TableCellRender {
+            text: String::new(),
+            spans: Vec::new(),
+        });
+        let mut content_spans = truncate_spans_by_display_width(&cell.spans, widths[idx]);
+        let content_width = display_width(&spans_to_string(&content_spans));
+        let padding = widths[idx].saturating_sub(content_width);
 
-        out.push(' ');
+        spans.push(InlineSpan::new(" ".to_string(), InlineStyle::default()));
         match alignments.get(idx).copied().unwrap_or(TableAlignment::None) {
             TableAlignment::Right => {
-                out.push_str(&" ".repeat(padding));
-                out.push_str(&content);
+                spans.push(InlineSpan::new(" ".repeat(padding), InlineStyle::default()));
+                spans.append(&mut content_spans);
             }
             TableAlignment::Center => {
                 let left = padding / 2;
                 let right = padding - left;
-                out.push_str(&" ".repeat(left));
-                out.push_str(&content);
-                out.push_str(&" ".repeat(right));
+                spans.push(InlineSpan::new(" ".repeat(left), InlineStyle::default()));
+                spans.append(&mut content_spans);
+                spans.push(InlineSpan::new(" ".repeat(right), InlineStyle::default()));
             }
             TableAlignment::Left | TableAlignment::None => {
-                out.push_str(&content);
-                out.push_str(&" ".repeat(padding));
+                spans.append(&mut content_spans);
+                spans.push(InlineSpan::new(" ".repeat(padding), InlineStyle::default()));
             }
         }
-        out.push(' ');
-        out.push('│');
-    }
-    out
-}
-
-fn truncate_text(text: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    let mut width = 0usize;
-    for ch in text.chars() {
-        let ch_width = ch.width().unwrap_or(0);
-        if width + ch_width > max_chars {
-            break;
+        if idx + 1 < widths.len() {
+            spans.push(InlineSpan::new(" │".to_string(), InlineStyle::default()));
         }
-        out.push(ch);
-        width += ch_width;
     }
-    out
+    let content = spans_to_string(&spans);
+    RenderedLine::with_spans(content, LineType::Table, spans)
 }
 
 fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
+}
+
+fn normalize_inline_whitespace(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
+    let text = spans_to_string(&spans);
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::new();
+    let mut first_word = true;
+    for token in split_tokens_preserve_whitespace(&spans) {
+        let is_ws = token.text().chars().all(char::is_whitespace);
+        if is_ws {
+            continue;
+        }
+        if !first_word {
+            result.push(InlineSpan::new(" ".to_string(), InlineStyle::default()));
+        }
+        result.push(token);
+        first_word = false;
+    }
+    result
+}
+
+fn split_tokens_preserve_whitespace(spans: &[InlineSpan]) -> Vec<InlineSpan> {
+    let mut out = Vec::new();
+    for span in spans {
+        out.extend(split_inline_tokens(span));
+    }
+    out
+}
+
+fn truncate_spans_by_display_width(spans: &[InlineSpan], max_width: usize) -> Vec<InlineSpan> {
+    let mut out = Vec::new();
+    let mut used = 0usize;
+
+    for span in spans {
+        if used >= max_width {
+            break;
+        }
+        let mut taken = String::new();
+        for ch in span.text().chars() {
+            let w = ch.width().unwrap_or(0);
+            if used + w > max_width {
+                break;
+            }
+            taken.push(ch);
+            used += w;
+        }
+        if !taken.is_empty() {
+            out.push(InlineSpan::new(taken, span.style()));
+        }
+    }
+    out
 }
 
 fn render_superscript_text(text: &str) -> String {
@@ -775,23 +838,36 @@ fn render_subscript_text(text: &str) -> String {
 }
 
 fn render_script_text(text: &str, superscript: bool) -> String {
+    let Some(mapped) = map_script_chars(text, superscript) else {
+        return if superscript {
+            format!("^({text})")
+        } else {
+            format!("_({text})")
+        };
+    };
+    mapped
+}
+
+fn render_footnote_reference(name: &str) -> String {
+    // Reuse the same superscript renderer as inline superscript, but only for
+    // numeric footnote labels to avoid uneven glyph spacing in some fonts.
+    if name.chars().all(|c| c.is_ascii_digit()) {
+        return render_superscript_text(name);
+    }
+    format!("[^{name}]")
+}
+
+fn map_script_chars(text: &str, superscript: bool) -> Option<String> {
     let mut mapped = String::new();
     for ch in text.chars() {
         let mapped_char = if superscript {
             superscript_char(ch)
         } else {
             subscript_char(ch)
-        };
-        let Some(mapped_char) = mapped_char else {
-            return if superscript {
-                format!("^({text})")
-            } else {
-                format!("_({text})")
-            };
-        };
+        }?;
         mapped.push(mapped_char);
     }
-    mapped
+    Some(mapped)
 }
 
 fn superscript_char(ch: char) -> Option<char> {
@@ -900,7 +976,7 @@ fn collect_inline_spans_recursive<'a>(
             return;
         }
         NodeValue::Text(t) => {
-            spans.push(InlineSpan::new(t.clone(), style));
+            push_text_with_footnote_fallback(spans, t, style);
         }
         NodeValue::Code(code) => {
             let mut code_style = style;
@@ -953,7 +1029,10 @@ fn collect_inline_spans_recursive<'a>(
             }
         }
         NodeValue::FootnoteReference(reference) => {
-            spans.push(InlineSpan::new(format!("[^{}]", reference.name), style));
+            spans.push(InlineSpan::new(
+                render_footnote_reference(&reference.name),
+                style,
+            ));
         }
         NodeValue::SoftBreak | NodeValue::LineBreak => {
             spans.push(InlineSpan::new(" ".to_string(), style));
@@ -985,7 +1064,7 @@ fn find_task_marker<'a>(node: &'a AstNode<'a>) -> Option<&'static str> {
 fn extract_text_recursive<'a>(node: &'a AstNode<'a>, text: &mut String) {
     match &node.data.borrow().value {
         NodeValue::Text(t) => {
-            text.push_str(t);
+            text.push_str(&render_text_with_footnote_fallback(t));
         }
         NodeValue::Code(c) => {
             text.push('`');
@@ -1007,7 +1086,7 @@ fn extract_text_recursive<'a>(node: &'a AstNode<'a>, text: &mut String) {
             text.push_str(&render_subscript_text(&inner));
         }
         NodeValue::FootnoteReference(reference) => {
-            text.push_str(&format!("[^{}]", reference.name));
+            text.push_str(&render_footnote_reference(&reference.name));
         }
         NodeValue::SoftBreak | NodeValue::LineBreak => {
             text.push('\n');
@@ -1080,6 +1159,36 @@ fn wrap_spans(
 
     lines.push(current);
     lines
+}
+
+fn push_text_with_footnote_fallback(spans: &mut Vec<InlineSpan>, text: &str, style: InlineStyle) {
+    let rendered = render_text_with_footnote_fallback(text);
+    if !rendered.is_empty() {
+        spans.push(InlineSpan::new(rendered, style));
+    }
+}
+
+fn render_text_with_footnote_fallback(text: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '[' && i + 3 < chars.len() && chars[i + 1] == '^' {
+            let mut j = i + 2;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 2 && j < chars.len() && chars[j] == ']' {
+                let digits: String = chars[i + 2..j].iter().collect();
+                out.push_str(&render_superscript_text(&digits));
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 fn split_inline_tokens(span: &InlineSpan) -> Vec<InlineSpan> {
@@ -1183,6 +1292,13 @@ fn collect_inline_elements<'a>(
             links.push(LinkRef {
                 text,
                 url,
+                line: base_line,
+            });
+        }
+        NodeValue::FootnoteReference(reference) => {
+            links.push(LinkRef {
+                text: format!("[^{}]", reference.name),
+                url: format!("footnote:{}", reference.name),
                 line: base_line,
             });
         }
@@ -1325,10 +1441,10 @@ mod tests {
             .filter(|l| *l.line_type() == LineType::Table)
             .collect();
         assert!(!table_lines.is_empty());
-        assert!(table_lines[0].content().starts_with('┌'));
-        assert!(table_lines.iter().any(|l| l.content().starts_with("│ A")));
-        assert!(table_lines.iter().any(|l| l.content().contains("│ 1")));
-        assert!(table_lines.last().unwrap().content().starts_with('└'));
+        assert!(table_lines.iter().any(|l| l.content().contains("A") && l.content().contains("B")));
+        assert!(table_lines.iter().any(|l| l.content().contains("1") && l.content().contains("2")));
+        assert!(table_lines.iter().any(|l| l.content().contains('│')));
+        assert!(table_lines.iter().any(|l| l.content().contains("───┼───")));
     }
 
     #[test]
@@ -1370,13 +1486,46 @@ mod tests {
             .map(|l| l.content().to_string())
             .collect();
 
-        assert_eq!(table_lines.len(), 9);
+        assert_eq!(table_lines.len(), 7);
         assert!(table_lines.iter().all(|line| !line.contains('\n')));
         assert!(table_lines.iter().any(|line| line.contains("Bold")));
         assert!(table_lines.iter().any(|line| line.contains("Italic")));
         assert!(table_lines.iter().any(|line| line.contains("Code")));
         assert!(table_lines.iter().any(|line| line.contains("Strike")));
         assert!(table_lines.iter().any(|line| line.contains("Links")));
+    }
+
+    #[test]
+    fn test_gfm_table_mixed_content_preserves_inline_styles_in_cells() {
+        let md = "| Feature | Type |\n|---|---|\n| **Bold** | a |\n| *Italic* | b |\n| `Code` | c |\n| ~~Strike~~ | d |\n| [Links](/) | e |";
+        let doc = Document::parse_with_layout(md, 120).unwrap();
+        let table_rows: Vec<_> = doc
+            .visible_lines(0, 50)
+            .into_iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .filter(|l| !l.content().contains('┼'))
+            .collect();
+
+        assert!(table_rows.iter().any(|row| {
+            row.spans()
+                .is_some_and(|spans| spans.iter().any(|s| s.style().strong))
+        }));
+        assert!(table_rows.iter().any(|row| {
+            row.spans()
+                .is_some_and(|spans| spans.iter().any(|s| s.style().emphasis))
+        }));
+        assert!(table_rows.iter().any(|row| {
+            row.spans()
+                .is_some_and(|spans| spans.iter().any(|s| s.style().code))
+        }));
+        assert!(table_rows.iter().any(|row| {
+            row.spans()
+                .is_some_and(|spans| spans.iter().any(|s| s.style().strikethrough))
+        }));
+        assert!(table_rows.iter().any(|row| {
+            row.spans()
+                .is_some_and(|spans| spans.iter().any(|s| s.style().link))
+        }));
     }
 
     #[test]
@@ -1464,11 +1613,38 @@ mod tests {
 
     #[test]
     fn test_footnote_reference_and_definition_render() {
+        let md = "Alpha[^12]\n\n[^12]: Footnote text";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        assert!(lines.iter().any(|l| l.content().contains("Alpha¹²")));
+        assert!(lines.iter().any(|l| l.content().contains("¹²")));
+        assert!(lines.iter().any(|l| l.content().contains("[^12]:")));
+    }
+
+    #[test]
+    fn test_footnote_reference_falls_back_when_superscript_missing() {
+        let md = "Alpha[^q]\n\n[^q]: Footnote text";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        assert!(lines.iter().any(|l| l.content().contains("[^q]")));
+        assert!(lines.iter().any(|l| l.content().contains("[^q]:")));
+    }
+
+    #[test]
+    fn test_footnote_reference_alpha_label_uses_plain_fallback() {
         let md = "Alpha[^n]\n\n[^n]: Footnote text";
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 20);
         assert!(lines.iter().any(|l| l.content().contains("[^n]")));
         assert!(lines.iter().any(|l| l.content().contains("[^n]:")));
+    }
+
+    #[test]
+    fn test_numeric_footnote_reference_renders_without_definition() {
+        let md = "Here is a sentence with a footnote[^123].";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        assert!(lines.iter().any(|l| l.content().contains("footnote¹²³.")));
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! - [`App::run`]: Main event loop with rendering
 
 use std::collections::HashMap;
-use std::io::stdout;
+use std::io::{stdout, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -68,6 +68,10 @@ pub struct Model {
     pub config_local_path: Option<PathBuf>,
     /// Whether help overlay is visible
     pub help_visible: bool,
+    /// URL currently hovered in the document pane (mouse capture mode)
+    pub hovered_link_url: Option<String>,
+    /// Pending visible-link picker items for quick follow (`o`)
+    pub link_picker_items: Vec<crate::document::LinkRef>,
     toast: Option<Toast>,
     /// Current search query
     pub search_query: Option<String>,
@@ -135,6 +139,8 @@ impl Model {
             config_global_path: None,
             config_local_path: None,
             help_visible: false,
+            hovered_link_url: None,
+            link_picker_items: Vec::new(),
             toast: None,
             search_query: None,
             search_matches: Vec::new(),
@@ -390,6 +396,10 @@ impl Model {
             .map(|toast| (toast.message.as_str(), toast.level))
     }
 
+    pub fn link_picker_active(&self) -> bool {
+        !self.link_picker_items.is_empty()
+    }
+
     fn reload_from_disk(&mut self) -> Result<()> {
         let content = std::fs::read_to_string(&self.file_path)?;
         let document = Document::parse_with_layout_and_image_heights(
@@ -500,6 +510,16 @@ pub enum Message {
     PrevMatch,
     /// Clear search
     ClearSearch,
+    /// Open visible-link picker (or follow directly when single link)
+    OpenVisibleLinks,
+    /// Follow link on an exact rendered line
+    FollowLinkAtLine(usize),
+    /// Follow numbered link in the picker
+    SelectVisibleLink(u8),
+    /// Close visible-link picker
+    CancelVisibleLinkPicker,
+    /// Update hovered link URL (or clear when none)
+    HoverLink(Option<String>),
 
     // Window
     /// Terminal resized
@@ -527,6 +547,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             | Message::TocClick(_)
             | Message::TocCollapse
             | Message::TocExpand
+            | Message::HoverLink(_)
     );
     match msg {
         // Navigation
@@ -707,11 +728,20 @@ pub fn update(mut model: Model, msg: Message) -> Model {
                 }
             }
         }
-        Message::ClearSearch => {
-            model.search_query = None;
-            model.search_matches.clear();
-            model.search_match_index = None;
-            model.search_allow_short = false;
+            Message::ClearSearch => {
+                model.search_query = None;
+                model.search_matches.clear();
+                model.search_match_index = None;
+                model.search_allow_short = false;
+            }
+        Message::OpenVisibleLinks | Message::FollowLinkAtLine(_) | Message::SelectVisibleLink(_) => {
+            // side effect in event loop
+        }
+        Message::CancelVisibleLinkPicker => {
+            model.link_picker_items.clear();
+        }
+        Message::HoverLink(url) => {
+            model.hovered_link_url = url;
         }
 
         // Window
@@ -782,6 +812,30 @@ fn refresh_search_matches(model: &mut Model, jump_to_first: bool, allow_short: b
     } else if let Some(idx) = model.search_match_index {
         let clamped = idx.min(model.search_matches.len() - 1);
         model.search_match_index = Some(clamped);
+    }
+}
+
+fn open_external_link(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn()?.wait()?;
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()?
+            .wait()?;
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()?
+            .wait()?;
+        Ok(())
     }
 }
 
@@ -919,7 +973,134 @@ impl App {
                     model.show_toast(ToastLevel::Info, "Reloaded");
                 }
             }
+            Message::OpenVisibleLinks => {
+                self.open_visible_links(model);
+            }
+            Message::FollowLinkAtLine(line) => {
+                self.follow_link_on_line(model, *line);
+            }
+            Message::SelectVisibleLink(index) => {
+                self.follow_link_picker_index(model, *index);
+            }
             _ => {}
+        }
+    }
+
+    fn open_visible_links(&self, model: &mut Model) {
+        let start = model.viewport.offset();
+        let end = start + model.viewport.height() as usize;
+        let mut visible: Vec<_> = model
+            .document
+            .links()
+            .iter()
+            .filter(|link| link.line >= start && link.line < end)
+            .cloned()
+            .collect();
+        visible.truncate(9);
+
+        match visible.len() {
+            0 => model.show_toast(ToastLevel::Info, "No visible links"),
+            1 => self.follow_resolved_link(model, &visible[0].url),
+            _ => {
+                model.link_picker_items = visible;
+                model.show_toast(ToastLevel::Info, "Select link: 1-9 (Esc to cancel)");
+            }
+        }
+    }
+
+    fn follow_link_picker_index(&self, model: &mut Model, index: u8) {
+        if index == 0 {
+            return;
+        }
+        let idx = (index - 1) as usize;
+        let Some(link) = model.link_picker_items.get(idx) else {
+            return;
+        };
+        let url = link.url.clone();
+        model.link_picker_items.clear();
+        self.follow_resolved_link(model, &url);
+    }
+
+    fn follow_link_on_line(&self, model: &mut Model, line: usize) {
+        let Some(link) = model.document.links().iter().find(|link| link.line == line) else {
+            return;
+        };
+        let url = link.url.clone();
+        model.link_picker_items.clear();
+        self.follow_resolved_link(model, &url);
+    }
+
+    fn link_at_column(
+        &self,
+        model: &Model,
+        line: usize,
+        content_col: usize,
+    ) -> Option<crate::document::LinkRef> {
+        let line_text = model.document.line_at(line)?.content();
+        let links_on_line: Vec<_> = model
+            .document
+            .links()
+            .iter()
+            .filter(|link| link.line == line)
+            .cloned()
+            .collect();
+        if links_on_line.is_empty() {
+            return None;
+        }
+        let mut best: Option<(usize, crate::document::LinkRef)> = None;
+        for link in links_on_line {
+            let mut search = 0usize;
+            while search < line_text.len() {
+                let Some(rel) = line_text[search..].find(&link.text) else {
+                    break;
+                };
+                let start_byte = search + rel;
+                let start_char = line_text[..start_byte].chars().count();
+                let end_char = start_char + link.text.chars().count();
+                if content_col >= start_char && content_col < end_char {
+                    return Some(link);
+                }
+                let dist = if content_col >= start_char {
+                    content_col - start_char
+                } else {
+                    start_char - content_col
+                };
+                if best.as_ref().is_none_or(|(best_dist, _)| dist < *best_dist) {
+                    best = Some((dist, link.clone()));
+                }
+                search = start_byte + 1;
+            }
+        }
+        best.map(|(_, link)| link)
+    }
+
+    fn follow_resolved_link(&self, model: &mut Model, url: &str) {
+        if let Some(name) = url.strip_prefix("footnote:") {
+            if let Some(target) = model.document.footnote_line(name) {
+                model.viewport.go_to_line(target);
+                model.show_toast(ToastLevel::Info, format!("Jumped to footnote [^{name}]"));
+            } else {
+                model.show_toast(ToastLevel::Warning, format!("Footnote [^{name}] not found"));
+            }
+            return;
+        }
+
+        if let Some(anchor) = url.strip_prefix('#') {
+            if let Some(target) = model.document.resolve_internal_anchor(anchor) {
+                model.viewport.go_to_line(target);
+                model.show_toast(ToastLevel::Info, format!("Jumped to #{anchor}"));
+            } else {
+                model.show_toast(ToastLevel::Warning, format!("Anchor #{anchor} not found"));
+            }
+            return;
+        }
+
+        match open_external_link(url) {
+            Ok(()) => model.show_toast(ToastLevel::Info, format!("Opened {url}")),
+            Err(err) => model.show_toast(
+                ToastLevel::Error,
+                format!("Open failed: {err}"),
+            ),
         }
     }
 
@@ -940,7 +1121,6 @@ impl App {
         // Initialize terminal
         let _init_scope = crate::perf::scope("app.ratatui_init");
         let mut terminal = ratatui::init();
-        execute!(stdout(), EnableMouseCapture)?;
         let size = terminal.size()?;
         drop(_init_scope);
 
@@ -995,8 +1175,21 @@ impl App {
         };
         let mut frame_idx: u64 = 0;
         let mut needs_render = true;
+        let mut mouse_capture_enabled = false;
 
         loop {
+            let should_enable_mouse = model.toc_visible || model.link_picker_active();
+            if should_enable_mouse != mouse_capture_enabled {
+                if should_enable_mouse {
+                    execute!(stdout(), EnableMouseCapture)?;
+                    set_mouse_motion_tracking(true)?;
+                } else {
+                    set_mouse_motion_tracking(false)?;
+                    execute!(stdout(), DisableMouseCapture)?;
+                }
+                mouse_capture_enabled = should_enable_mouse;
+            }
+
             if model.expire_toast(Instant::now()) {
                 needs_render = true;
             }
@@ -1116,6 +1309,10 @@ impl App {
                 break;
             }
         }
+        if mouse_capture_enabled {
+            let _ = set_mouse_motion_tracking(false);
+            let _ = execute!(stdout(), DisableMouseCapture);
+        }
         Ok(())
     }
 
@@ -1142,6 +1339,41 @@ impl App {
         if model.help_visible {
             return None;
         }
+
+        if model.link_picker_active() {
+            let area = Rect::new(
+                0,
+                0,
+                model.viewport.width(),
+                model.viewport.height().saturating_add(1),
+            );
+            let popup = crate::ui::link_picker_rect(area, model.link_picker_items.len());
+            let in_popup = mouse.column >= popup.x
+                && mouse.column < popup.x + popup.width
+                && mouse.row >= popup.y
+                && mouse.row < popup.y + popup.height;
+            if in_popup && matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+                let content_top = crate::ui::link_picker_content_top(popup);
+                if mouse.row >= content_top {
+                    let rel = mouse.row - content_top;
+                    let idx = (rel / 2) as usize;
+                    if idx < model.link_picker_items.len() {
+                        return Some(Message::SelectVisibleLink((idx + 1) as u8));
+                    }
+                }
+                return Some(Message::CancelVisibleLinkPicker);
+            }
+            if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+                return Some(Message::CancelVisibleLinkPicker);
+            }
+            if matches!(mouse.kind, MouseEventKind::Moved) {
+                return None;
+            }
+        }
+
+        let search_active = model.search_query.is_some();
+        let toast_active = model.active_toast().is_some();
+        let footer_rows = 1 + u16::from(search_active) + u16::from(toast_active);
 
         if model.toc_visible {
             let total_area = Rect::new(
@@ -1184,8 +1416,47 @@ impl App {
                     }
                     MouseEventKind::ScrollDown => return Some(Message::TocScrollDown),
                     MouseEventKind::ScrollUp => return Some(Message::TocScrollUp),
+                    MouseEventKind::Moved => return Some(Message::HoverLink(None)),
                     _ => {}
                 }
+            }
+
+            // Document click for link-follow when TOC is open (mouse capture enabled).
+            let doc_area = Rect {
+                x: chunks[1].x,
+                y: chunks[1].y,
+                width: chunks[1].width,
+                height: chunks[1].height.saturating_sub(footer_rows),
+            };
+            let in_doc = mouse.column >= doc_area.x
+                && mouse.column < doc_area.x + doc_area.width
+                && mouse.row >= doc_area.y
+                && mouse.row < doc_area.y + doc_area.height;
+            if in_doc && matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+                let rel_row = mouse.row.saturating_sub(doc_area.y) as usize;
+                let line = model.viewport.offset() + rel_row;
+                let content_col = mouse
+                    .column
+                    .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
+                    as usize;
+                if self.link_at_column(model, line, content_col).is_some() {
+                    return Some(Message::FollowLinkAtLine(line));
+                }
+            }
+            if in_doc && matches!(mouse.kind, MouseEventKind::Moved) {
+                let rel_row = mouse.row.saturating_sub(doc_area.y) as usize;
+                let line = model.viewport.offset() + rel_row;
+                let content_col = mouse
+                    .column
+                    .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
+                    as usize;
+                let hovered = self
+                    .link_at_column(model, line, content_col)
+                    .map(|link| link.url);
+                return Some(Message::HoverLink(hovered));
+            }
+            if matches!(mouse.kind, MouseEventKind::Moved) {
+                return Some(Message::HoverLink(None));
             }
         }
 
@@ -1210,9 +1481,16 @@ impl App {
 
     fn handle_key(&self, key: event::KeyEvent, model: &Model) -> Option<Message> {
         if model.help_visible {
+            let _ = key;
+            return Some(Message::HideHelp);
+        }
+
+        if model.link_picker_active() {
             return match key.code {
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::F(1) => Some(Message::HideHelp),
-                _ => None,
+                KeyCode::Char(c) if ('1'..='9').contains(&c) => {
+                    Some(Message::SelectVisibleLink((c as u8) - b'0'))
+                }
+                _ => Some(Message::CancelVisibleLinkPicker),
             };
         }
 
@@ -1310,6 +1588,7 @@ impl App {
             KeyCode::Char('w') => Some(Message::ToggleWatch),
             KeyCode::Char('R') => Some(Message::ForceReload),
             KeyCode::Char('r') => Some(Message::ForceReload),
+            KeyCode::Char('o') => Some(Message::OpenVisibleLinks),
             KeyCode::Char('?') | KeyCode::F(1) => Some(Message::ToggleHelp),
 
             // Search
@@ -1331,6 +1610,18 @@ impl App {
     }
 }
 
+fn set_mouse_motion_tracking(enable: bool) -> std::io::Result<()> {
+    // Request any-event mouse motion reporting (1003) with SGR encoding (1006).
+    // This improves hover support in terminals like Ghostty.
+    let mut out = stdout();
+    if enable {
+        out.write_all(b"\x1b[?1003h\x1b[?1006h")?;
+    } else {
+        out.write_all(b"\x1b[?1003l\x1b[?1006l")?;
+    }
+    out.flush()
+}
+
 // Implement Default for Model to allow std::mem::take
 impl Default for Model {
     fn default() -> Self {
@@ -1346,6 +1637,8 @@ impl Default for Model {
             config_global_path: None,
             config_local_path: None,
             help_visible: false,
+            hovered_link_url: None,
+            link_picker_items: Vec::new(),
             toast: None,
             search_query: None,
             search_matches: Vec::new(),
@@ -1794,6 +2087,193 @@ mod tests {
 
         let msg = app.handle_key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &model);
         assert_eq!(msg, Some(Message::HideHelp));
+    }
+
+    #[test]
+    fn test_help_mode_any_key_closes_help() {
+        let app = App::new(PathBuf::from("test.md"));
+        let mut model = create_test_model();
+        model.help_visible = true;
+
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE), &model);
+        assert_eq!(msg, Some(Message::HideHelp));
+    }
+
+    #[test]
+    fn test_mouse_click_on_doc_link_emits_follow_message() {
+        let app = App::new(PathBuf::from("test.md"));
+        let doc = Document::parse_with_layout("[Link](https://example.com)", 80).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+        model.toc_visible = true; // mouse capture path
+
+        let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 80, 24));
+        let doc_x = chunks[1].x;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let msg = app.handle_mouse(mouse, &model);
+        assert_eq!(msg, Some(Message::FollowLinkAtLine(0)));
+    }
+
+    #[test]
+    fn test_mouse_hover_on_doc_link_emits_hover_message() {
+        let app = App::new(PathBuf::from("test.md"));
+        let doc = Document::parse_with_layout("[Link](https://example.com)", 80).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+        model.toc_visible = true;
+
+        let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 80, 24));
+        let doc_x = chunks[1].x;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let msg = app.handle_mouse(mouse, &model);
+        assert_eq!(
+            msg,
+            Some(Message::HoverLink(Some("https://example.com".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_hover_prefers_link_at_column_when_multiple() {
+        let app = App::new(PathBuf::from("test.md"));
+        let md = "[Rust](https://rust-lang.org) and [GitHub](https://github.com)";
+        let doc = Document::parse_with_layout(md, 120).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (120, 24));
+        model.toc_visible = true;
+
+        let line_text = model.document.line_at(0).unwrap().content();
+        let github_pos = line_text.find("GitHub").unwrap();
+        let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 120, 24));
+        let doc_x = chunks[1].x;
+        let column = doc_x + crate::ui::DOCUMENT_LEFT_PADDING + github_pos as u16;
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let msg = app.handle_mouse(mouse, &model);
+        assert_eq!(
+            msg,
+            Some(Message::HoverLink(Some("https://github.com".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_o_key_triggers_open_visible_links_message() {
+        let app = App::new(PathBuf::from("test.md"));
+        let model = create_test_model();
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE), &model);
+        assert_eq!(msg, Some(Message::OpenVisibleLinks));
+    }
+
+    #[test]
+    fn test_follow_link_jumps_to_internal_anchor() {
+        let md = "[Go](#target)\n\n## Target";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
+        let app = App::new(PathBuf::from("test.md"));
+        let mut watcher = None;
+
+        model = update(model, Message::OpenVisibleLinks);
+        app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+        assert!(model.viewport.offset() > 0);
+    }
+
+    #[test]
+    fn test_follow_link_jumps_to_footnote_definition() {
+        let md = "Alpha[^1]\n\n[^1]: Footnote text";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
+        let app = App::new(PathBuf::from("test.md"));
+        let mut watcher = None;
+
+        model = update(model, Message::OpenVisibleLinks);
+        app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+        assert!(model.viewport.offset() > 0);
+    }
+
+    #[test]
+    fn test_open_visible_links_shows_picker_when_multiple() {
+        let md = "[A](#one)\n\n[B](#two)\n\n## One\n\n## Two";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 8));
+        let app = App::new(PathBuf::from("test.md"));
+        let mut watcher = None;
+
+        model = update(model, Message::OpenVisibleLinks);
+        app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+        assert_eq!(model.link_picker_items.len(), 2);
+
+        model = update(model, Message::SelectVisibleLink(2));
+        app.handle_message_side_effects(&mut model, &mut watcher, &Message::SelectVisibleLink(2));
+        assert!(model.link_picker_items.is_empty());
+        assert!(model.viewport.offset() > 0);
+    }
+
+    #[test]
+    fn test_mouse_click_in_link_picker_selects_item() {
+        let app = App::new(PathBuf::from("test.md"));
+        let md = "[A](#one)\n\n[B](#two)\n\n## One\n\n## Two";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+        model.link_picker_items = model.document.links().iter().take(2).cloned().collect();
+
+        let area = Rect::new(0, 0, 80, 24);
+        let popup = crate::ui::link_picker_rect(area, model.link_picker_items.len());
+        let content_top = crate::ui::link_picker_content_top(popup);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: popup.x + 2,
+            row: content_top,
+            modifiers: KeyModifiers::NONE,
+        };
+        let msg = app.handle_mouse(mouse, &model);
+        assert_eq!(msg, Some(Message::SelectVisibleLink(1)));
+    }
+
+    #[test]
+    fn test_link_picker_key_other_than_number_cancels() {
+        let app = App::new(PathBuf::from("test.md"));
+        let mut model = create_test_model();
+        model.link_picker_items = vec![crate::document::LinkRef {
+            text: "Link".to_string(),
+            url: "https://example.com".to_string(),
+            line: 0,
+        }];
+
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE), &model);
+        assert_eq!(msg, Some(Message::CancelVisibleLinkPicker));
+    }
+
+    #[test]
+    fn test_link_picker_click_outside_cancels() {
+        let app = App::new(PathBuf::from("test.md"));
+        let mut model = create_test_model();
+        model.link_picker_items = vec![crate::document::LinkRef {
+            text: "Link".to_string(),
+            url: "https://example.com".to_string(),
+            line: 0,
+        }];
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let msg = app.handle_mouse(mouse, &model);
+        assert_eq!(msg, Some(Message::CancelVisibleLinkPicker));
     }
 
     #[test]

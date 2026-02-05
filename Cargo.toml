@@ -35,6 +35,8 @@ anyhow = "1"
 # Async runtime
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "fs", "sync", "time", "macros"] }
 
+# Terminal background query (OSC 11)
+
 # File watching
 notify = "7"
 notify-debouncer-mini = "0.5"
