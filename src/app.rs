@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::io::stdout;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -17,7 +18,7 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use image::DynamicImage;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::{DefaultTerminal, Frame};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
@@ -25,10 +26,25 @@ use ratatui_image::protocol::StatefulProtocol;
 use crate::document::Document;
 use crate::image::ImageLoader;
 use crate::ui::viewport::Viewport;
+use crate::watcher::FileWatcher;
 
 /// The complete application state.
 ///
 /// All state lives here - no global or scattered state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+struct Toast {
+    level: ToastLevel,
+    message: String,
+    expires_at: Instant,
+}
+
 pub struct Model {
     /// The loaded markdown document
     pub document: Document,
@@ -46,6 +62,13 @@ pub struct Model {
     pub toc_scroll_offset: usize,
     /// Whether file watching is enabled
     pub watch_enabled: bool,
+    /// Global config path shown in help
+    pub config_global_path: Option<PathBuf>,
+    /// Local override path shown in help
+    pub config_local_path: Option<PathBuf>,
+    /// Whether help overlay is visible
+    pub help_visible: bool,
+    toast: Option<Toast>,
     /// Current search query
     pub search_query: Option<String>,
     /// Rendered line indices that match the current search query
@@ -109,6 +132,10 @@ impl Model {
             toc_selected: None,
             toc_scroll_offset: 0,
             watch_enabled: false,
+            config_global_path: None,
+            config_local_path: None,
+            help_visible: false,
+            toast: None,
             search_query: None,
             search_matches: Vec::new(),
             search_match_index: None,
@@ -251,25 +278,16 @@ impl Model {
             .collect();
 
         if current_layout_heights != self.image_layout_heights {
-            if let Ok(document) = Document::parse_with_layout_and_image_heights(
-                self.document.source(),
-                self.layout_width(),
-                &current_layout_heights,
-            ) {
-                crate::perf::log_event(
-                    "image.layout.reflow",
-                    format!(
-                        "old={} new={}",
-                        self.image_layout_heights.len(),
-                        current_layout_heights.len()
-                    ),
-                );
-                self.document = document;
-                self.viewport.set_total_lines(self.document.line_count());
-                self.image_layout_heights = current_layout_heights;
-                let allow_short = self.search_allow_short;
-                refresh_search_matches(self, false, allow_short);
-            }
+            crate::perf::log_event(
+                "image.layout.reflow",
+                format!(
+                    "old={} new={}",
+                    self.image_layout_heights.len(),
+                    current_layout_heights.len()
+                ),
+            );
+            self.image_layout_heights = current_layout_heights;
+            self.reflow_layout();
         }
     }
 
@@ -307,10 +325,7 @@ impl Model {
     }
 
     fn layout_width(&self) -> u16 {
-        self.viewport
-            .width()
-            .saturating_sub(crate::ui::DOCUMENT_LEFT_PADDING)
-            .max(1)
+        crate::ui::document_content_width(self.viewport.width(), self.toc_visible)
     }
 
     fn toc_visible_rows(&self) -> usize {
@@ -323,6 +338,89 @@ impl Model {
             .headings()
             .len()
             .saturating_sub(self.toc_visible_rows())
+    }
+
+    fn sync_toc_to_viewport(&mut self) {
+        let Some(selected) = closest_heading_to_line(self.document.headings(), self.viewport.offset()) else {
+            self.toc_selected = None;
+            self.toc_scroll_offset = 0;
+            return;
+        };
+        self.toc_selected = Some(selected);
+        self.toc_scroll_offset = selected.min(self.max_toc_scroll_offset());
+    }
+
+    fn reflow_layout(&mut self) {
+        if let Ok(document) = Document::parse_with_layout_and_image_heights(
+            self.document.source(),
+            self.layout_width(),
+            &self.image_layout_heights,
+        ) {
+            self.document = document;
+            self.viewport.set_total_lines(self.document.line_count());
+            self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
+            let allow_short = self.search_allow_short;
+            refresh_search_matches(self, false, allow_short);
+        }
+    }
+
+    fn show_toast(&mut self, level: ToastLevel, message: impl Into<String>) {
+        self.toast = Some(Toast {
+            level,
+            message: message.into(),
+            expires_at: Instant::now() + Duration::from_secs(4),
+        });
+    }
+
+    fn expire_toast(&mut self, now: Instant) -> bool {
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.expires_at <= now)
+        {
+            self.toast = None;
+            return true;
+        }
+        false
+    }
+
+    pub fn active_toast(&self) -> Option<(&str, ToastLevel)> {
+        self.toast
+            .as_ref()
+            .map(|toast| (toast.message.as_str(), toast.level))
+    }
+
+    fn reload_from_disk(&mut self) -> Result<()> {
+        let content = std::fs::read_to_string(&self.file_path)?;
+        let document = Document::parse_with_layout_and_image_heights(
+            &content,
+            self.layout_width(),
+            &self.image_layout_heights,
+        )?;
+        self.document = document;
+
+        // Drop cached image entries that are no longer present in the document.
+        let valid_images: std::collections::HashSet<_> = self
+            .document
+            .images()
+            .iter()
+            .map(|img| img.src.clone())
+            .collect();
+        self.image_protocols
+            .retain(|src, _| valid_images.contains(src));
+        self.original_images
+            .retain(|src, _| valid_images.contains(src));
+        self.image_layout_heights
+            .retain(|src, _| valid_images.contains(src));
+
+        self.viewport.set_total_lines(self.document.line_count());
+        self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
+        let allow_short = self.search_allow_short;
+        refresh_search_matches(self, false, allow_short);
+        if self.toc_visible && !self.toc_focused {
+            self.sync_toc_to_viewport();
+        }
+        Ok(())
     }
 }
 
@@ -380,6 +478,10 @@ pub enum Message {
     // File watching
     /// Toggle file watching
     ToggleWatch,
+    /// Toggle help overlay
+    ToggleHelp,
+    /// Hide help overlay
+    HideHelp,
     /// File changed externally, reload
     FileChanged,
     /// Force reload file
@@ -415,6 +517,17 @@ pub enum Message {
 /// This is the core of TEA - all state transitions happen here.
 /// No side effects should occur in this function.
 pub fn update(mut model: Model, msg: Message) -> Model {
+    let should_sync_toc = !matches!(
+        &msg,
+        Message::TocUp
+            | Message::TocDown
+            | Message::TocScrollUp
+            | Message::TocScrollDown
+            | Message::TocSelect
+            | Message::TocClick(_)
+            | Message::TocCollapse
+            | Message::TocExpand
+    );
     match msg {
         // Navigation
         Message::ScrollUp(n) => {
@@ -464,7 +577,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             if model.toc_visible && model.toc_selected.is_none() {
                 model.toc_selected = Some(0);
             }
-            model.toc_scroll_offset = model.toc_scroll_offset.min(model.max_toc_scroll_offset());
+            model.reflow_layout();
         }
         Message::ToggleTocFocus => {
             model.toc_visible = !model.toc_visible;
@@ -472,7 +585,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             if model.toc_visible && model.toc_selected.is_none() {
                 model.toc_selected = Some(0);
             }
-            model.toc_scroll_offset = model.toc_scroll_offset.min(model.max_toc_scroll_offset());
+            model.reflow_layout();
         }
         Message::TocUp => {
             if let Some(sel) = model.toc_selected {
@@ -531,6 +644,12 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // File watching
         Message::ToggleWatch => {
             model.watch_enabled = !model.watch_enabled;
+        }
+        Message::ToggleHelp => {
+            model.help_visible = !model.help_visible;
+        }
+        Message::HideHelp => {
+            model.help_visible = false;
         }
         Message::FileChanged | Message::ForceReload => {
             // Reload is handled in the event loop (side effect)
@@ -598,17 +717,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // Window
         Message::Resize(width, height) => {
             model.viewport.resize(width, height.saturating_sub(1));
-            if let Ok(document) = Document::parse_with_layout_and_image_heights(
-                model.document.source(),
-                model.layout_width(),
-                &model.image_layout_heights,
-            ) {
-                model.document = document;
-                model.viewport.set_total_lines(model.document.line_count());
-                model.toc_scroll_offset = model.toc_scroll_offset.min(model.max_toc_scroll_offset());
-                let allow_short = model.search_allow_short;
-                refresh_search_matches(&mut model, false, allow_short);
-            }
+            model.reflow_layout();
         }
         Message::Redraw => {
             // No state change needed
@@ -619,7 +728,31 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.should_quit = true;
         }
     }
+    if should_sync_toc && model.toc_visible && !model.toc_focused {
+        model.sync_toc_to_viewport();
+    }
     model
+}
+
+fn closest_heading_to_line(headings: &[crate::document::HeadingRef], line: usize) -> Option<usize> {
+    if headings.is_empty() {
+        return None;
+    }
+    let next = headings.partition_point(|h| h.line < line);
+    if next == 0 {
+        return Some(0);
+    }
+    if next >= headings.len() {
+        return Some(headings.len() - 1);
+    }
+    let prev_idx = next - 1;
+    let prev_dist = line.saturating_sub(headings[prev_idx].line);
+    let next_dist = headings[next].line.saturating_sub(line);
+    if prev_dist <= next_dist {
+        Some(prev_idx)
+    } else {
+        Some(next)
+    }
 }
 
 fn refresh_search_matches(model: &mut Model, jump_to_first: bool, allow_short: bool) {
@@ -658,6 +791,8 @@ pub struct App {
     watch_enabled: bool,
     toc_visible: bool,
     force_half_cell: bool,
+    config_global_path: Option<PathBuf>,
+    config_local_path: Option<PathBuf>,
 }
 
 struct ResizeDebouncer {
@@ -700,6 +835,8 @@ impl App {
             watch_enabled: false,
             toc_visible: false,
             force_half_cell: false,
+            config_global_path: None,
+            config_local_path: None,
         }
     }
 
@@ -719,6 +856,71 @@ impl App {
     pub fn with_force_half_cell(mut self, enabled: bool) -> Self {
         self.force_half_cell = enabled;
         self
+    }
+
+    /// Set config paths to show in help.
+    pub fn with_config_paths(
+        mut self,
+        global_path: Option<PathBuf>,
+        local_path: Option<PathBuf>,
+    ) -> Self {
+        self.config_global_path = global_path;
+        self.config_local_path = local_path;
+        self
+    }
+
+    fn make_file_watcher(&self) -> notify::Result<FileWatcher> {
+        FileWatcher::new(&self.file_path, Duration::from_millis(200))
+    }
+
+    fn handle_message_side_effects(
+        &self,
+        model: &mut Model,
+        file_watcher: &mut Option<FileWatcher>,
+        msg: &Message,
+    ) {
+        match msg {
+            Message::ToggleWatch => {
+                if model.watch_enabled {
+                    match self.make_file_watcher() {
+                        Ok(watcher) => {
+                            *file_watcher = Some(watcher);
+                            model.show_toast(ToastLevel::Info, "Watching file changes");
+                        }
+                        Err(err) => {
+                            model.watch_enabled = false;
+                            *file_watcher = None;
+                            model.show_toast(
+                                ToastLevel::Warning,
+                                format!("Watch unavailable: {err}"),
+                            );
+                            crate::perf::log_event(
+                                "watcher.error",
+                                format!("failed path={} err={err}", model.file_path.display()),
+                            );
+                        }
+                    }
+                } else {
+                    *file_watcher = None;
+                    model.show_toast(ToastLevel::Info, "Watch disabled");
+                }
+            }
+            Message::ForceReload | Message::FileChanged => {
+                if let Err(err) = model.reload_from_disk() {
+                    model.show_toast(
+                        ToastLevel::Error,
+                        format!("Reload failed: {err}"),
+                    );
+                    crate::perf::log_event(
+                        "reload.error",
+                        format!("failed path={} err={err}", model.file_path.display()),
+                    );
+                } else if matches!(msg, Message::ForceReload) {
+                    model.show_toast(ToastLevel::Info, "Reloaded");
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Run the main event loop.
@@ -743,10 +945,7 @@ impl App {
         drop(_init_scope);
 
         let _parse_scope = crate::perf::scope("app.parse_with_layout");
-        let layout_width = size
-            .width
-            .saturating_sub(crate::ui::DOCUMENT_LEFT_PADDING)
-            .max(1);
+        let layout_width = crate::ui::document_content_width(size.width, self.toc_visible);
         let document = Document::parse_with_layout(&content, layout_width)?;
         drop(_parse_scope);
 
@@ -756,6 +955,8 @@ impl App {
         model.watch_enabled = self.watch_enabled;
         model.toc_visible = self.toc_visible;
         model.force_half_cell = self.force_half_cell;
+        model.config_global_path = self.config_global_path.clone();
+        model.config_local_path = self.config_local_path.clone();
 
         // Pre-load images from the document
         let _images_scope = crate::perf::scope("app.load_nearby_images.initial");
@@ -776,10 +977,30 @@ impl App {
     fn event_loop(&self, terminal: &mut DefaultTerminal, model: &mut Model) -> Result<()> {
         let start = std::time::Instant::now();
         let mut resize_debouncer = ResizeDebouncer::new(100);
+        let mut file_watcher = if model.watch_enabled {
+            match self.make_file_watcher() {
+                Ok(watcher) => Some(watcher),
+                Err(err) => {
+                    model.watch_enabled = false;
+                    model.show_toast(ToastLevel::Warning, format!("Watch unavailable: {err}"));
+                    crate::perf::log_event(
+                        "watcher.error",
+                        format!("failed path={} err={err}", model.file_path.display()),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let mut frame_idx: u64 = 0;
         let mut needs_render = true;
 
         loop {
+            if model.expire_toast(Instant::now()) {
+                needs_render = true;
+            }
+
             let was_settling = model.is_image_scroll_settling();
             model.tick_image_scroll_cooldown();
             if was_settling && !model.is_image_scroll_settling() {
@@ -799,6 +1020,24 @@ impl App {
                 needs_render = true;
             }
 
+            if model.watch_enabled
+                && file_watcher
+                    .as_mut()
+                    .is_some_and(FileWatcher::take_change_ready)
+            {
+                *model = update(std::mem::take(model), Message::FileChanged);
+                if let Err(err) = model.reload_from_disk() {
+                    model.show_toast(ToastLevel::Error, format!("Reload failed: {err}"));
+                    crate::perf::log_event(
+                        "reload.error",
+                        format!("failed path={} err={err}", model.file_path.display()),
+                    );
+                } else {
+                    model.show_toast(ToastLevel::Info, "File changed, reloaded");
+                }
+                needs_render = true;
+            }
+
             model.set_resize_pending(resize_debouncer.is_pending());
 
             // Handle events
@@ -813,7 +1052,9 @@ impl App {
                 let msg = self.handle_event(event::read()?, model, now_ms, &mut resize_debouncer);
                 if let Some(msg) = msg {
                     crate::perf::log_event("event.message", format!("frame={} msg={msg:?}", frame_idx));
+                    let side_msg = msg.clone();
                     *model = update(std::mem::take(model), msg);
+                    self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
                     needs_render = true;
                 }
 
@@ -824,7 +1065,9 @@ impl App {
                         self.handle_event(event::read()?, model, now_ms, &mut resize_debouncer);
                     if let Some(msg) = msg {
                         drained += 1;
+                        let side_msg = msg.clone();
                         *model = update(std::mem::take(model), msg);
+                        self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
                         needs_render = true;
                     }
                 }
@@ -896,6 +1139,10 @@ impl App {
     }
 
     fn handle_mouse(&self, mouse: MouseEvent, model: &Model) -> Option<Message> {
+        if model.help_visible {
+            return None;
+        }
+
         if model.toc_visible {
             let total_area = Rect::new(
                 0,
@@ -903,10 +1150,7 @@ impl App {
                 model.viewport.width(),
                 model.viewport.height().saturating_add(1),
             );
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-                .split(total_area);
+            let chunks = crate::ui::split_main_columns(total_area);
             let toc_area = chunks[0];
             let in_toc = mouse.column >= toc_area.x
                 && mouse.column < toc_area.x + toc_area.width
@@ -965,6 +1209,13 @@ impl App {
     }
 
     fn handle_key(&self, key: event::KeyEvent, model: &Model) -> Option<Message> {
+        if model.help_visible {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::F(1) => Some(Message::HideHelp),
+                _ => None,
+            };
+        }
+
         if let Some(active_query) = model.search_query.as_ref() {
             return match key.code {
                 KeyCode::Esc => Some(Message::ClearSearch),
@@ -1059,6 +1310,7 @@ impl App {
             KeyCode::Char('w') => Some(Message::ToggleWatch),
             KeyCode::Char('R') => Some(Message::ForceReload),
             KeyCode::Char('r') => Some(Message::ForceReload),
+            KeyCode::Char('?') | KeyCode::F(1) => Some(Message::ToggleHelp),
 
             // Search
             KeyCode::Char('/') => Some(Message::StartSearch),
@@ -1091,6 +1343,10 @@ impl Default for Model {
             toc_selected: None,
             toc_scroll_offset: 0,
             watch_enabled: false,
+            config_global_path: None,
+            config_local_path: None,
+            help_visible: false,
+            toast: None,
             search_query: None,
             search_matches: Vec::new(),
             search_match_index: None,
@@ -1114,6 +1370,7 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use tempfile::tempdir;
     use std::time::{Duration, Instant};
 
     fn create_test_model() -> Model {
@@ -1186,6 +1443,63 @@ mod tests {
     }
 
     #[test]
+    fn test_force_reload_reloads_document_from_disk() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("doc.md");
+        std::fs::write(&file_path, "# One\n\nalpha").unwrap();
+
+        let doc = Document::parse_with_layout("# One\n\nalpha", 80).unwrap();
+        let mut model = Model::new(file_path.clone(), doc, (80, 24));
+
+        std::fs::write(&file_path, "# Two\n\nbeta\n\nmore").unwrap();
+        model.reload_from_disk().unwrap();
+
+        assert!(model.document.source().contains("# Two"));
+        assert!(model.document.line_count() >= 3);
+    }
+
+    #[test]
+    fn test_force_reload_message_triggers_reload_side_effect() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("doc.md");
+        std::fs::write(&file_path, "# One\n\nalpha").unwrap();
+        let doc = Document::parse_with_layout("# One\n\nalpha", 80).unwrap();
+        let mut model = Model::new(file_path.clone(), doc, (80, 24));
+        let app = App::new(file_path.clone());
+        let mut watcher = None;
+
+        std::fs::write(&file_path, "# Updated\n\nbeta").unwrap();
+        model = update(model, Message::ForceReload);
+        app.handle_message_side_effects(&mut model, &mut watcher, &Message::ForceReload);
+
+        assert!(model.document.source().contains("# Updated"));
+    }
+
+    #[test]
+    fn test_toggle_help_changes_visibility() {
+        let model = create_test_model();
+        assert!(!model.help_visible);
+
+        let model = update(model, Message::ToggleHelp);
+        assert!(model.help_visible);
+
+        let model = update(model, Message::HideHelp);
+        assert!(!model.help_visible);
+    }
+
+    #[test]
+    fn test_toast_lifecycle() {
+        let mut model = create_test_model();
+        model.show_toast(ToastLevel::Warning, "watch failed");
+        let (msg, level) = model.active_toast().expect("toast should be set");
+        assert_eq!(msg, "watch failed");
+        assert_eq!(level, ToastLevel::Warning);
+        assert!(!model.expire_toast(Instant::now()));
+        assert!(model.expire_toast(Instant::now() + Duration::from_secs(5)));
+        assert!(model.active_toast().is_none());
+    }
+
+    #[test]
     fn test_toc_down_scrolls_when_selection_hits_bottom_row() {
         let mut model = create_many_headings_model();
         model.toc_visible = true;
@@ -1207,6 +1521,34 @@ mod tests {
         let model = update(model, Message::TocUp);
         assert_eq!(model.toc_selected, Some(2));
         assert_eq!(model.toc_scroll_offset, 2);
+    }
+
+    #[test]
+    fn test_toc_auto_sync_selects_heading_near_viewport_top() {
+        let mut model = create_many_headings_model();
+        model = update(model, Message::ToggleToc);
+
+        let target_idx = 8;
+        let target_line = model.document.headings()[target_idx].line;
+        model = update(model, Message::GoToLine(target_line));
+
+        assert_eq!(model.toc_selected, Some(target_idx));
+        assert_eq!(
+            model.toc_scroll_offset,
+            target_idx.min(model.max_toc_scroll_offset())
+        );
+    }
+
+    #[test]
+    fn test_toc_auto_sync_picks_previous_on_equal_distance() {
+        let mut model = create_many_headings_model();
+        model = update(model, Message::ToggleToc);
+
+        let headings = model.document.headings();
+        let between = (headings[5].line + headings[6].line) / 2;
+        model = update(model, Message::GoToLine(between));
+
+        assert_eq!(model.toc_selected, Some(5));
     }
 
     #[test]
@@ -1242,6 +1584,59 @@ mod tests {
                 "line should wrap to content width (20 - 2 padding): {}",
                 line.content()
             );
+        }
+    }
+
+    #[test]
+    fn test_toggle_toc_reflows_document_to_narrower_width() {
+        let md = "This is a long paragraph line used to verify that enabling TOC reduces wrapping width and forces narrower rendered lines in the document pane.";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+        let before_max = model
+            .document
+            .visible_lines(0, 50)
+            .iter()
+            .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+            .map(|l| l.content().chars().count())
+            .max()
+            .unwrap_or(0);
+
+        let model = update(model, Message::ToggleToc);
+        let after_max = model
+            .document
+            .visible_lines(0, 50)
+            .iter()
+            .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+            .map(|l| l.content().chars().count())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            after_max < before_max,
+            "expected narrower lines when TOC is visible (before={}, after={})",
+            before_max,
+            after_max
+        );
+    }
+
+    #[test]
+    fn test_resize_with_toc_visible_reflows_using_toc_width() {
+        let md = "A long paragraph line used to verify wrapping width honors the visible TOC pane.";
+        let doc = Document::parse_with_layout(md, 100).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (100, 24));
+        model = update(model, Message::ToggleToc);
+        model = update(model, Message::Resize(60, 24));
+
+        let expected_max = crate::ui::document_content_width(60, true) as usize;
+        for line in model.document.visible_lines(0, 50) {
+            if *line.line_type() == crate::document::LineType::Paragraph {
+                assert!(
+                    line.content().chars().count() <= expected_max,
+                    "line exceeds TOC-aware width: {} > {} ({})",
+                    line.content().chars().count(),
+                    expected_max,
+                    line.content()
+                );
+            }
         }
     }
 
@@ -1380,6 +1775,25 @@ mod tests {
 
         let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &model);
         assert_eq!(msg, Some(Message::TocSelect));
+    }
+
+    #[test]
+    fn test_question_mark_opens_help_when_not_searching() {
+        let app = App::new(PathBuf::from("test.md"));
+        let model = create_test_model();
+
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT), &model);
+        assert_eq!(msg, Some(Message::ToggleHelp));
+    }
+
+    #[test]
+    fn test_help_mode_esc_closes_help() {
+        let app = App::new(PathBuf::from("test.md"));
+        let mut model = create_test_model();
+        model.help_visible = true;
+
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &model);
+        assert_eq!(msg, Some(Message::HideHelp));
     }
 
     #[test]

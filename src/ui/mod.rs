@@ -17,6 +17,28 @@ use crate::app::Model;
 use crate::document::LineType;
 
 pub const DOCUMENT_LEFT_PADDING: u16 = 2;
+pub const TOC_WIDTH_PERCENT: u16 = 30;
+pub const DOC_WIDTH_PERCENT: u16 = 70;
+
+pub fn split_main_columns(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(TOC_WIDTH_PERCENT),
+            Constraint::Percentage(DOC_WIDTH_PERCENT),
+        ])
+        .split(area)
+}
+
+pub fn document_content_width(total_width: u16, toc_visible: bool) -> u16 {
+    let area = Rect::new(0, 0, total_width, 1);
+    let doc_width = if toc_visible {
+        split_main_columns(area)[1].width
+    } else {
+        total_width
+    };
+    doc_width.saturating_sub(DOCUMENT_LEFT_PADDING).max(1)
+}
 
 /// Render the complete UI.
 pub fn render(model: &mut Model, frame: &mut Frame) {
@@ -24,16 +46,93 @@ pub fn render(model: &mut Model, frame: &mut Frame) {
 
     if model.toc_visible {
         // Split into TOC and document
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-            .split(area);
-
+        let chunks = split_main_columns(area);
         render_toc(model, frame, chunks[0]);
         render_document(model, frame, chunks[1]);
     } else {
         render_document(model, frame, area);
     }
+
+    if model.help_visible {
+        render_help_overlay(model, frame, area);
+    }
+}
+
+fn render_help_overlay(model: &Model, frame: &mut Frame, area: Rect) {
+    let popup_width = area.width.saturating_sub(12).max(48);
+    let popup_height = area.height.saturating_sub(10).max(12);
+    let popup = centered_popup_rect(popup_width, popup_height, area);
+
+    let left_text = "\
+Navigation
+  j/k or Up/Down      Scroll
+  Space/PageDown      Page down
+  b/PageUp            Page up
+  Ctrl-d / Ctrl-u     Half page
+  g / G               Top / bottom
+
+Search
+  /                   Start search
+  Enter               Next match
+  Esc                 Clear search";
+
+    let global_cfg = model
+        .config_global_path
+        .as_ref()
+        .map_or_else(|| "<unknown>".to_string(), |p| p.display().to_string());
+    let local_cfg = model
+        .config_local_path
+        .as_ref()
+        .map_or_else(|| "<none>".to_string(), |p| p.display().to_string());
+
+    let right_text = format!(
+        "\
+TOC
+  t                   Toggle TOC
+  T                   Toggle + focus TOC
+  Tab                 Switch focus
+  TOC: j/k, arrows, Enter/Space, mouse, click
+
+Other
+  w                   Toggle watch
+  r or R              Reload file
+  q or Ctrl-c         Quit
+  ? or F1             Toggle help
+
+Config
+  Global: {global_cfg}
+  Local override: {local_cfg}"
+    );
+
+    let block = Block::default()
+        .title("Help")
+        .borders(Borders::ALL)
+        .padding(Padding::uniform(1))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(block, popup);
+
+    let inner = Rect::new(
+        popup.x + 2,
+        popup.y + 2,
+        popup.width.saturating_sub(4),
+        popup.height.saturating_sub(4),
+    );
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+    frame.render_widget(Paragraph::new(left_text), cols[0]);
+    frame.render_widget(Paragraph::new(right_text), cols[1]);
+}
+
+fn centered_popup_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w) / 2);
+    let y = area.y + (area.height.saturating_sub(h) / 2);
+    Rect::new(x, y, w, h)
 }
 
 fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
@@ -77,14 +176,28 @@ fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
 
 fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     let search_active = model.search_query.is_some();
-    let footer_rows = if search_active { 2 } else { 1 };
+    let toast_active = model.active_toast().is_some();
+    let footer_rows = 1 + u16::from(search_active) + u16::from(toast_active);
     // Reserve last line for status bar (+ one search bar line when active).
     let doc_outer_area = Rect {
         height: area.height.saturating_sub(footer_rows),
         ..area
     };
     let search_area = Rect {
-        y: area.y + area.height.saturating_sub(2),
+        y: area
+            .y
+            + area
+                .height
+                .saturating_sub(1 + u16::from(search_active)),
+        height: 1,
+        ..area
+    };
+    let toast_area = Rect {
+        y: area
+            .y
+            + area
+                .height
+                .saturating_sub(1 + u16::from(search_active) + u16::from(toast_active)),
         height: 1,
         ..area
     };
@@ -297,6 +410,9 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     }
 
     // Render status bar
+    if toast_active {
+        render_toast_bar(model, frame, toast_area);
+    }
     if search_active {
         render_search_bar(model, frame, search_area);
     }
@@ -385,6 +501,28 @@ fn render_status_bar(model: &Model, frame: &mut Frame, area: Rect) {
         Paragraph::new(status).style(Style::default().bg(Color::DarkGray).fg(Color::White));
 
     frame.render_widget(status_bar, area);
+}
+
+fn render_toast_bar(model: &Model, frame: &mut Frame, area: Rect) {
+    let Some((message, level)) = model.active_toast() else {
+        return;
+    };
+    let (prefix, style) = match level {
+        crate::app::ToastLevel::Info => (
+            "[info]",
+            Style::default().bg(Color::DarkGray).fg(Color::White),
+        ),
+        crate::app::ToastLevel::Warning => (
+            "[warn]",
+            Style::default().bg(Color::Yellow).fg(Color::Black),
+        ),
+        crate::app::ToastLevel::Error => (
+            "[error]",
+            Style::default().bg(Color::Red).fg(Color::White),
+        ),
+    };
+    let toast = Paragraph::new(format!("{} {}", prefix, message)).style(style);
+    frame.render_widget(toast, area);
 }
 
 fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
