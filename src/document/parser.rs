@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use comrak::nodes::{AstNode, NodeValue};
+use comrak::nodes::{AstNode, NodeValue, TableAlignment};
 use comrak::{Arena, Options, parse_document};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::types::{
     CodeBlockRef, Document, HeadingRef, ImageRef, InlineSpan, InlineStyle, LineType, LinkRef,
@@ -109,6 +110,7 @@ fn create_options() -> Options {
     options.extension.tasklist = true;
     options.extension.footnotes = true;
     options.extension.superscript = true;
+    options.extension.subscript = true;
 
     // Enable other useful extensions
     options.extension.header_ids = Some("".to_string());
@@ -465,15 +467,7 @@ fn process_node<'a>(
         }
 
         NodeValue::BlockQuote => {
-            for child in node.children() {
-                let text = extract_text(child);
-                for line in text.lines() {
-                    lines.push(RenderedLine::new(
-                        format!("  │ {}", line),
-                        LineType::BlockQuote,
-                    ));
-                }
-            }
+            render_blockquote(node, lines, wrap_width, 1);
             lines.push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
@@ -486,10 +480,28 @@ fn process_node<'a>(
         }
 
         NodeValue::Table(_) => {
-            // TODO: Proper table rendering
-            let text = extract_text(node);
-            for line in text.lines() {
-                lines.push(RenderedLine::new(line.to_string(), LineType::Table));
+            for line in render_table(node, wrap_width) {
+                lines.push(RenderedLine::new(line, LineType::Table));
+            }
+            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+        }
+
+        NodeValue::FootnoteDefinition(def) => {
+            let label = format!("[^{}]: ", def.name);
+            let continuation = " ".repeat(label.len());
+            let spans = collect_inline_spans(node);
+            let wrapped = wrap_spans(&spans, wrap_width, &label, &continuation);
+            if wrapped.is_empty() {
+                lines.push(RenderedLine::new(label, LineType::Paragraph));
+            } else {
+                for line_spans in wrapped {
+                    let content = spans_to_string(&line_spans);
+                    lines.push(RenderedLine::with_spans(
+                        content,
+                        LineType::Paragraph,
+                        line_spans,
+                    ));
+                }
             }
             lines.push(RenderedLine::new(String::new(), LineType::Empty));
         }
@@ -551,6 +563,321 @@ fn ensure_trailing_empty_lines(lines: &mut Vec<RenderedLine>, count: usize) {
     }
 }
 
+fn render_blockquote<'a>(
+    node: &'a AstNode<'a>,
+    lines: &mut Vec<RenderedLine>,
+    wrap_width: usize,
+    quote_depth: usize,
+) {
+    let prefix = quote_prefix(quote_depth);
+
+    for child in node.children() {
+        match &child.data.borrow().value {
+            NodeValue::Paragraph => {
+                let spans = collect_inline_spans(child);
+                let wrapped = wrap_spans(&spans, wrap_width, &prefix, &prefix);
+                for line_spans in wrapped {
+                    let content = spans_to_string(&line_spans);
+                    lines.push(RenderedLine::with_spans(
+                        content,
+                        LineType::BlockQuote,
+                        line_spans,
+                    ));
+                }
+            }
+            NodeValue::BlockQuote => {
+                render_blockquote(child, lines, wrap_width, quote_depth + 1);
+            }
+            _ => {
+                let text = extract_text(child);
+                for raw_line in text.lines() {
+                    let spans = vec![InlineSpan::new(raw_line.to_string(), InlineStyle::default())];
+                    let wrapped = wrap_spans(&spans, wrap_width, &prefix, &prefix);
+                    for line_spans in wrapped {
+                        let content = spans_to_string(&line_spans);
+                        lines.push(RenderedLine::with_spans(
+                            content,
+                            LineType::BlockQuote,
+                            line_spans,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn quote_prefix(depth: usize) -> String {
+    let mut prefix = String::from("  ");
+    for _ in 0..depth {
+        prefix.push('│');
+        prefix.push(' ');
+    }
+    prefix
+}
+
+fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<String> {
+    let (alignments, mut rows, has_header) = collect_table_rows(table_node);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let num_cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0);
+    if num_cols == 0 {
+        return Vec::new();
+    }
+
+    for row in &mut rows {
+        while row.len() < num_cols {
+            row.push(String::new());
+        }
+    }
+
+    let mut col_widths = vec![1_usize; num_cols];
+    for row in &rows {
+        for (idx, cell) in row.iter().enumerate() {
+            col_widths[idx] = col_widths[idx].max(display_width(cell));
+        }
+    }
+
+    // Keep the table inside available width.
+    // Table row width is: 1 + sum(col_width + 3) for all columns.
+    let max_table_width = wrap_width.max(4);
+    while 1 + col_widths.iter().sum::<usize>() + (3 * num_cols) > max_table_width {
+        if let Some((widest_idx, _)) = col_widths.iter().enumerate().max_by_key(|(_, w)| *w) {
+            if col_widths[widest_idx] > 1 {
+                col_widths[widest_idx] -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    let top = render_table_border(&col_widths, '┌', '┬', '┐');
+    let mid = render_table_border(&col_widths, '├', '┼', '┤');
+    let bottom = render_table_border(&col_widths, '└', '┴', '┘');
+
+    let mut lines = Vec::new();
+    lines.push(top);
+    for (idx, row) in rows.iter().enumerate() {
+        lines.push(render_table_row(row, &col_widths, &alignments));
+        if has_header && idx == 0 {
+            lines.push(mid.clone());
+        }
+    }
+    lines.push(bottom);
+    lines
+}
+
+fn collect_table_rows<'a>(table_node: &'a AstNode<'a>) -> (Vec<TableAlignment>, Vec<Vec<String>>, bool) {
+    let alignments = match &table_node.data.borrow().value {
+        NodeValue::Table(table) => table.alignments.clone(),
+        _ => Vec::new(),
+    };
+
+    let mut rows = Vec::new();
+    let mut has_header = false;
+    for row_node in table_node.children() {
+        let is_header_row = matches!(row_node.data.borrow().value, NodeValue::TableRow(true));
+        if is_header_row {
+            has_header = true;
+        }
+        if !matches!(row_node.data.borrow().value, NodeValue::TableRow(_)) {
+            continue;
+        }
+
+        let mut row_cells = Vec::new();
+        for cell_node in row_node.children() {
+            if !matches!(cell_node.data.borrow().value, NodeValue::TableCell) {
+                continue;
+            }
+            let cell = extract_text(cell_node)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            row_cells.push(cell);
+        }
+        rows.push(row_cells);
+    }
+
+    (alignments, rows, has_header)
+}
+
+fn render_table_border(widths: &[usize], left: char, middle: char, right: char) -> String {
+    let mut out = String::new();
+    out.push(left);
+    for (idx, width) in widths.iter().enumerate() {
+        out.push_str(&"─".repeat(width + 2));
+        if idx + 1 < widths.len() {
+            out.push(middle);
+        }
+    }
+    out.push(right);
+    out
+}
+
+fn render_table_row(cells: &[String], widths: &[usize], alignments: &[TableAlignment]) -> String {
+    let mut out = String::new();
+    out.push('│');
+    for idx in 0..widths.len() {
+        let content = cells.get(idx).map_or("", std::string::String::as_str);
+        let content = truncate_text(content, widths[idx]);
+        let padding = widths[idx].saturating_sub(display_width(&content));
+
+        out.push(' ');
+        match alignments.get(idx).copied().unwrap_or(TableAlignment::None) {
+            TableAlignment::Right => {
+                out.push_str(&" ".repeat(padding));
+                out.push_str(&content);
+            }
+            TableAlignment::Center => {
+                let left = padding / 2;
+                let right = padding - left;
+                out.push_str(&" ".repeat(left));
+                out.push_str(&content);
+                out.push_str(&" ".repeat(right));
+            }
+            TableAlignment::Left | TableAlignment::None => {
+                out.push_str(&content);
+                out.push_str(&" ".repeat(padding));
+            }
+        }
+        out.push(' ');
+        out.push('│');
+    }
+    out
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if width + ch_width > max_chars {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
+    out
+}
+
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+fn render_superscript_text(text: &str) -> String {
+    render_script_text(text, true)
+}
+
+fn render_subscript_text(text: &str) -> String {
+    render_script_text(text, false)
+}
+
+fn render_script_text(text: &str, superscript: bool) -> String {
+    let mut mapped = String::new();
+    for ch in text.chars() {
+        let mapped_char = if superscript {
+            superscript_char(ch)
+        } else {
+            subscript_char(ch)
+        };
+        let Some(mapped_char) = mapped_char else {
+            return if superscript {
+                format!("^({text})")
+            } else {
+                format!("_({text})")
+            };
+        };
+        mapped.push(mapped_char);
+    }
+    mapped
+}
+
+fn superscript_char(ch: char) -> Option<char> {
+    match ch {
+        'a' => Some('ᵃ'),
+        'b' => Some('ᵇ'),
+        'c' => Some('ᶜ'),
+        'd' => Some('ᵈ'),
+        'e' => Some('ᵉ'),
+        'f' => Some('ᶠ'),
+        'g' => Some('ᵍ'),
+        'h' => Some('ʰ'),
+        '0' => Some('⁰'),
+        '1' => Some('¹'),
+        '2' => Some('²'),
+        '3' => Some('³'),
+        '4' => Some('⁴'),
+        '5' => Some('⁵'),
+        '6' => Some('⁶'),
+        '7' => Some('⁷'),
+        '8' => Some('⁸'),
+        '9' => Some('⁹'),
+        'j' => Some('ʲ'),
+        'k' => Some('ᵏ'),
+        'l' => Some('ˡ'),
+        'm' => Some('ᵐ'),
+        'o' => Some('ᵒ'),
+        'p' => Some('ᵖ'),
+        'r' => Some('ʳ'),
+        's' => Some('ˢ'),
+        't' => Some('ᵗ'),
+        'u' => Some('ᵘ'),
+        'v' => Some('ᵛ'),
+        'w' => Some('ʷ'),
+        'x' => Some('ˣ'),
+        'y' => Some('ʸ'),
+        'z' => Some('ᶻ'),
+        '+' => Some('⁺'),
+        '-' => Some('⁻'),
+        '=' => Some('⁼'),
+        '(' => Some('⁽'),
+        ')' => Some('⁾'),
+        'n' => Some('ⁿ'),
+        'i' => Some('ⁱ'),
+        _ => None,
+    }
+}
+
+fn subscript_char(ch: char) -> Option<char> {
+    match ch {
+        '0' => Some('₀'),
+        '1' => Some('₁'),
+        '2' => Some('₂'),
+        '3' => Some('₃'),
+        '4' => Some('₄'),
+        '5' => Some('₅'),
+        '6' => Some('₆'),
+        '7' => Some('₇'),
+        '8' => Some('₈'),
+        '9' => Some('₉'),
+        '+' => Some('₊'),
+        '-' => Some('₋'),
+        '=' => Some('₌'),
+        '(' => Some('₍'),
+        ')' => Some('₎'),
+        'a' => Some('ₐ'),
+        'e' => Some('ₑ'),
+        'h' => Some('ₕ'),
+        'i' => Some('ᵢ'),
+        'j' => Some('ⱼ'),
+        'k' => Some('ₖ'),
+        'l' => Some('ₗ'),
+        'm' => Some('ₘ'),
+        'n' => Some('ₙ'),
+        'o' => Some('ₒ'),
+        'p' => Some('ₚ'),
+        'r' => Some('ᵣ'),
+        's' => Some('ₛ'),
+        't' => Some('ₜ'),
+        'u' => Some('ᵤ'),
+        'v' => Some('ᵥ'),
+        'x' => Some('ₓ'),
+        _ => None,
+    }
+}
+
 fn extract_text<'a>(node: &'a AstNode<'a>) -> String {
     let mut text = String::new();
     extract_text_recursive(node, &mut text);
@@ -604,12 +931,29 @@ fn collect_inline_spans_recursive<'a>(
                 collect_inline_spans_recursive(child, next, spans);
             }
         }
+        NodeValue::Superscript => {
+            let mut inner = String::new();
+            for child in node.children() {
+                inner.push_str(&extract_text(child));
+            }
+            spans.push(InlineSpan::new(render_superscript_text(&inner), style));
+        }
+        NodeValue::Subscript => {
+            let mut inner = String::new();
+            for child in node.children() {
+                inner.push_str(&extract_text(child));
+            }
+            spans.push(InlineSpan::new(render_subscript_text(&inner), style));
+        }
         NodeValue::Link(_) => {
             let mut next = style;
             next.link = true;
             for child in node.children() {
                 collect_inline_spans_recursive(child, next, spans);
             }
+        }
+        NodeValue::FootnoteReference(reference) => {
+            spans.push(InlineSpan::new(format!("[^{}]", reference.name), style));
         }
         NodeValue::SoftBreak | NodeValue::LineBreak => {
             spans.push(InlineSpan::new(" ".to_string(), style));
@@ -648,6 +992,23 @@ fn extract_text_recursive<'a>(node: &'a AstNode<'a>, text: &mut String) {
             text.push_str(&c.literal);
             text.push('`');
         }
+        NodeValue::Superscript => {
+            let mut inner = String::new();
+            for child in node.children() {
+                extract_text_recursive(child, &mut inner);
+            }
+            text.push_str(&render_superscript_text(&inner));
+        }
+        NodeValue::Subscript => {
+            let mut inner = String::new();
+            for child in node.children() {
+                extract_text_recursive(child, &mut inner);
+            }
+            text.push_str(&render_subscript_text(&inner));
+        }
+        NodeValue::FootnoteReference(reference) => {
+            text.push_str(&format!("[^{}]", reference.name));
+        }
         NodeValue::SoftBreak | NodeValue::LineBreak => {
             text.push('\n');
         }
@@ -666,13 +1027,8 @@ fn wrap_spans(
     prefix_next: &str,
 ) -> Vec<Vec<InlineSpan>> {
     let mut tokens: Vec<InlineSpan> = Vec::new();
-
     for span in spans {
-        for word in span.text().split_whitespace() {
-            if !word.is_empty() {
-                tokens.push(InlineSpan::new(word.to_string(), span.style()));
-            }
-        }
+        tokens.extend(split_inline_tokens(span));
     }
 
     let mut lines: Vec<Vec<InlineSpan>> = Vec::new();
@@ -697,21 +1053,25 @@ fn wrap_spans(
     start_new_line(prefix_first, &mut current, &mut current_len, &mut has_word);
 
     for token in tokens {
-        let token_len = token.text().len();
-        let space_len = if has_word { 1 } else { 0 };
-        if current_len + space_len + token_len > width && has_word {
+        let token_len = token.text().chars().count();
+        let token_is_ws = token.text().chars().all(char::is_whitespace);
+
+        if current_len + token_len > width && has_word {
             lines.push(current.clone());
             start_new_line(prefix_next, &mut current, &mut current_len, &mut has_word);
         }
 
-        if has_word {
-            current.push(InlineSpan::new(" ".to_string(), InlineStyle::default()));
-            current_len += 1;
+        if token_is_ws && !has_word {
+            // Drop leading whitespace at wrapped line starts.
+            continue;
         }
 
         current_len += token_len;
         current.push(token);
-        has_word = true;
+        has_word = token_is_ws || has_word;
+        if !token_is_ws {
+            has_word = true;
+        }
     }
 
     if current.is_empty() && !prefix_first.is_empty() {
@@ -720,6 +1080,36 @@ fn wrap_spans(
 
     lines.push(current);
     lines
+}
+
+fn split_inline_tokens(span: &InlineSpan) -> Vec<InlineSpan> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut ws_state: Option<bool> = None;
+
+    for ch in span.text().chars() {
+        let is_ws = ch.is_whitespace();
+        match ws_state {
+            Some(state) if state == is_ws => {
+                buf.push(ch);
+            }
+            Some(_) => {
+                out.push(InlineSpan::new(std::mem::take(&mut buf), span.style()));
+                buf.push(ch);
+                ws_state = Some(is_ws);
+            }
+            None => {
+                buf.push(ch);
+                ws_state = Some(is_ws);
+            }
+        }
+    }
+
+    if !buf.is_empty() {
+        out.push(InlineSpan::new(buf, span.style()));
+    }
+
+    out
 }
 
 fn spans_to_string(spans: &[InlineSpan]) -> String {
@@ -878,6 +1268,22 @@ mod tests {
     }
 
     #[test]
+    fn test_blockquote_wraps_with_quote_prefix() {
+        let md = "> This is a long block quote line that should wrap and keep the quote prefix.";
+        let doc = Document::parse_with_layout(md, 30).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let quote_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::BlockQuote)
+            .collect();
+        assert!(quote_lines.len() > 1);
+        for line in quote_lines {
+            assert!(line.content().starts_with("  │ "));
+            assert!(line.content().len() <= 30);
+        }
+    }
+
+    #[test]
     fn test_heading_line_numbers() {
         let doc = parse("# First\n\nParagraph\n\n# Second").unwrap();
         assert_eq!(doc.headings().len(), 2);
@@ -914,7 +1320,63 @@ mod tests {
     fn test_gfm_table() {
         let doc = parse("| A | B |\n|---|---|\n| 1 | 2 |").unwrap();
         let lines = doc.visible_lines(0, 10);
-        assert!(lines.iter().any(|l| *l.line_type() == LineType::Table));
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(!table_lines.is_empty());
+        assert!(table_lines[0].content().starts_with('┌'));
+        assert!(table_lines.iter().any(|l| l.content().starts_with("│ A")));
+        assert!(table_lines.iter().any(|l| l.content().contains("│ 1")));
+        assert!(table_lines.last().unwrap().content().starts_with('└'));
+    }
+
+    #[test]
+    fn test_gfm_table_respects_layout_width() {
+        let md = "| Very long heading | Value |\n|---|---:|\n| some really long content | 12345 |";
+        let doc = Document::parse_with_layout(md, 24).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(line.content()) <= 24,
+                "table line exceeds width: {}",
+                line.content()
+            );
+        }
+    }
+
+    #[test]
+    fn test_gfm_table_with_emoji_respects_layout_width() {
+        let md = "| Feature | Status |\n|---|---|\n| Bold | ✅ Supported |\n| Italic | ✅ Supported |";
+        let doc = Document::parse_with_layout(md, 28).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(line.content()) <= 28,
+                "emoji table line exceeds width: {}",
+                line.content()
+            );
+        }
+    }
+
+    #[test]
+    fn test_gfm_table_mixed_content_renders_each_row_separately() {
+        let md = "| Feature | Status | Notes |\n|---------|--------|-------|\n| **Bold** | ✅ Supported | Works well |\n| *Italic* | ✅ Supported | Works well |\n| `Code` | ✅ Supported | Inline only |\n| ~~Strike~~ | ✅ Supported | GFM extension |\n| [Links](/) | ✅ Supported | Full support |";
+        let doc = Document::parse_with_layout(md, 120).unwrap();
+        let table_lines: Vec<_> = doc
+            .visible_lines(0, 100)
+            .into_iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .map(|l| l.content().to_string())
+            .collect();
+
+        assert_eq!(table_lines.len(), 9);
+        assert!(table_lines.iter().all(|line| !line.contains('\n')));
+        assert!(table_lines.iter().any(|line| line.contains("Bold")));
+        assert!(table_lines.iter().any(|line| line.contains("Italic")));
+        assert!(table_lines.iter().any(|line| line.contains("Code")));
+        assert!(table_lines.iter().any(|line| line.contains("Strike")));
+        assert!(table_lines.iter().any(|line| line.contains("Links")));
     }
 
     #[test]
@@ -950,6 +1412,63 @@ mod tests {
         assert!(spans.iter().any(|s| s.style().code));
         assert!(spans.iter().any(|s| s.style().link));
         assert!(spans.iter().any(|s| s.style().strikethrough));
+    }
+
+    #[test]
+    fn test_superscript_renders_with_unicode_digits() {
+        let md = "E = mc^2^";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let paragraph = lines
+            .iter()
+            .find(|l| *l.line_type() == LineType::Paragraph)
+            .expect("Paragraph line missing");
+        assert!(paragraph.content().contains("²"));
+    }
+
+    #[test]
+    fn test_subscript_renders_with_unicode_digits() {
+        let md = "H~2~O";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let paragraph = lines
+            .iter()
+            .find(|l| *l.line_type() == LineType::Paragraph)
+            .expect("Paragraph line missing");
+        assert!(paragraph.content().contains("₂"));
+    }
+
+    #[test]
+    fn test_subscript_falls_back_when_glyph_missing() {
+        let md = "x~q~";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let paragraph = lines
+            .iter()
+            .find(|l| *l.line_type() == LineType::Paragraph)
+            .expect("Paragraph line missing");
+        assert!(paragraph.content().contains("_(q)"));
+    }
+
+    #[test]
+    fn test_superscript_letters_and_symbols_render_unicode() {
+        let md = "x^abc+()^";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let paragraph = lines
+            .iter()
+            .find(|l| *l.line_type() == LineType::Paragraph)
+            .expect("Paragraph line missing");
+        assert!(paragraph.content().contains("ᵃᵇᶜ⁺⁽⁾"));
+    }
+
+    #[test]
+    fn test_footnote_reference_and_definition_render() {
+        let md = "Alpha[^n]\n\n[^n]: Footnote text";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        assert!(lines.iter().any(|l| l.content().contains("[^n]")));
+        assert!(lines.iter().any(|l| l.content().contains("[^n]:")));
     }
 
     #[test]

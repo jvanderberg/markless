@@ -7,11 +7,17 @@
 //! - [`App::run`]: Main event loop with rendering
 
 use std::collections::HashMap;
+use std::io::stdout;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
+};
+use crossterm::execute;
 use image::DynamicImage;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::{DefaultTerminal, Frame};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
@@ -36,10 +42,18 @@ pub struct Model {
     pub toc_visible: bool,
     /// Selected TOC entry index
     pub toc_selected: Option<usize>,
+    /// Scroll offset for TOC viewport
+    pub toc_scroll_offset: usize,
     /// Whether file watching is enabled
     pub watch_enabled: bool,
     /// Current search query
     pub search_query: Option<String>,
+    /// Rendered line indices that match the current search query
+    search_matches: Vec<usize>,
+    /// Current selected match index inside `search_matches`
+    search_match_index: Option<usize>,
+    /// Allow searching short (<3 char) queries after explicit Enter.
+    search_allow_short: bool,
     /// Whether the app should quit
     pub should_quit: bool,
     /// Focus: true = TOC, false = document
@@ -93,8 +107,12 @@ impl Model {
             base_dir,
             toc_visible: false,
             toc_selected: None,
+            toc_scroll_offset: 0,
             watch_enabled: false,
             search_query: None,
+            search_matches: Vec::new(),
+            search_match_index: None,
+            search_allow_short: false,
             should_quit: false,
             toc_focused: false,
             image_protocols: HashMap::new(),
@@ -235,7 +253,7 @@ impl Model {
         if current_layout_heights != self.image_layout_heights {
             if let Ok(document) = Document::parse_with_layout_and_image_heights(
                 self.document.source(),
-                self.viewport.width(),
+                self.layout_width(),
                 &current_layout_heights,
             ) {
                 crate::perf::log_event(
@@ -249,6 +267,8 @@ impl Model {
                 self.document = document;
                 self.viewport.set_total_lines(self.document.line_count());
                 self.image_layout_heights = current_layout_heights;
+                let allow_short = self.search_allow_short;
+                refresh_search_matches(self, false, allow_short);
             }
         }
     }
@@ -275,6 +295,34 @@ impl Model {
 
     pub fn set_resize_pending(&mut self, pending: bool) {
         self.resize_pending = pending;
+    }
+
+    pub fn search_match_count(&self) -> usize {
+        self.search_matches.len()
+    }
+
+    pub fn current_search_match(&self) -> Option<(usize, usize)> {
+        self.search_match_index
+            .map(|idx| (idx + 1, self.search_matches.len()))
+    }
+
+    fn layout_width(&self) -> u16 {
+        self.viewport
+            .width()
+            .saturating_sub(crate::ui::DOCUMENT_LEFT_PADDING)
+            .max(1)
+    }
+
+    fn toc_visible_rows(&self) -> usize {
+        // TOC uses full frame height with a 1-cell border at top/bottom.
+        self.viewport.height().saturating_sub(1) as usize
+    }
+
+    fn max_toc_scroll_offset(&self) -> usize {
+        self.document
+            .headings()
+            .len()
+            .saturating_sub(self.toc_visible_rows())
     }
 }
 
@@ -314,8 +362,14 @@ pub enum Message {
     TocUp,
     /// Move TOC selection down
     TocDown,
+    /// Scroll TOC viewport up
+    TocScrollUp,
+    /// Scroll TOC viewport down
+    TocScrollDown,
     /// Jump to selected TOC heading
     TocSelect,
+    /// Select and jump to TOC heading by index
+    TocClick(usize),
     /// Collapse TOC entry
     TocCollapse,
     /// Expand TOC entry
@@ -334,6 +388,8 @@ pub enum Message {
     // Search
     /// Start search mode
     StartSearch,
+    /// Start search mode with initial query text
+    StartSearchWith(String),
     /// Update search query
     SearchInput(String),
     /// Go to next search match
@@ -408,6 +464,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             if model.toc_visible && model.toc_selected.is_none() {
                 model.toc_selected = Some(0);
             }
+            model.toc_scroll_offset = model.toc_scroll_offset.min(model.max_toc_scroll_offset());
         }
         Message::ToggleTocFocus => {
             model.toc_visible = !model.toc_visible;
@@ -415,16 +472,31 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             if model.toc_visible && model.toc_selected.is_none() {
                 model.toc_selected = Some(0);
             }
+            model.toc_scroll_offset = model.toc_scroll_offset.min(model.max_toc_scroll_offset());
         }
         Message::TocUp => {
             if let Some(sel) = model.toc_selected {
-                model.toc_selected = Some(sel.saturating_sub(1));
+                let next = sel.saturating_sub(1);
+                model.toc_selected = Some(next);
+                if next < model.toc_scroll_offset {
+                    model.toc_scroll_offset = next;
+                }
             }
         }
         Message::TocDown => {
             if let Some(sel) = model.toc_selected {
                 let max = model.document.headings().len().saturating_sub(1);
-                model.toc_selected = Some((sel + 1).min(max));
+                let next = (sel + 1).min(max);
+                model.toc_selected = Some(next);
+                let visible = model.toc_visible_rows();
+                if visible > 0 {
+                    let bottom = model.toc_scroll_offset + visible.saturating_sub(1);
+                    if next > bottom {
+                        model.toc_scroll_offset = (next + 1)
+                            .saturating_sub(visible)
+                            .min(model.max_toc_scroll_offset());
+                    }
+                }
             }
         }
         Message::TocSelect => {
@@ -433,6 +505,19 @@ pub fn update(mut model: Model, msg: Message) -> Model {
                     model.viewport.go_to_line(heading.line);
                 }
             }
+        }
+        Message::TocClick(idx) => {
+            model.toc_selected = Some(idx);
+            if let Some(heading) = model.document.headings().get(idx) {
+                model.viewport.go_to_line(heading.line);
+            }
+        }
+        Message::TocScrollUp => {
+            model.toc_scroll_offset = model.toc_scroll_offset.saturating_sub(1);
+        }
+        Message::TocScrollDown => {
+            model.toc_scroll_offset =
+                (model.toc_scroll_offset + 1).min(model.max_toc_scroll_offset());
         }
         Message::TocCollapse | Message::TocExpand => {
             // TODO: Implement collapse/expand
@@ -455,15 +540,59 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // Search
         Message::StartSearch => {
             model.search_query = Some(String::new());
+            model.search_matches.clear();
+            model.search_match_index = None;
+            model.search_allow_short = false;
+        }
+        Message::StartSearchWith(query) => {
+            model.search_query = Some(query);
+            model.search_allow_short = false;
+            let allow_short = model.search_allow_short;
+            refresh_search_matches(&mut model, true, allow_short);
         }
         Message::SearchInput(query) => {
             model.search_query = Some(query);
+            model.search_allow_short = false;
+            let allow_short = model.search_allow_short;
+            refresh_search_matches(&mut model, true, allow_short);
         }
-        Message::NextMatch | Message::PrevMatch => {
-            // TODO: Implement search navigation
+        Message::NextMatch => {
+            if model.search_matches.is_empty() {
+                model.search_allow_short = true;
+                refresh_search_matches(&mut model, true, true);
+            }
+            if !model.search_matches.is_empty() {
+                let next = match model.search_match_index {
+                    Some(idx) => (idx + 1) % model.search_matches.len(),
+                    None => 0,
+                };
+                model.search_match_index = Some(next);
+                if let Some(line) = model.search_matches.get(next).copied() {
+                    model.viewport.go_to_line(line);
+                }
+            }
+        }
+        Message::PrevMatch => {
+            if model.search_matches.is_empty() {
+                model.search_allow_short = true;
+                refresh_search_matches(&mut model, true, true);
+            }
+            if !model.search_matches.is_empty() {
+                let prev = match model.search_match_index {
+                    Some(0) | None => model.search_matches.len() - 1,
+                    Some(idx) => idx - 1,
+                };
+                model.search_match_index = Some(prev);
+                if let Some(line) = model.search_matches.get(prev).copied() {
+                    model.viewport.go_to_line(line);
+                }
+            }
         }
         Message::ClearSearch => {
             model.search_query = None;
+            model.search_matches.clear();
+            model.search_match_index = None;
+            model.search_allow_short = false;
         }
 
         // Window
@@ -471,11 +600,14 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.viewport.resize(width, height.saturating_sub(1));
             if let Ok(document) = Document::parse_with_layout_and_image_heights(
                 model.document.source(),
-                model.viewport.width(),
+                model.layout_width(),
                 &model.image_layout_heights,
             ) {
                 model.document = document;
                 model.viewport.set_total_lines(model.document.line_count());
+                model.toc_scroll_offset = model.toc_scroll_offset.min(model.max_toc_scroll_offset());
+                let allow_short = model.search_allow_short;
+                refresh_search_matches(&mut model, false, allow_short);
             }
         }
         Message::Redraw => {
@@ -488,6 +620,36 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         }
     }
     model
+}
+
+fn refresh_search_matches(model: &mut Model, jump_to_first: bool, allow_short: bool) {
+    let Some(query) = model.search_query.as_deref() else {
+        model.search_matches.clear();
+        model.search_match_index = None;
+        return;
+    };
+
+    if !allow_short && query.trim().chars().count() < 3 {
+        model.search_matches.clear();
+        model.search_match_index = None;
+        return;
+    }
+
+    model.search_matches = crate::search::find_matches(&model.document, query);
+    if model.search_matches.is_empty() {
+        model.search_match_index = None;
+        return;
+    }
+
+    if jump_to_first || model.search_match_index.is_none() {
+        model.search_match_index = Some(0);
+        if let Some(line) = model.search_matches.first().copied() {
+            model.viewport.go_to_line(line);
+        }
+    } else if let Some(idx) = model.search_match_index {
+        let clamped = idx.min(model.search_matches.len() - 1);
+        model.search_match_index = Some(clamped);
+    }
 }
 
 /// Main application struct that owns the terminal and runs the event loop.
@@ -576,11 +738,16 @@ impl App {
         // Initialize terminal
         let _init_scope = crate::perf::scope("app.ratatui_init");
         let mut terminal = ratatui::init();
+        execute!(stdout(), EnableMouseCapture)?;
         let size = terminal.size()?;
         drop(_init_scope);
 
         let _parse_scope = crate::perf::scope("app.parse_with_layout");
-        let document = Document::parse_with_layout(&content, size.width)?;
+        let layout_width = size
+            .width
+            .saturating_sub(crate::ui::DOCUMENT_LEFT_PADDING)
+            .max(1);
+        let document = Document::parse_with_layout(&content, layout_width)?;
         drop(_parse_scope);
 
         // Create initial model
@@ -600,6 +767,7 @@ impl App {
         let result = self.event_loop(&mut terminal, &mut model);
 
         // Restore terminal
+        let _ = execute!(stdout(), DisableMouseCapture);
         ratatui::restore();
 
         result
@@ -728,6 +896,55 @@ impl App {
     }
 
     fn handle_mouse(&self, mouse: MouseEvent, model: &Model) -> Option<Message> {
+        if model.toc_visible {
+            let total_area = Rect::new(
+                0,
+                0,
+                model.viewport.width(),
+                model.viewport.height().saturating_add(1),
+            );
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+                .split(total_area);
+            let toc_area = chunks[0];
+            let in_toc = mouse.column >= toc_area.x
+                && mouse.column < toc_area.x + toc_area.width
+                && mouse.row >= toc_area.y
+                && mouse.row < toc_area.y + toc_area.height;
+
+            if in_toc {
+                match mouse.kind {
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        let headings_len = model.document.headings().len();
+                        if headings_len == 0 {
+                            return None;
+                        }
+                        if mouse.row <= toc_area.y
+                            || mouse.row >= toc_area.y + toc_area.height.saturating_sub(1)
+                        {
+                            return None;
+                        }
+                        let inner_height = toc_area.height.saturating_sub(2) as usize;
+                        if inner_height == 0 {
+                            return None;
+                        }
+                        let max_start = headings_len.saturating_sub(inner_height);
+                        let start = model.toc_scroll_offset.min(max_start);
+                        let rel_row = (mouse.row - toc_area.y - 1) as usize;
+                        let idx = start + rel_row;
+                        if idx < headings_len {
+                            return Some(Message::TocClick(idx));
+                        }
+                        return None;
+                    }
+                    MouseEventKind::ScrollDown => return Some(Message::TocScrollDown),
+                    MouseEventKind::ScrollUp => return Some(Message::TocScrollUp),
+                    _ => {}
+                }
+            }
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollDown => {
                 if model.viewport.can_scroll_down() {
@@ -748,12 +965,33 @@ impl App {
     }
 
     fn handle_key(&self, key: event::KeyEvent, model: &Model) -> Option<Message> {
+        if let Some(active_query) = model.search_query.as_ref() {
+            return match key.code {
+                KeyCode::Esc => Some(Message::ClearSearch),
+                KeyCode::Enter => Some(Message::NextMatch),
+                KeyCode::Backspace => {
+                    let mut next = active_query.clone();
+                    next.pop();
+                    Some(Message::SearchInput(next))
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    let mut next = active_query.clone();
+                    next.push(c);
+                    Some(Message::SearchInput(next))
+                }
+                _ => None,
+            };
+        }
+
         // Handle TOC-focused navigation
         if model.toc_focused && model.toc_visible {
             return match key.code {
                 KeyCode::Char('j') | KeyCode::Down => Some(Message::TocDown),
                 KeyCode::Char('k') | KeyCode::Up => Some(Message::TocUp),
-                KeyCode::Enter => Some(Message::TocSelect),
+                KeyCode::Enter | KeyCode::Char(' ') => Some(Message::TocSelect),
                 KeyCode::Char('h') | KeyCode::Left => Some(Message::TocCollapse),
                 KeyCode::Char('l') | KeyCode::Right => Some(Message::TocExpand),
                 KeyCode::Tab => Some(Message::SwitchFocus),
@@ -824,8 +1062,6 @@ impl App {
 
             // Search
             KeyCode::Char('/') => Some(Message::StartSearch),
-            KeyCode::Char('n') => Some(Message::NextMatch),
-            KeyCode::Char('N') => Some(Message::PrevMatch),
             KeyCode::Esc => Some(Message::ClearSearch),
 
             // Quit
@@ -853,8 +1089,12 @@ impl Default for Model {
             base_dir: PathBuf::from("."),
             toc_visible: false,
             toc_selected: None,
+            toc_scroll_offset: 0,
             watch_enabled: false,
             search_query: None,
+            search_matches: Vec::new(),
+            search_match_index: None,
+            search_allow_short: false,
             should_quit: false,
             toc_focused: false,
             image_protocols: HashMap::new(),
@@ -889,6 +1129,15 @@ mod tests {
         }
         let doc = Document::parse(&md).unwrap();
         Model::new(PathBuf::from("test.md"), doc, (80, 24))
+    }
+
+    fn create_many_headings_model() -> Model {
+        let mut md = String::new();
+        for i in 1..=20 {
+            md.push_str(&format!("## Heading {}\n\nBody {}\n\n", i, i));
+        }
+        let doc = Document::parse(&md).unwrap();
+        Model::new(PathBuf::from("test.md"), doc, (80, 8))
     }
 
     #[test]
@@ -937,6 +1186,30 @@ mod tests {
     }
 
     #[test]
+    fn test_toc_down_scrolls_when_selection_hits_bottom_row() {
+        let mut model = create_many_headings_model();
+        model.toc_visible = true;
+        model.toc_selected = Some(5);
+        model.toc_scroll_offset = 0;
+
+        let model = update(model, Message::TocDown);
+        assert_eq!(model.toc_selected, Some(6));
+        assert_eq!(model.toc_scroll_offset, 1);
+    }
+
+    #[test]
+    fn test_toc_up_scrolls_when_selection_hits_top_row() {
+        let mut model = create_many_headings_model();
+        model.toc_visible = true;
+        model.toc_selected = Some(3);
+        model.toc_scroll_offset = 3;
+
+        let model = update(model, Message::TocUp);
+        assert_eq!(model.toc_selected, Some(2));
+        assert_eq!(model.toc_scroll_offset, 2);
+    }
+
+    #[test]
     fn test_quit_sets_should_quit() {
         let model = create_test_model();
         let model = update(model, Message::Quit);
@@ -949,6 +1222,27 @@ mod tests {
         let model = update(model, Message::Resize(120, 40));
         assert_eq!(model.viewport.width(), 120);
         assert_eq!(model.viewport.height(), 39); // -1 for status bar
+    }
+
+    #[test]
+    fn test_resize_reflows_document_using_content_width() {
+        let md = "This is a line that should wrap after resize because the content area is narrower.";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+        let model = update(model, Message::Resize(20, 24));
+        let lines = model.document.visible_lines(0, 20);
+        let paragraph_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+            .collect();
+        assert!(paragraph_lines.len() > 1, "expected wrapped paragraph lines");
+        for line in paragraph_lines {
+            assert!(
+                line.content().len() <= 18,
+                "line should wrap to content width (20 - 2 padding): {}",
+                line.content()
+            );
+        }
     }
 
     #[test]
@@ -1013,6 +1307,79 @@ mod tests {
             .expect("code line missing");
         let spans = code_line.spans().expect("code spans missing");
         assert!(spans.iter().any(|s| s.style().fg.is_some()));
+    }
+
+    #[test]
+    fn test_search_input_finds_matches_and_jumps_to_first() {
+        let doc = Document::parse("alpha\n\nbeta\n\nalpha again").unwrap();
+        let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+
+        let model = update(model, Message::StartSearch);
+        let model = update(model, Message::SearchInput("alpha".to_string()));
+
+        assert_eq!(model.search_match_count(), 2);
+        assert_eq!(model.current_search_match(), Some((1, 2)));
+        assert_eq!(model.viewport.offset(), 0);
+    }
+
+    #[test]
+    fn test_next_match_wraps() {
+        let doc = Document::parse("alpha\n\nbeta\n\nalpha again").unwrap();
+        let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+        let model = update(model, Message::StartSearch);
+        let model = update(model, Message::SearchInput("alpha".to_string()));
+
+        let model = update(model, Message::NextMatch);
+        assert_eq!(model.current_search_match(), Some((2, 2)));
+
+        let model = update(model, Message::NextMatch);
+        assert_eq!(model.current_search_match(), Some((1, 2)));
+    }
+
+    #[test]
+    fn test_short_query_does_not_auto_search_until_enter() {
+        let doc = Document::parse("alpha\n\nbeta\n\natom").unwrap();
+        let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+        let model = update(model, Message::StartSearch);
+        let model = update(model, Message::SearchInput("a".to_string()));
+        assert_eq!(model.search_match_count(), 0);
+
+        let model = update(model, Message::NextMatch);
+        assert!(model.search_match_count() > 0);
+    }
+
+    #[test]
+    fn test_search_mode_char_input_appends_query() {
+        let app = App::new(PathBuf::from("test.md"));
+        let mut model = create_test_model();
+        model = update(model, Message::StartSearch);
+        model = update(model, Message::SearchInput("a".to_string()));
+
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE), &model);
+        assert_eq!(msg, Some(Message::SearchInput("an".to_string())));
+    }
+
+    #[test]
+    fn test_search_mode_enter_moves_to_next_match() {
+        let app = App::new(PathBuf::from("test.md"));
+        let mut model = create_test_model();
+        model = update(model, Message::StartSearch);
+        model = update(model, Message::SearchInput("test".to_string()));
+
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &model);
+        assert_eq!(msg, Some(Message::NextMatch));
+    }
+
+    #[test]
+    fn test_toc_focus_space_selects_heading() {
+        let app = App::new(PathBuf::from("test.md"));
+        let mut model = create_test_model();
+        model.toc_visible = true;
+        model.toc_focused = true;
+        model.toc_selected = Some(0);
+
+        let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &model);
+        assert_eq!(msg, Some(Message::TocSelect));
     }
 
     #[test]

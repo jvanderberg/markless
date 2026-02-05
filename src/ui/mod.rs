@@ -16,6 +16,8 @@ use ratatui_image::{CropOptions, Resize, StatefulImage};
 use crate::app::Model;
 use crate::document::LineType;
 
+pub const DOCUMENT_LEFT_PADDING: u16 = 2;
+
 /// Render the complete UI.
 pub fn render(model: &mut Model, frame: &mut Frame) {
     let area = frame.area();
@@ -36,10 +38,13 @@ pub fn render(model: &mut Model, frame: &mut Frame) {
 
 fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
     let headings = model.document.headings();
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let max_start = headings.len().saturating_sub(visible_rows);
+    let start = model.toc_scroll_offset.min(max_start);
+    let end = (start + visible_rows).min(headings.len());
 
     let items: Vec<Line> = headings
-        .iter()
-        .enumerate()
+        .iter().enumerate().skip(start).take(end.saturating_sub(start))
         .map(|(i, h)| {
             let indent = "  ".repeat(h.level.saturating_sub(1) as usize);
             let marker = if model.toc_selected == Some(i) {
@@ -71,11 +76,16 @@ fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
 }
 
 fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
-    const DOC_LEFT_PADDING: u16 = 2;
-
-    // Reserve last line for status bar
+    let search_active = model.search_query.is_some();
+    let footer_rows = if search_active { 2 } else { 1 };
+    // Reserve last line for status bar (+ one search bar line when active).
     let doc_outer_area = Rect {
-        height: area.height.saturating_sub(1),
+        height: area.height.saturating_sub(footer_rows),
+        ..area
+    };
+    let search_area = Rect {
+        y: area.y + area.height.saturating_sub(2),
+        height: 1,
         ..area
     };
     let status_area = Rect {
@@ -94,7 +104,7 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     for line in visible_lines.iter() {
         let line_style = style::style_for_line_type(line.line_type());
         if let Some(spans) = line.spans() {
-            let styled_spans = spans
+            let mut styled_spans = spans
                 .iter()
                 .map(|span| {
                     Span::styled(
@@ -103,15 +113,22 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
                     )
                 })
                 .collect::<Vec<_>>();
+            if let Some(query) = model.search_query.as_deref().filter(|q| q.chars().count() >= 3) {
+                styled_spans = highlight_spans(&styled_spans, query);
+            }
             content.push(Line::from(styled_spans));
         } else {
-            content.push(Line::styled(line.content(), line_style));
+            let mut styled_spans = vec![Span::styled(line.content(), line_style)];
+            if let Some(query) = model.search_query.as_deref().filter(|q| q.chars().count() >= 3) {
+                styled_spans = highlight_spans(&styled_spans, query);
+            }
+            content.push(Line::from(styled_spans));
         }
     }
 
     let doc_block = Block::default()
         .borders(Borders::NONE)
-        .padding(Padding::left(DOC_LEFT_PADDING));
+        .padding(Padding::left(DOCUMENT_LEFT_PADDING));
     let doc_area = doc_block.inner(doc_outer_area);
     let doc = Paragraph::new(content).block(doc_block);
     // Clear doc area first so placeholder/image background styles from previous frames do not leak.
@@ -280,7 +297,62 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     }
 
     // Render status bar
+    if search_active {
+        render_search_bar(model, frame, search_area);
+    }
     render_status_bar(model, frame, status_area);
+}
+
+fn highlight_spans(spans: &[Span<'_>], query: &str) -> Vec<Span<'static>> {
+    let needle = query.trim();
+    if needle.is_empty() {
+        return spans
+            .iter()
+            .map(|s| Span::styled(s.content.to_string(), s.style))
+            .collect();
+    }
+    let needle_lower = needle.to_ascii_lowercase();
+    let mut out = Vec::new();
+
+    for span in spans {
+        let text = span.content.to_string();
+        let text_lower = text.to_ascii_lowercase();
+        let mut cursor = 0usize;
+
+        while let Some(rel_idx) = text_lower[cursor..].find(&needle_lower) {
+            let start = cursor + rel_idx;
+            let end = start + needle_lower.len();
+
+            if start > cursor {
+                out.push(Span::styled(text[cursor..start].to_string(), span.style));
+            }
+            out.push(Span::styled(
+                text[start..end].to_string(),
+                span.style.bg(Color::Yellow).fg(Color::Black),
+            ));
+            cursor = end;
+        }
+
+        if cursor < text.len() {
+            out.push(Span::styled(text[cursor..].to_string(), span.style));
+        }
+    }
+
+    out
+}
+
+fn render_search_bar(model: &Model, frame: &mut Frame, area: Rect) {
+    let query = model.search_query.as_deref().unwrap_or_default();
+    let match_info = if query.trim().is_empty() {
+        String::new()
+    } else if let Some((current, total)) = model.current_search_match() {
+        format!("  [{current}/{total}]")
+    } else {
+        String::new()
+    };
+    let text = format!("/{}{}  Enter: next  Esc: clear", query, match_info);
+    let bar = Paragraph::new(text).style(Style::default().bg(Color::Blue).fg(Color::White));
+    frame.render_widget(bar, area);
 }
 
 fn render_status_bar(model: &Model, frame: &mut Frame, area: Rect) {
