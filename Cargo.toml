@@ -1,6 +1,6 @@
 [package]
 name = "gander"
-version = "0.1.0"
+version = "0.9.1"
 edition = "2024"
 authors = ["Josh V"]
 description = "A terminal markdown viewer with image support"
