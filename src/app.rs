@@ -59,6 +59,8 @@ pub struct Model {
     resize_pending: bool,
     /// Short cooldown used only for iTerm2 inline image placeholdering while scrolling
     image_scroll_cooldown_ticks: u8,
+    /// Force half-cell image rendering path (used for debug and filter tuning)
+    force_half_cell: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -102,6 +104,7 @@ impl Model {
             image_layout_heights: HashMap::new(),
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
+            force_half_cell: false,
         }
     }
 
@@ -188,7 +191,11 @@ impl Model {
                     let scaled = img.resize(
                         target_width_px,
                         scaled_height_px,
-                        image::imageops::FilterType::Nearest,
+                        if self.force_half_cell {
+                            image::imageops::FilterType::CatmullRom
+                        } else {
+                            image::imageops::FilterType::Nearest
+                        },
                     );
 
                     // Calculate dimensions in terminal cells
@@ -574,6 +581,7 @@ impl App {
             .with_picker(picker);
         model.watch_enabled = self.watch_enabled;
         model.toc_visible = self.toc_visible;
+        model.force_half_cell = self.force_half_cell;
 
         // Pre-load images from the document
         let _images_scope = crate::perf::scope("app.load_nearby_images.initial");
@@ -849,6 +857,7 @@ impl Default for Model {
             image_layout_heights: HashMap::new(),
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
+            force_half_cell: false,
         }
     }
 }
