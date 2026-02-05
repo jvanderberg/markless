@@ -13,7 +13,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use image::DynamicImage;
 use ratatui::{DefaultTerminal, Frame};
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::document::Document;
@@ -124,6 +124,8 @@ impl Model {
 
         let current_width = self.viewport.width();
         let width_changed = self.last_image_scale_width != current_width;
+        let use_halfblocks = matches!(picker.protocol_type(), ProtocolType::Halfblocks);
+        let quantize_halfblocks = use_halfblocks && !crate::image::supports_truecolor_terminal();
         if width_changed {
             self.last_image_scale_width = current_width;
         }
@@ -188,15 +190,18 @@ impl Model {
                     let scale = target_width_px as f32 / img.width() as f32;
                     let scaled_height_px = (img.height() as f32 * scale) as u32;
 
-                    let scaled = img.resize(
+                    let mut scaled = img.resize(
                         target_width_px,
                         scaled_height_px,
-                        if self.force_half_cell {
+                        if use_halfblocks || self.force_half_cell {
                             image::imageops::FilterType::CatmullRom
                         } else {
                             image::imageops::FilterType::Nearest
                         },
                     );
+                    if quantize_halfblocks {
+                        scaled = crate::image::quantize_to_ansi256(&scaled);
+                    }
 
                     // Calculate dimensions in terminal cells
                     let width_cols = target_width_cols;
@@ -208,11 +213,13 @@ impl Model {
                     crate::perf::log_event(
                         "image.load_nearby.protocol",
                         format!(
-                            "src={} width_cols={} height_rows={} width_changed={}",
+                            "src={} width_cols={} height_rows={} width_changed={} halfblocks={} ansi256={}",
                             src,
                             width_cols,
                             height_rows,
-                            width_changed
+                            width_changed,
+                            use_halfblocks,
+                            quantize_halfblocks
                         ),
                     );
                 }

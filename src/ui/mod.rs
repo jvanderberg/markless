@@ -225,8 +225,32 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
             // Non-iTerm2 protocols are safe to render to a temp buffer and then blit row slices.
             let temp_area = Rect::new(0, 0, img_width, img_height);
             let mut temp_buf = ratatui::buffer::Buffer::empty(temp_area);
-            let image_widget = StatefulImage::default().resize(Resize::Scale(None));
+            let resize = if matches!(protocol.protocol_type(), StatefulProtocolType::Halfblocks(_)) {
+                // Nearest-neighbor causes strong color aliasing artifacts in half-cell mode.
+                Resize::Scale(Some(image::imageops::FilterType::CatmullRom))
+            } else {
+                Resize::Scale(None)
+            };
+            let image_widget = StatefulImage::default().resize(resize);
             image_widget.render(temp_area, &mut temp_buf, protocol);
+
+            // Terminal.app and other non-truecolor terminals behave better with indexed colors
+            // than repeated truecolor updates in halfblock mode.
+            if matches!(protocol.protocol_type(), StatefulProtocolType::Halfblocks(_))
+                && !crate::image::supports_truecolor_terminal()
+            {
+                for row in 0..temp_area.height {
+                    for col in 0..temp_area.width {
+                        let cell = &mut temp_buf[(col, row)];
+                        if let Color::Rgb(r, g, b) = cell.fg {
+                            cell.fg = Color::Indexed(rgb_to_xterm_256(r, g, b));
+                        }
+                        if let Color::Rgb(r, g, b) = cell.bg {
+                            cell.bg = Color::Indexed(rgb_to_xterm_256(r, g, b));
+                        }
+                    }
+                }
+            }
 
             // Copy visible rows from temp buffer to frame buffer
             let frame_buf = frame.buffer_mut();
@@ -289,6 +313,14 @@ fn render_status_bar(model: &Model, frame: &mut Frame, area: Rect) {
         Paragraph::new(status).style(Style::default().bg(Color::DarkGray).fg(Color::White));
 
     frame.render_widget(status_bar, area);
+}
+
+fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
+    let to_cube = |v: u8| ((v as u16 * 5) / 255) as u8;
+    let ri = to_cube(r);
+    let gi = to_cube(g);
+    let bi = to_cube(b);
+    16 + (36 * ri) + (6 * gi) + bi
 }
 
 #[cfg(test)]
