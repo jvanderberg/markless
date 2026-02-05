@@ -1,16 +1,21 @@
-//! Async image loading and caching.
+//! Image loading and caching.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use image::DynamicImage;
-use tokio::sync::RwLock;
+
+#[derive(Debug, Default)]
+struct CacheInner {
+    entries: HashMap<PathBuf, DynamicImage>,
+    order: VecDeque<PathBuf>,
+}
 
 /// Cache for loaded images.
 #[derive(Debug, Default)]
 pub struct ImageCache {
-    cache: Arc<RwLock<HashMap<PathBuf, DynamicImage>>>,
+    inner: Arc<Mutex<CacheInner>>,
     max_size: usize,
 }
 
@@ -18,57 +23,76 @@ impl ImageCache {
     /// Create a new image cache with the given maximum number of entries.
     pub fn new(max_size: usize) -> Self {
         Self {
-            cache: Arc::new(RwLock::new(HashMap::new())),
+            inner: Arc::new(Mutex::new(CacheInner::default())),
             max_size,
         }
     }
 
     /// Get an image from the cache.
-    pub async fn get(&self, path: &Path) -> Option<DynamicImage> {
-        let cache = self.cache.read().await;
-        cache.get(path).cloned()
+    pub fn get(&self, path: &Path) -> Option<DynamicImage> {
+        let guard = self.inner.lock().ok()?;
+        guard.entries.get(path).cloned()
     }
 
     /// Insert an image into the cache.
-    pub async fn insert(&self, path: PathBuf, image: DynamicImage) {
-        let mut cache = self.cache.write().await;
+    pub fn insert(&self, path: PathBuf, image: DynamicImage) {
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
 
-        // If at capacity, remove oldest entry (simple FIFO for now)
-        if cache.len() >= self.max_size {
-            if let Some(key) = cache.keys().next().cloned() {
-                cache.remove(&key);
-            }
+        if guard.entries.contains_key(&path) {
+            guard.entries.insert(path, image);
+            return;
         }
 
-        cache.insert(path, image);
+        guard.order.push_back(path.clone());
+        guard.entries.insert(path.clone(), image);
+
+        while guard.entries.len() > self.max_size {
+            if let Some(oldest) = guard.order.pop_front() {
+                guard.entries.remove(&oldest);
+            } else {
+                break;
+            }
+        }
     }
 
     /// Check if an image is in the cache.
-    pub async fn contains(&self, path: &Path) -> bool {
-        let cache = self.cache.read().await;
-        cache.contains_key(path)
+    pub fn contains(&self, path: &Path) -> bool {
+        let guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.entries.contains_key(path)
     }
 
     /// Clear the cache.
-    pub async fn clear(&self) {
-        let mut cache = self.cache.write().await;
-        cache.clear();
+    pub fn clear(&self) {
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.entries.clear();
+        guard.order.clear();
     }
 
     /// Get the number of cached images.
-    pub async fn len(&self) -> usize {
-        let cache = self.cache.read().await;
-        cache.len()
+    pub fn len(&self) -> usize {
+        let guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.entries.len()
     }
 
     /// Check if the cache is empty.
-    pub async fn is_empty(&self) -> bool {
-        let cache = self.cache.read().await;
-        cache.is_empty()
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
-/// Async image loader with caching.
+/// Image loader with caching.
 pub struct ImageLoader {
     cache: ImageCache,
     base_path: PathBuf,
@@ -84,20 +108,15 @@ impl ImageLoader {
     }
 
     /// Load an image, using cache if available.
-    pub async fn load(&self, image_path: &str) -> Option<DynamicImage> {
+    pub fn load(&self, image_path: &str) -> Option<DynamicImage> {
         let full_path = self.resolve_path(image_path);
 
-        // Check cache first
-        if let Some(img) = self.cache.get(&full_path).await {
+        if let Some(img) = self.cache.get(&full_path) {
             return Some(img);
         }
 
-        // Load from disk
         let img = image::open(&full_path).ok()?;
-
-        // Cache it
-        self.cache.insert(full_path, img.clone()).await;
-
+        self.cache.insert(full_path, img.clone());
         Some(img)
     }
 
@@ -123,8 +142,8 @@ impl ImageLoader {
     }
 
     /// Clear the image cache.
-    pub async fn clear_cache(&self) {
-        self.cache.clear().await;
+    pub fn clear_cache(&self) {
+        self.cache.clear();
     }
 }
 
@@ -132,16 +151,16 @@ impl ImageLoader {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_cache_new() {
+    #[test]
+    fn test_cache_new() {
         let cache = ImageCache::new(10);
-        assert!(cache.is_empty().await);
+        assert!(cache.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_cache_len() {
+    #[test]
+    fn test_cache_len() {
         let cache = ImageCache::new(10);
-        assert_eq!(cache.len().await, 0);
+        assert_eq!(cache.len(), 0);
     }
 
     #[test]

@@ -234,19 +234,19 @@ fn process_node<'a>(
             let language = info.split_whitespace().next().filter(|s| !s.is_empty());
             let content_width = literal
                 .lines()
-                .map(|line| line.chars().count())
+                .map(UnicodeWidthStr::width)
                 .max()
                 .unwrap_or(0)
                 .min(wrap_width.saturating_sub(4).max(1));
             let title = language.unwrap_or("code");
             let label = format!(" {} ", title);
             let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
-            let top_label_width = frame_inner_width.min(label.chars().count());
+            let top_label_width = frame_inner_width.min(UnicodeWidthStr::width(label.as_str()));
             let visible_label: String = label.chars().take(top_label_width).collect();
             let top = format!(
                 "┌{}{}┐",
                 visible_label,
-                "─".repeat(frame_inner_width.saturating_sub(visible_label.chars().count()))
+                "─".repeat(frame_inner_width.saturating_sub(UnicodeWidthStr::width(visible_label.as_str())))
             );
             lines.push(RenderedLine::new(top, LineType::CodeBlock));
 
@@ -257,7 +257,7 @@ fn process_node<'a>(
                 plain_style.code = true;
                 let spans = vec![InlineSpan::new(raw_line.clone(), plain_style)];
                 let trimmed_spans = truncate_spans(&spans, content_width);
-                let trimmed_len = spans_to_string(&trimmed_spans).chars().count();
+                let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
                 let padding =
                     " ".repeat(content_width.saturating_sub(trimmed_len) + CODE_RIGHT_PADDING);
 
@@ -1122,7 +1122,7 @@ fn wrap_spans(
         current.clear();
         if !prefix.is_empty() {
             current.push(InlineSpan::new(prefix.to_string(), InlineStyle::default()));
-            *current_len = prefix.len();
+            *current_len = UnicodeWidthStr::width(prefix);
         } else {
             *current_len = 0;
         }
@@ -1132,7 +1132,7 @@ fn wrap_spans(
     start_new_line(prefix_first, &mut current, &mut current_len, &mut has_word);
 
     for token in tokens {
-        let token_len = token.text().chars().count();
+        let token_len = UnicodeWidthStr::width(token.text());
         let token_is_ws = token.text().chars().all(char::is_whitespace);
 
         if current_len + token_len > width && has_word {
@@ -1237,13 +1237,18 @@ fn truncate_spans(spans: &[InlineSpan], max_len: usize) -> Vec<InlineSpan> {
             break;
         }
         let mut taken = String::new();
-        for ch in span.text().chars().take(remaining) {
+        let mut used = 0usize;
+        for ch in span.text().chars() {
+            let w = ch.width().unwrap_or(0);
+            if used + w > remaining {
+                break;
+            }
             taken.push(ch);
+            used += w;
         }
-        let count = taken.chars().count();
-        if count > 0 {
+        if used > 0 {
             out.push(InlineSpan::new(taken, span.style()));
-            remaining -= count;
+            remaining = remaining.saturating_sub(used);
         }
     }
     out
@@ -1395,7 +1400,7 @@ mod tests {
         assert!(quote_lines.len() > 1);
         for line in quote_lines {
             assert!(line.content().starts_with("  │ "));
-            assert!(line.content().len() <= 30);
+            assert!(unicode_width::UnicodeWidthStr::width(line.content()) <= 30);
         }
     }
 
@@ -1541,7 +1546,7 @@ mod tests {
 
         assert!(paragraph_lines.len() > 1);
         for line in paragraph_lines {
-            assert!(line.content().len() <= 20);
+            assert!(unicode_width::UnicodeWidthStr::width(line.content()) <= 20);
         }
     }
 
@@ -1714,9 +1719,12 @@ mod tests {
         assert!(code_lines.last().unwrap().content().starts_with('└'));
         assert!(code_lines.last().unwrap().content().ends_with('┘'));
         assert!(code_lines.iter().any(|l| l.content().starts_with("│ ")));
-        let top_width = code_lines.first().unwrap().content().chars().count();
+        let top_width = unicode_width::UnicodeWidthStr::width(code_lines.first().unwrap().content());
         for line in &code_lines {
-            assert_eq!(line.content().chars().count(), top_width);
+            assert_eq!(
+                unicode_width::UnicodeWidthStr::width(line.content()),
+                top_width
+            );
         }
     }
 

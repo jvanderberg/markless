@@ -29,17 +29,12 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 clap = { version = "4", features = ["derive"] }
 
 # Error handling
-thiserror = "2"
 anyhow = "1"
-
-# Async runtime
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "fs", "sync", "time", "macros"] }
 
 # Terminal background query (OSC 11)
 
 # File watching
 notify = "7"
-notify-debouncer-mini = "0.5"
 
 # Logging
 tracing = "0.1"
@@ -47,15 +42,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Unicode handling
 unicode-width = "0.2"
-textwrap = "0.16"
 
 [dev-dependencies]
 # Testing
-pretty_assertions = "1"
-insta = "1"
 proptest = "1"
-test-case = "3"
-mockall = "0.13"
 tempfile = "3"
 
 # Benchmarking

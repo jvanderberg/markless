@@ -28,6 +28,7 @@
 //! - [`search`]: Search functionality
 
 pub mod app;
+pub mod config;
 pub mod document;
 pub mod highlight;
 pub mod image;
