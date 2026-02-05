@@ -187,13 +187,21 @@ fn process_node<'a>(
                         .copied()
                         .unwrap_or(1)
                         .max(1);
+                    let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
                     let start_line = lines.len();
+                    let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
+
+                    if has_caption {
+                        lines.push(RenderedLine::new(format!("    {alt}"), LineType::Image));
+                    }
 
                     // First line shows the image placeholder/alt text
-                    lines.push(RenderedLine::new(
-                        format!("[Image: {}]", if alt.is_empty() { &src } else { &alt }),
-                        LineType::Image,
-                    ));
+                    lines.push(RenderedLine::new(label.clone(), LineType::Image));
+                    links.push(LinkRef {
+                        text: label,
+                        url: src.clone(),
+                        line: start_line + usize::from(has_caption),
+                    });
 
                     // Reserve additional lines for image content (empty Image lines)
                     for _ in 1..height_lines {
@@ -204,7 +212,7 @@ fn process_node<'a>(
                     images.push(ImageRef {
                         alt: alt.clone(),
                         src: src.clone(),
-                        line_range: start_line..end_line,
+                        line_range: start_line + usize::from(has_caption)..end_line,
                     });
                 }
                 lines.push(RenderedLine::new(String::new(), LineType::Empty));
@@ -327,6 +335,7 @@ fn process_node<'a>(
                     Some(marker),
                 );
             }
+            lines.push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::TaskItem(symbol) => {
@@ -482,7 +491,7 @@ fn process_node<'a>(
 
         NodeValue::ThematicBreak => {
             lines.push(RenderedLine::new(
-                "---".to_string(),
+                "─────".to_string(),
                 LineType::HorizontalRule,
             ));
             lines.push(RenderedLine::new(String::new(), LineType::Empty));
@@ -496,7 +505,7 @@ fn process_node<'a>(
         NodeValue::FootnoteDefinition(def) => {
             let line_num = lines.len();
             footnotes.insert(def.name.clone(), line_num);
-            let label = format!("[^{}]: ", def.name);
+            let label = format!("{} ", render_footnote_reference(&def.name));
             let continuation = " ".repeat(label.len());
             let spans = collect_inline_spans(node);
             let wrapped = wrap_spans(&spans, wrap_width, &label, &continuation);
@@ -519,22 +528,31 @@ fn process_node<'a>(
             let alt = extract_text(node);
             let src = image.url.clone();
             let line_num = lines.len();
+            let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
             let height_lines = image_heights
                 .get(&src)
                 .copied()
                 .unwrap_or(1)
                 .max(1);
+            let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
 
             images.push(ImageRef {
                 alt: alt.clone(),
                 src: src.clone(),
-                line_range: line_num..line_num + height_lines,
+                line_range: line_num + usize::from(has_caption)
+                    ..line_num + usize::from(has_caption) + height_lines,
             });
 
-            lines.push(RenderedLine::new(
-                format!("[Image: {}]", if alt.is_empty() { &src } else { &alt }),
-                LineType::Image,
-            ));
+            links.push(LinkRef {
+                text: label.clone(),
+                url: src.clone(),
+                line: line_num + usize::from(has_caption),
+            });
+
+            if has_caption {
+                lines.push(RenderedLine::new(format!("    {alt}"), LineType::Image));
+            }
+            lines.push(RenderedLine::new(label, LineType::Image));
 
             for _ in 1..height_lines {
                 lines.push(RenderedLine::new(String::new(), LineType::Image));
@@ -1622,8 +1640,8 @@ mod tests {
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 20);
         assert!(lines.iter().any(|l| l.content().contains("Alpha¹²")));
-        assert!(lines.iter().any(|l| l.content().contains("¹²")));
-        assert!(lines.iter().any(|l| l.content().contains("[^12]:")));
+        assert!(lines.iter().any(|l| l.content().contains("¹² ")));
+        assert!(lines.iter().any(|l| l.content().contains("Footnote text")));
     }
 
     #[test]
@@ -1650,6 +1668,33 @@ mod tests {
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 10);
         assert!(lines.iter().any(|l| l.content().contains("footnote¹²³.")));
+    }
+
+    #[test]
+    fn test_horizontal_rule_renders_subtle_line() {
+        let md = "Alpha\n\n---\n\nBeta";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        assert!(lines.iter().any(|l| l.content() == "─────"));
+    }
+
+    #[test]
+    fn test_image_caption_renders_only_when_image_height_known() {
+        let md = "![Alt text](image.png)";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        assert!(!lines.iter().any(|l| l.content() == "Alt text"));
+
+        let mut heights = HashMap::new();
+        heights.insert("image.png".to_string(), 2);
+        let doc = Document::parse_with_layout_and_image_heights(md, 80, &heights).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let image_idx = lines
+            .iter()
+            .position(|l| l.content().starts_with("[Image:"))
+            .expect("image placeholder missing");
+        assert!(image_idx > 0, "caption should be above image");
+        assert_eq!(lines[image_idx - 1].content(), "    Alt text");
     }
 
     #[test]
@@ -1811,6 +1856,19 @@ mod tests {
 
         assert!(list_lines.len() >= 3);
         assert_eq!(list_lines[1].content(), "");
+    }
+
+    #[test]
+    fn test_list_has_trailing_blank_line() {
+        let md = "- One\n- Two\n\nAfter";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let after_idx = lines
+            .iter()
+            .position(|l| l.content().contains("After"))
+            .expect("After line missing");
+        assert!(after_idx > 0);
+        assert_eq!(lines[after_idx - 1].content(), "");
     }
 
     #[test]

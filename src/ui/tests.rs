@@ -93,6 +93,69 @@ fn test_render_with_real_image_creates_protocol() {
 }
 
 #[test]
+fn test_load_nearby_images_uses_protocol_render_height() {
+    use image::{DynamicImage, Rgb, RgbImage};
+    use ratatui_image::Resize;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let image_path = dir.path().join("img.png");
+    let mut img = RgbImage::new(120, 80);
+    img.put_pixel(0, 0, Rgb([255, 0, 0]));
+    let dyn_img = DynamicImage::ImageRgb8(img);
+    dyn_img.save(&image_path).unwrap();
+
+    let md = format!("![Alt]({})", image_path.display());
+    let doc = Document::parse(&md).unwrap();
+
+    let picker = Picker::halfblocks();
+    let mut model = Model::new(image_path.clone(), doc, (80, 24));
+    model.picker = Some(picker);
+
+    model.load_nearby_images();
+
+    let (protocol, width_cols, height_rows) = model
+        .image_protocols
+        .get(image_path.to_str().unwrap())
+        .expect("protocol missing");
+    let target_width_cols = (model.viewport.width() as f32 * 0.65) as u16;
+    let area = ratatui::layout::Rect::new(0, 0, target_width_cols, u16::MAX);
+    let expected = protocol.size_for(Resize::Scale(Some(image::imageops::FilterType::CatmullRom)), area);
+    assert_eq!(*width_cols, expected.width);
+    assert_eq!(*height_rows, expected.height);
+}
+
+#[test]
+fn test_help_overlay_shows_config_paths_full_width() {
+    let mut model = Model::new(
+        PathBuf::from("test.md"),
+        Document::parse("# Title").unwrap(),
+        (80, 24),
+    );
+    model.help_visible = true;
+    model.config_global_path = Some(PathBuf::from(
+        "/path/that/should/be/visible/in/help/config",
+    ));
+    model.config_local_path = Some(PathBuf::from(
+        "/local/override/path/visible/in/help/config",
+    ));
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    assert!(
+        content.contains("/path/that/should/be/visible/in/help/config"),
+        "Expected global config path to be visible"
+    );
+    assert!(
+        content.contains("/local/override/path/visible/in/help/config"),
+        "Expected local config path to be visible"
+    );
+}
+
+#[test]
 #[ignore = "requires image rendering; set GANDER_RUN_IMAGE_TESTS=1"]
 fn test_load_nearby_images_with_real_file() {
     if !should_run_image_tests() {

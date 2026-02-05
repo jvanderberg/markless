@@ -30,6 +30,20 @@ struct Toast {
     expires_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionState {
+    Pending,
+    Dragging,
+    Finalized,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineSelection {
+    pub anchor: usize,
+    pub active: usize,
+    pub state: SelectionState,
+}
+
 pub struct Model {
     /// The loaded markdown document
     pub document: Document,
@@ -87,6 +101,10 @@ pub struct Model {
     image_scroll_cooldown_ticks: u8,
     /// Force half-cell image rendering path (used for debug and filter tuning)
     pub force_half_cell: bool,
+    /// Current line selection state (mouse drag)
+    pub selection: Option<LineSelection>,
+    /// Whether inline images are enabled
+    pub images_enabled: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -141,6 +159,8 @@ impl Model {
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
             force_half_cell: false,
+            selection: None,
+            images_enabled: true,
         }
     }
 
@@ -154,6 +174,10 @@ impl Model {
     pub fn load_nearby_images(&mut self) {
         if self.resize_pending {
             crate::perf::log_event("image.load_nearby.skip", "resize_pending=true");
+            return;
+        }
+        if !self.images_enabled {
+            crate::perf::log_event("image.load_nearby.skip", "images_enabled=false");
             return;
         }
         let Some(picker) = &self.picker else { return };
@@ -241,12 +265,9 @@ impl Model {
                         scaled = crate::image::quantize_to_ansi256(&scaled);
                     }
 
-                    // Calculate dimensions in terminal cells
-                    let width_cols = target_width_cols;
-                    let height_rows =
-                        (scaled_height_px as f32 / font_size.1 as f32).ceil() as u16;
-
                     let protocol = picker.new_resize_protocol(scaled);
+                    let (width_cols, height_rows) =
+                        protocol_render_size(&protocol, target_width_cols);
                     self.image_protocols
                         .insert(src.clone(), (protocol, width_cols, height_rows));
                     crate::perf::log_event(
@@ -355,6 +376,7 @@ impl Model {
             self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
             let allow_short = self.search_allow_short;
             refresh_search_matches(self, false, allow_short);
+            self.clamp_selection();
         }
     }
 
@@ -415,11 +437,136 @@ impl Model {
         self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
         let allow_short = self.search_allow_short;
         refresh_search_matches(self, false, allow_short);
+        self.clamp_selection();
         if self.toc_visible && !self.toc_focused {
             self.sync_toc_to_viewport();
         }
         Ok(())
     }
+
+    pub fn selection_range(&self) -> Option<std::ops::RangeInclusive<usize>> {
+        let selection = self.selection?;
+        let line_count = self.document.line_count();
+        if line_count == 0 {
+            return None;
+        }
+        let max = line_count.saturating_sub(1);
+        let start = selection.anchor.min(selection.active).min(max);
+        let end = selection.anchor.max(selection.active).min(max);
+        Some(start..=end)
+    }
+
+    pub fn selected_text(&self) -> Option<(String, usize)> {
+        let range = self.selection_range()?;
+        let mut lines = Vec::new();
+        for idx in range {
+            if let Some(line) = self.document.line_at(idx) {
+                let links: Vec<_> = self
+                    .document
+                    .links()
+                    .iter()
+                    .filter(|link| link.line == idx && !link.url.starts_with("footnote:"))
+                    .collect();
+                if let Some(text) = clean_selected_line(line, &links) {
+                    lines.push(text);
+                }
+            }
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        let count = lines.len();
+        Some((lines.join("\n"), count))
+    }
+
+    pub fn selection_dragging(&self) -> bool {
+        self.selection
+            .as_ref()
+            .is_some_and(|sel| sel.state == SelectionState::Dragging)
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    fn clamp_selection(&mut self) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let line_count = self.document.line_count();
+        if line_count == 0 {
+            self.selection = None;
+            return;
+        }
+        let max = line_count.saturating_sub(1);
+        let clamped = LineSelection {
+            anchor: selection.anchor.min(max),
+            active: selection.active.min(max),
+            state: selection.state,
+        };
+        self.selection = Some(clamped);
+    }
+}
+
+fn protocol_render_size(
+    protocol: &ratatui_image::protocol::StatefulProtocol,
+    target_width_cols: u16,
+) -> (u16, u16) {
+    use ratatui::layout::Rect;
+    use ratatui_image::Resize;
+    let resize = if matches!(
+        protocol.protocol_type(),
+        ratatui_image::protocol::StatefulProtocolType::Halfblocks(_)
+    ) {
+        Resize::Scale(Some(image::imageops::FilterType::CatmullRom))
+    } else {
+        Resize::Scale(None)
+    };
+    let area = Rect::new(0, 0, target_width_cols, u16::MAX);
+    let rect = protocol.size_for(resize, area);
+    (rect.width.max(1), rect.height.max(1))
+}
+
+fn clean_selected_line(
+    line: &crate::document::RenderedLine,
+    links: &[&crate::document::LinkRef],
+) -> Option<String> {
+    use crate::document::LineType;
+
+    let content = line.content();
+    if *line.line_type() == LineType::CodeBlock {
+        if content.starts_with('┌') || content.starts_with('└') {
+            return None;
+        }
+        if let Some(stripped) = content.strip_prefix("│ ") {
+            let stripped = stripped.strip_suffix(" │").unwrap_or(stripped);
+            return Some(stripped.trim_end_matches(' ').to_string());
+        }
+        return Some(content.to_string());
+    }
+    if let Some(spans) = line.spans() {
+        let mut out = String::new();
+        let mut in_link = false;
+        let mut link_idx = 0usize;
+        for span in spans {
+            if span.style().link {
+                if !in_link {
+                    if let Some(link) = links.get(link_idx) {
+                        out.push_str(&link.url);
+                    } else {
+                        out.push_str(span.text());
+                    }
+                    link_idx += 1;
+                    in_link = true;
+                }
+            } else {
+                in_link = false;
+                out.push_str(span.text());
+            }
+        }
+        return Some(out);
+    }
+    Some(content.to_string())
 }
 
 // Implement Default for Model to allow std::mem::take
@@ -454,6 +601,8 @@ impl Default for Model {
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
             force_half_cell: false,
+            selection: None,
+            images_enabled: true,
         }
     }
 }

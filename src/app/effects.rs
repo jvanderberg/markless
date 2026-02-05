@@ -1,7 +1,9 @@
+use std::io::{stdout, Write};
 use std::time::Duration;
 
 use crate::app::{App, Message, Model, ToastLevel};
 use crate::watcher::FileWatcher;
+use base64::Engine;
 
 impl App {
     pub(super) fn make_file_watcher(&self) -> notify::Result<FileWatcher> {
@@ -63,6 +65,10 @@ impl App {
             Message::SelectVisibleLink(index) => {
                 self.follow_link_picker_index(model, *index);
             }
+            Message::EndSelection(_) => {
+                self.copy_selection(model);
+                model.clear_selection();
+            }
             _ => {}
         }
     }
@@ -103,10 +109,22 @@ impl App {
     }
 
     fn follow_link_on_line(&self, model: &mut Model, line: usize) {
-        let Some(link) = model.document.links().iter().find(|link| link.line == line) else {
+        if let Some(link) = model.document.links().iter().find(|link| link.line == line) {
+            let url = link.url.clone();
+            model.link_picker_items.clear();
+            self.follow_resolved_link(model, &url);
+            return;
+        }
+
+        let Some(image) = model
+            .document
+            .images()
+            .iter()
+            .find(|img| line >= img.line_range.start && line < img.line_range.end)
+        else {
             return;
         };
-        let url = link.url.clone();
+        let url = image.src.clone();
         model.link_picker_items.clear();
         self.follow_resolved_link(model, &url);
     }
@@ -140,6 +158,22 @@ impl App {
             ),
         }
     }
+
+    fn copy_selection(&self, model: &mut Model) {
+        let Some((text, lines)) = model.selected_text() else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        match copy_to_clipboard(&text) {
+            Ok(()) => model.show_toast(ToastLevel::Info, format!("Copied {lines} line(s)")),
+            Err(err) => model.show_toast(
+                ToastLevel::Error,
+                format!("Copy failed: {err}"),
+            ),
+        }
+    }
 }
 
 fn open_external_link(url: &str) -> std::io::Result<()> {
@@ -163,5 +197,59 @@ fn open_external_link(url: &str) -> std::io::Result<()> {
             .spawn()?
             .wait()?;
         Ok(())
+    }
+}
+
+fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if copy_to_pbcopy(text).is_ok() {
+            return Ok(());
+        }
+    }
+    copy_to_clipboard_osc52(text)
+}
+
+#[cfg(target_os = "macos")]
+fn copy_to_pbcopy(text: &str) -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "pbcopy failed",
+        ))
+    }
+}
+
+fn copy_to_clipboard_osc52(text: &str) -> std::io::Result<()> {
+    let osc = osc52_sequence(text);
+    let mut out = stdout();
+    out.write_all(osc.as_bytes())?;
+    out.flush()
+}
+
+fn osc52_sequence(text: &str) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    format!("\x1b]52;c;{}\x07", encoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::osc52_sequence;
+
+    #[test]
+    fn test_osc52_sequence_encodes_text() {
+        let seq = osc52_sequence("hi");
+        assert_eq!(seq, "\x1b]52;c;aGk=\x07");
     }
 }

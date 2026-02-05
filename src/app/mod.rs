@@ -23,6 +23,7 @@ pub struct App {
     watch_enabled: bool,
     toc_visible: bool,
     force_half_cell: bool,
+    images_enabled: bool,
     config_global_path: Option<PathBuf>,
     config_local_path: Option<PathBuf>,
 }
@@ -35,6 +36,7 @@ impl App {
             watch_enabled: false,
             toc_visible: false,
             force_half_cell: false,
+            images_enabled: true,
             config_global_path: None,
             config_local_path: None,
         }
@@ -55,6 +57,12 @@ impl App {
     /// Force image rendering to use half-cell fallback mode.
     pub fn with_force_half_cell(mut self, enabled: bool) -> Self {
         self.force_half_cell = enabled;
+        self
+    }
+
+    /// Enable or disable inline image rendering.
+    pub fn with_images_enabled(mut self, enabled: bool) -> Self {
+        self.images_enabled = enabled;
         self
     }
 

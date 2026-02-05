@@ -15,6 +15,7 @@ pub struct ConfigFlags {
     pub watch: bool,
     pub no_toc: bool,
     pub toc: bool,
+    pub no_images: bool,
     pub perf: bool,
     pub force_half_cell: bool,
     pub theme: Option<ThemeMode>,
@@ -27,6 +28,7 @@ impl ConfigFlags {
             watch: self.watch || other.watch,
             no_toc: self.no_toc || other.no_toc,
             toc: self.toc || other.toc,
+            no_images: self.no_images || other.no_images,
             perf: self.perf || other.perf,
             force_half_cell: self.force_half_cell || other.force_half_cell,
             theme: other.theme.or(self.theme),
@@ -101,6 +103,9 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     if flags.toc {
         lines.push("--toc".to_string());
     }
+    if flags.no_images {
+        lines.push("--no-images".to_string());
+    }
     if let Some(theme) = flags.theme {
         let theme_str = match theme {
             ThemeMode::Auto => "auto",
@@ -144,6 +149,8 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
             flags.no_toc = true;
         } else if token == "--toc" {
             flags.toc = true;
+        } else if token == "--no-images" {
+            flags.no_images = true;
         } else if token == "--perf" {
             flags.perf = true;
         } else if token == "--force-half-cell" {
@@ -188,6 +195,7 @@ mod tests {
             "gander".to_string(),
             "--watch".to_string(),
             "--toc".to_string(),
+            "--no-images".to_string(),
             "--theme".to_string(),
             "dark".to_string(),
             "--render-debug-log=render.log".to_string(),
@@ -197,6 +205,7 @@ mod tests {
         let flags = parse_flag_tokens(&args);
         assert!(flags.watch);
         assert!(flags.toc);
+        assert!(flags.no_images);
         assert_eq!(flags.theme, Some(ThemeMode::Dark));
         assert_eq!(flags.render_debug_log, Some(PathBuf::from("render.log")));
         assert!(flags.force_half_cell);
@@ -227,6 +236,7 @@ mod tests {
         let flags = ConfigFlags {
             watch: true,
             toc: true,
+            no_images: true,
             perf: true,
             force_half_cell: true,
             theme: Some(ThemeMode::Dark),
@@ -238,6 +248,7 @@ mod tests {
         let loaded = load_config_flags(&path).unwrap();
         assert_eq!(loaded.watch, true);
         assert_eq!(loaded.toc, true);
+        assert_eq!(loaded.no_images, true);
         assert_eq!(loaded.perf, true);
         assert_eq!(loaded.force_half_cell, true);
         assert_eq!(loaded.theme, Some(ThemeMode::Dark));

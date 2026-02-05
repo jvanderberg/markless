@@ -30,6 +30,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Error handling
 anyhow = "1"
+base64 = "0.22"
 
 # Terminal background query (OSC 11)
 

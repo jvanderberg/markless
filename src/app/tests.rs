@@ -127,6 +127,112 @@ fn test_toggle_help_changes_visibility() {
 }
 
 #[test]
+fn test_selection_range_orders_lines() {
+    let doc = Document::parse("# Title\n\nLine one\n\nLine two").unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+
+    model = update(model, Message::StartSelection(4));
+    model = update(model, Message::UpdateSelection(2));
+    model = update(model, Message::EndSelection(2));
+
+    let range = model.selection_range().unwrap();
+    assert_eq!(*range.start(), 2);
+    assert_eq!(*range.end(), 4);
+}
+
+#[test]
+fn test_selected_text_returns_block() {
+    let doc = Document::parse("# Title\n\nLine one\n\nLine two").unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+
+    model = update(model, Message::StartSelection(2));
+    model = update(model, Message::UpdateSelection(4));
+    model = update(model, Message::EndSelection(4));
+
+    let (text, lines) = model.selected_text().unwrap();
+    assert_eq!(lines, 3);
+    assert_eq!(text, "Line one\n\nLine two");
+}
+
+#[test]
+fn test_selected_text_strips_code_block_borders() {
+    let md = "```rust\nlet x = 1;\nlet y = 2;\n```";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+
+    let mut top = None;
+    let mut bottom = None;
+    for idx in 0..model.document.line_count() {
+        let line = model.document.line_at(idx).expect("line missing");
+        if line.content().starts_with('┌') {
+            top = Some(idx);
+        } else if line.content().starts_with('└') {
+            bottom = Some(idx);
+        }
+    }
+    let top = top.expect("top border missing");
+    let bottom = bottom.expect("bottom border missing");
+
+    model = update(model, Message::StartSelection(top));
+    model = update(model, Message::UpdateSelection(bottom));
+    model = update(model, Message::EndSelection(bottom));
+
+    let (text, lines) = model.selected_text().unwrap();
+    assert_eq!(lines, 2);
+    assert_eq!(text, "let x = 1;\nlet y = 2;");
+    assert!(!text.contains('┌'));
+    assert!(!text.contains('└'));
+    assert!(!text.contains("│ "));
+}
+
+#[test]
+fn test_selection_clears_after_mouse_up() {
+    let doc = Document::parse("# Title\n\nLine one\n\nLine two").unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let app = App::new(PathBuf::from("test.md"));
+    let mut watcher = None;
+
+    model = update(model, Message::StartSelection(2));
+    model = update(model, Message::UpdateSelection(4));
+    model = update(model, Message::EndSelection(4));
+    assert!(model.selection.is_some());
+
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EndSelection(4));
+
+    assert!(model.selection.is_none());
+}
+
+#[test]
+fn test_selected_text_uses_link_urls_for_copy() {
+    let md = "See [one](https://one.test) and [two](https://two.test).";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+
+    model = update(model, Message::StartSelection(0));
+    model = update(model, Message::UpdateSelection(0));
+    model = update(model, Message::EndSelection(0));
+
+    let (text, _) = model.selected_text().unwrap();
+    assert_eq!(
+        text,
+        "See https://one.test and https://two.test."
+    );
+}
+
+#[test]
+fn test_help_toggle_works_when_toc_focused() {
+    let model = create_test_model();
+    let model = update(model, Message::ToggleTocFocus);
+    assert!(model.toc_visible);
+    assert!(model.toc_focused);
+
+    let app = App::new(PathBuf::from("test.md"));
+    let key = event::KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+    let msg = app.handle_key(key, &model);
+    assert_eq!(msg, Some(Message::ToggleHelp));
+}
+
+#[test]
 fn test_toast_lifecycle() {
     let mut model = create_test_model();
     model.show_toast(ToastLevel::Warning, "watch failed");
@@ -465,6 +571,85 @@ fn test_mouse_click_on_doc_link_emits_follow_message() {
 }
 
 #[test]
+fn test_mouse_click_on_image_emits_follow_message() {
+    let app = App::new(PathBuf::from("test.md"));
+    let doc = Document::parse_with_layout("![Alt text](image.png)", 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.toc_visible = true;
+
+    let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 80, 24));
+    let doc_x = chunks[1].x;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = app.handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::FollowLinkAtLine(0)));
+}
+
+#[test]
+fn test_mouse_click_on_image_body_emits_follow_message() {
+    let app = App::new(PathBuf::from("test.md"));
+    let mut heights = std::collections::HashMap::new();
+    heights.insert("image.png".to_string(), 3);
+    let doc = Document::parse_with_layout_and_image_heights(
+        "![Alt text](image.png)",
+        80,
+        &heights,
+    )
+    .unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.toc_visible = true;
+
+    let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 80, 24));
+    let doc_x = chunks[1].x;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = app.handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::FollowLinkAtLine(1)));
+}
+
+#[test]
+fn test_mouse_click_on_image_body_after_press_emits_follow_message() {
+    let app = App::new(PathBuf::from("test.md"));
+    let mut heights = std::collections::HashMap::new();
+    heights.insert("image.png".to_string(), 3);
+    let doc = Document::parse_with_layout_and_image_heights(
+        "![Alt text](image.png)",
+        80,
+        &heights,
+    )
+    .unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.toc_visible = true;
+
+    let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 80, 24));
+    let doc_x = chunks[1].x;
+    let down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let _ = app.handle_mouse(down, &model);
+    let model = update(model, Message::StartSelection(1));
+    let msg = app.handle_mouse(up, &model);
+    assert_eq!(msg, Some(Message::FollowLinkAtLine(1)));
+}
+
+#[test]
 fn test_mouse_hover_on_doc_link_emits_hover_message() {
     let app = App::new(PathBuf::from("test.md"));
     let doc = Document::parse_with_layout("[Link](https://example.com)", 80).unwrap();
@@ -483,6 +668,35 @@ fn test_mouse_hover_on_doc_link_emits_hover_message() {
     assert_eq!(
         msg,
         Some(Message::HoverLink(Some("https://example.com".to_string())))
+    );
+}
+
+#[test]
+fn test_mouse_hover_on_image_body_emits_hover_message() {
+    let app = App::new(PathBuf::from("test.md"));
+    let mut heights = std::collections::HashMap::new();
+    heights.insert("image.png".to_string(), 3);
+    let doc = Document::parse_with_layout_and_image_heights(
+        "![Alt text](image.png)",
+        80,
+        &heights,
+    )
+    .unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.toc_visible = true;
+
+    let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 80, 24));
+    let doc_x = chunks[1].x;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = app.handle_mouse(mouse, &model);
+    assert_eq!(
+        msg,
+        Some(Message::HoverLink(Some("image.png".to_string())))
     );
 }
 
@@ -545,6 +759,23 @@ fn test_follow_link_jumps_to_footnote_definition() {
 
     model = update(model, Message::OpenVisibleLinks);
     app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert!(model.viewport.offset() > 0);
+}
+
+#[test]
+fn test_follow_link_on_image_line_uses_image_src() {
+    let md = "![Alt](#target)\n\n## Target";
+    let mut heights = std::collections::HashMap::new();
+    heights.insert("#target".to_string(), 3);
+    let doc = Document::parse_with_layout_and_image_heights(md, 80, &heights).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 6));
+    let app = App::new(PathBuf::from("test.md"));
+    let mut watcher = None;
+
+    let line = 1; // inside image body
+    model = update(model, Message::FollowLinkAtLine(line));
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::FollowLinkAtLine(line));
 
     assert!(model.viewport.offset() > 0);
 }

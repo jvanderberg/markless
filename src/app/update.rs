@@ -1,4 +1,5 @@
 use crate::app::Model;
+use crate::app::model::{LineSelection, SelectionState};
 
 /// All possible events and actions in the application.
 ///
@@ -86,6 +87,14 @@ pub enum Message {
     CancelVisibleLinkPicker,
     /// Update hovered link URL (or clear when none)
     HoverLink(Option<String>),
+    /// Start a line selection (mouse down)
+    StartSelection(usize),
+    /// Update a line selection (mouse drag)
+    UpdateSelection(usize),
+    /// Finish a line selection (mouse up)
+    EndSelection(usize),
+    /// Clear current selection
+    ClearSelection,
 
     // Window
     /// Terminal resized
@@ -301,6 +310,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.search_allow_short = false;
         }
         Message::OpenVisibleLinks | Message::FollowLinkAtLine(_) | Message::SelectVisibleLink(_) => {
+            model.clear_selection();
             // side effect in event loop
         }
         Message::CancelVisibleLinkPicker => {
@@ -308,6 +318,34 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         }
         Message::HoverLink(url) => {
             model.hovered_link_url = url;
+        }
+        Message::StartSelection(line) => {
+            model.selection = Some(LineSelection {
+                anchor: line,
+                active: line,
+                state: SelectionState::Pending,
+            });
+        }
+        Message::UpdateSelection(line) => {
+            if let Some(selection) = model.selection {
+                model.selection = Some(LineSelection {
+                    anchor: selection.anchor,
+                    active: line,
+                    state: SelectionState::Dragging,
+                });
+            }
+        }
+        Message::EndSelection(line) => {
+            if let Some(selection) = model.selection {
+                model.selection = Some(LineSelection {
+                    anchor: selection.anchor,
+                    active: line,
+                    state: SelectionState::Finalized,
+                });
+            }
+        }
+        Message::ClearSelection => {
+            model.clear_selection();
         }
 
         // Window

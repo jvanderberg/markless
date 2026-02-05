@@ -131,17 +131,22 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     let visible_lines = model
         .document
         .visible_lines(model.viewport.offset(), model.viewport.height() as usize);
+    let selection = model.selection_range();
 
     // Build text content
     let mut content: Vec<Line> = Vec::new();
-    for line in visible_lines.iter() {
+    for (idx, line) in visible_lines.iter().enumerate() {
+        let line_idx = model.viewport.offset() + idx;
+        let selected = selection
+            .as_ref()
+            .is_some_and(|range| range.contains(&line_idx));
         let line_style = super::style::style_for_line_type(line.line_type());
         if let Some(spans) = line.spans() {
             let mut styled_spans = spans
                 .iter()
                 .map(|span| {
                     Span::styled(
-                        span.text(),
+                        span.text().to_string(),
                         super::style::style_for_inline(line_style, span.style()),
                     )
                 })
@@ -149,11 +154,17 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
             if let Some(query) = model.search_query.as_deref().filter(|q| q.chars().count() >= 3) {
                 styled_spans = highlight_spans(&styled_spans, query);
             }
+            if selected {
+                styled_spans = apply_selection_bg(styled_spans, Color::DarkGray);
+            }
             content.push(Line::from(styled_spans));
         } else {
-            let mut styled_spans = vec![Span::styled(line.content(), line_style)];
+            let mut styled_spans = vec![Span::styled(line.content().to_string(), line_style)];
             if let Some(query) = model.search_query.as_deref().filter(|q| q.chars().count() >= 3) {
                 styled_spans = highlight_spans(&styled_spans, query);
+            }
+            if selected {
+                styled_spans = apply_selection_bg(styled_spans, Color::DarkGray);
             }
             content.push(Line::from(styled_spans));
         }
@@ -168,7 +179,9 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, doc_outer_area);
     frame.render_widget(doc, doc_outer_area);
 
-    images::render_images(model, frame, doc_area);
+    if model.images_enabled {
+        images::render_images(model, frame, doc_area);
+    }
 
     // Render status bar
     if hover_active {
@@ -219,4 +232,17 @@ fn highlight_spans(spans: &[Span<'_>], query: &str) -> Vec<Span<'static>> {
     }
 
     out
+}
+
+fn apply_selection_bg(spans: Vec<Span<'static>>, bg: Color) -> Vec<Span<'static>> {
+    spans
+        .into_iter()
+        .map(|span| {
+            let mut style = span.style;
+            if style.bg.is_none() || style.bg == Some(Color::Reset) {
+                style = style.bg(bg);
+            }
+            Span::styled(span.content.to_string(), style)
+        })
+        .collect()
 }

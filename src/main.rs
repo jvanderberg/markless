@@ -44,6 +44,10 @@ struct Cli {
     #[arg(long)]
     toc: bool,
 
+    /// Disable inline image rendering (show placeholders only)
+    #[arg(long)]
+    no_images: bool,
+
     /// Force syntax highlight theme background (light or dark)
     #[arg(long, value_enum, default_value = "auto")]
     theme: ThemeMode,
@@ -291,6 +295,7 @@ fn main() -> Result<()> {
         .with_watch(effective.watch)
         .with_toc_visible(effective.toc && !effective.no_toc)
         .with_force_half_cell(effective.force_half_cell)
+        .with_images_enabled(!effective.no_images)
         .with_config_paths(
             Some(global_path.clone()),
             if local_path.exists() {

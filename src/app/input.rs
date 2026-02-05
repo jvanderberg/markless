@@ -62,9 +62,47 @@ impl App {
             }
         }
 
-        let search_active = model.search_query.is_some();
-        let toast_active = model.active_toast().is_some();
-        let footer_rows = 1 + u16::from(search_active) + u16::from(toast_active);
+        let doc_area = document_mouse_area(model);
+        let in_doc = point_in_rect(mouse.column, mouse.row, doc_area);
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if in_doc {
+                    if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
+                        return Some(Message::StartSelection(line));
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if model.selection.is_some() {
+                    if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, true) {
+                        return Some(Message::UpdateSelection(line));
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if model.selection.is_some() {
+                    if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, true) {
+                        if model.selection_dragging() {
+                            return Some(Message::EndSelection(line));
+                        }
+                        let content_col = mouse
+                            .column
+                            .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
+                            as usize;
+                        if self.link_at_column(model, line, content_col).is_some() {
+                            return Some(Message::FollowLinkAtLine(line));
+                        }
+                        if image_at_line(model, line) {
+                            return Some(Message::FollowLinkAtLine(line));
+                        }
+                        return Some(Message::EndSelection(line));
+                    }
+                    return Some(Message::ClearSelection);
+                }
+            }
+            _ => {}
+        }
 
         if model.toc_visible {
             let total_area = Rect::new(
@@ -112,20 +150,29 @@ impl App {
                 }
             }
 
-            // Document click for link-follow when TOC is open (mouse capture enabled).
-            let doc_area = Rect {
-                x: chunks[1].x,
-                y: chunks[1].y,
-                width: chunks[1].width,
-                height: chunks[1].height.saturating_sub(footer_rows),
-            };
-            let in_doc = mouse.column >= doc_area.x
-                && mouse.column < doc_area.x + doc_area.width
-                && mouse.row >= doc_area.y
-                && mouse.row < doc_area.y + doc_area.height;
-            if in_doc && matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
-                let rel_row = mouse.row.saturating_sub(doc_area.y) as usize;
-                let line = model.viewport.offset() + rel_row;
+            if !model.selection_dragging() && in_doc && matches!(mouse.kind, MouseEventKind::Moved) {
+                if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
+                    let content_col = mouse
+                        .column
+                        .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
+                        as usize;
+                    let hovered = self
+                        .link_at_column(model, line, content_col)
+                        .map(|link| link.url)
+                        .or_else(|| image_url_at_line(model, line));
+                    return Some(Message::HoverLink(hovered));
+                }
+            }
+            if !model.selection_dragging() && matches!(mouse.kind, MouseEventKind::Moved) {
+                return Some(Message::HoverLink(None));
+            }
+        }
+
+        if in_doc
+            && model.selection.is_none()
+            && matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left))
+        {
+            if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
                 let content_col = mouse
                     .column
                     .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
@@ -133,21 +180,9 @@ impl App {
                 if self.link_at_column(model, line, content_col).is_some() {
                     return Some(Message::FollowLinkAtLine(line));
                 }
-            }
-            if in_doc && matches!(mouse.kind, MouseEventKind::Moved) {
-                let rel_row = mouse.row.saturating_sub(doc_area.y) as usize;
-                let line = model.viewport.offset() + rel_row;
-                let content_col = mouse
-                    .column
-                    .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
-                    as usize;
-                let hovered = self
-                    .link_at_column(model, line, content_col)
-                    .map(|link| link.url);
-                return Some(Message::HoverLink(hovered));
-            }
-            if matches!(mouse.kind, MouseEventKind::Moved) {
-                return Some(Message::HoverLink(None));
+                if image_at_line(model, line) {
+                    return Some(Message::FollowLinkAtLine(line));
+                }
             }
         }
 
@@ -215,6 +250,7 @@ impl App {
                 KeyCode::Char('h') | KeyCode::Left => Some(Message::TocCollapse),
                 KeyCode::Char('l') | KeyCode::Right => Some(Message::TocExpand),
                 KeyCode::Tab => Some(Message::SwitchFocus),
+                KeyCode::Char('?') | KeyCode::F(1) => Some(Message::ToggleHelp),
                 KeyCode::Char('t') => Some(Message::ToggleToc),
                 KeyCode::Char('q') => Some(Message::Quit),
                 KeyCode::Esc => Some(Message::SwitchFocus),
@@ -343,4 +379,79 @@ impl App {
         }
         best.map(|(_, link)| link)
     }
+}
+
+fn document_mouse_area(model: &Model) -> Rect {
+    let total_area = Rect::new(
+        0,
+        0,
+        model.viewport.width(),
+        model.viewport.height().saturating_add(1),
+    );
+    let content_area = if model.toc_visible {
+        crate::ui::split_main_columns(total_area)[1]
+    } else {
+        total_area
+    };
+    let search_active = model.search_query.is_some();
+    let toast_active = model.active_toast().is_some();
+    let hover_active = model.hovered_link_url.is_some();
+    let footer_rows =
+        1 + u16::from(search_active) + u16::from(toast_active) + u16::from(hover_active);
+    Rect {
+        x: content_area.x,
+        y: content_area.y,
+        width: content_area.width,
+        height: content_area.height.saturating_sub(footer_rows),
+    }
+}
+
+fn point_in_rect(col: u16, row: u16, rect: Rect) -> bool {
+    col >= rect.x
+        && col < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
+}
+
+fn doc_line_for_row(
+    model: &Model,
+    doc_area: Rect,
+    row: u16,
+    clamp: bool,
+) -> Option<usize> {
+    if doc_area.height == 0 || model.document.line_count() == 0 {
+        return None;
+    }
+    let max_row = doc_area.y + doc_area.height.saturating_sub(1);
+    let row = if clamp {
+        row.clamp(doc_area.y, max_row)
+    } else if row < doc_area.y || row > max_row {
+        return None;
+    } else {
+        row
+    };
+    let rel_row = row.saturating_sub(doc_area.y) as usize;
+    let mut line = model.viewport.offset() + rel_row;
+    let max_line = model.document.line_count().saturating_sub(1);
+    if line > max_line {
+        line = max_line;
+    }
+    Some(line)
+}
+
+fn image_at_line(model: &Model, line: usize) -> bool {
+    model
+        .document
+        .images()
+        .iter()
+        .any(|img| line >= img.line_range.start && line < img.line_range.end)
+}
+
+fn image_url_at_line(model: &Model, line: usize) -> Option<String> {
+    model
+        .document
+        .images()
+        .iter()
+        .find(|img| line >= img.line_range.start && line < img.line_range.end)
+        .map(|img| img.src.clone())
 }

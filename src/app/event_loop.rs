@@ -48,9 +48,14 @@ impl App {
         let _run_scope = crate::perf::scope("app.run.total");
 
         // Create image picker BEFORE initializing terminal (queries stdio)
-        let _picker_scope = crate::perf::scope("app.create_picker");
-        let picker = crate::image::create_picker(self.force_half_cell);
-        drop(_picker_scope);
+        let picker = if self.images_enabled {
+            let _picker_scope = crate::perf::scope("app.create_picker");
+            let picker = crate::image::create_picker(self.force_half_cell);
+            drop(_picker_scope);
+            picker
+        } else {
+            None
+        };
 
         // Load the document
         let _read_scope = crate::perf::scope("app.read_file");
@@ -74,6 +79,7 @@ impl App {
         model.watch_enabled = self.watch_enabled;
         model.toc_visible = self.toc_visible;
         model.force_half_cell = self.force_half_cell;
+        model.images_enabled = self.images_enabled;
         model.config_global_path = self.config_global_path.clone();
         model.config_local_path = self.config_local_path.clone();
 
@@ -117,7 +123,7 @@ impl App {
         let mut mouse_capture_enabled = false;
 
         loop {
-            let should_enable_mouse = model.toc_visible || model.link_picker_active();
+            let should_enable_mouse = true;
             if should_enable_mouse != mouse_capture_enabled {
                 if should_enable_mouse {
                     execute!(stdout(), EnableMouseCapture)?;

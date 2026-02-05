@@ -87,8 +87,7 @@ Search
         .as_ref()
         .map_or_else(|| "<none>".to_string(), |p| p.display().to_string());
 
-    let right_text = format!(
-        "\
+    let right_text = "\
 TOC
   t                   Toggle TOC
   T                   Toggle + focus TOC
@@ -102,8 +101,10 @@ Other
                       title on first row, full URL on second
   q or Ctrl-c         Quit
   ? or F1             Toggle help (closes on any key)
-  TODO: mouse drag    In-app select+copy while captured
+  Mouse drag          Select lines + copy";
 
+    let config_text = format!(
+        "\
 Config
   Global: {global_cfg}
   Local override: {local_cfg}"
@@ -124,12 +125,23 @@ Config
         popup.width.saturating_sub(4),
         popup.height.saturating_sub(4),
     );
+    let config_rows = 3;
+    let main_height = inner.height.saturating_sub(config_rows);
+    let main_area = Rect::new(inner.x, inner.y, inner.width, main_height);
+    let config_area = Rect::new(
+        inner.x,
+        inner.y + main_height,
+        inner.width,
+        inner.height.saturating_sub(main_height),
+    );
+
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(inner);
+        .split(main_area);
     frame.render_widget(Paragraph::new(left_text), cols[0]);
     frame.render_widget(Paragraph::new(right_text), cols[1]);
+    frame.render_widget(Paragraph::new(config_text), config_area);
 }
 
 fn centered_popup_rect(width: u16, height: u16, area: Rect) -> Rect {
