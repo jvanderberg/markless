@@ -116,7 +116,7 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     // Render images to temp buffer, copy visible portion to frame
     let vp_top = model.viewport.offset() as i32;
     let vp_bottom = vp_top + doc_area.height as i32;
-    let actively_scrolling = model.is_actively_scrolling();
+    let image_scroll_settling = model.is_image_scroll_settling();
     crate::perf::log_event(
         "render.document",
         format!(
@@ -163,7 +163,7 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
             }
 
             if matches!(protocol.protocol_type(), StatefulProtocolType::ITerm2(_)) {
-                if actively_scrolling {
+                if image_scroll_settling {
                     // iTerm2/Warp can flicker when re-embedding inline images during rapid scroll.
                     // Draw a cheap gray placeholder while scrolling; restore image on settle.
                     let frame_buf = frame.buffer_mut();

@@ -470,7 +470,7 @@ fn process_node<'a>(
                 let text = extract_text(child);
                 for line in text.lines() {
                     lines.push(RenderedLine::new(
-                        format!("> {}", line),
+                        format!("  │ {}", line),
                         LineType::BlockQuote,
                     ));
                 }
@@ -863,6 +863,8 @@ mod tests {
         let doc = parse("> This is a quote").unwrap();
         let lines = doc.visible_lines(0, 10);
         assert!(lines.iter().any(|l| *l.line_type() == LineType::BlockQuote));
+        assert!(lines.iter().any(|l| l.content().starts_with("  │ ")));
+        assert!(!lines.iter().any(|l| l.content().starts_with("> ")));
     }
 
     #[test]

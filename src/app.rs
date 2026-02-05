@@ -57,8 +57,8 @@ pub struct Model {
     image_layout_heights: HashMap<String, usize>,
     /// True when a resize is pending and expensive work should be paused
     resize_pending: bool,
-    /// Short cooldown while actively scrolling to avoid highlight stutter
-    scroll_cooldown_ticks: u8,
+    /// Short cooldown used only for iTerm2 inline image placeholdering while scrolling
+    image_scroll_cooldown_ticks: u8,
 }
 
 impl std::fmt::Debug for Model {
@@ -101,7 +101,7 @@ impl Model {
             last_image_scale_width: terminal_size.0,
             image_layout_heights: HashMap::new(),
             resize_pending: false,
-            scroll_cooldown_ticks: 0,
+            image_scroll_cooldown_ticks: 0,
         }
     }
 
@@ -240,9 +240,6 @@ impl Model {
     }
 
     pub fn ensure_highlight_overscan(&mut self) {
-        if self.scroll_cooldown_ticks > 0 {
-            return;
-        }
         let height = self.viewport.height() as usize;
         let extra = height * 2;
         let start = self.viewport.offset().saturating_sub(extra);
@@ -250,12 +247,16 @@ impl Model {
         self.document.ensure_highlight_for_range(start..end);
     }
 
-    pub fn tick(&mut self) {
-        self.scroll_cooldown_ticks = self.scroll_cooldown_ticks.saturating_sub(1);
+    pub fn tick_image_scroll_cooldown(&mut self) {
+        self.image_scroll_cooldown_ticks = self.image_scroll_cooldown_ticks.saturating_sub(1);
     }
 
-    pub fn is_actively_scrolling(&self) -> bool {
-        self.scroll_cooldown_ticks > 0
+    pub fn is_image_scroll_settling(&self) -> bool {
+        self.image_scroll_cooldown_ticks > 0
+    }
+
+    fn bump_image_scroll_cooldown(&mut self) {
+        self.image_scroll_cooldown_ticks = 3;
     }
 
     pub fn set_resize_pending(&mut self, pending: bool) {
@@ -348,43 +349,43 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // Navigation
         Message::ScrollUp(n) => {
             model.viewport.scroll_up(n);
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::ScrollDown(n) => {
             model.viewport.scroll_down(n);
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::PageUp => {
             model.viewport.page_up();
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::PageDown => {
             model.viewport.page_down();
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::HalfPageUp => {
             model.viewport.half_page_up();
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::HalfPageDown => {
             model.viewport.half_page_down();
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::GoToTop => {
             model.viewport.go_to_top();
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::GoToBottom => {
             model.viewport.go_to_bottom();
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::GoToLine(line) => {
             model.viewport.go_to_line(line);
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
         Message::GoToPercent(percent) => {
             model.viewport.go_to_percent(percent);
-            model.scroll_cooldown_ticks = 3;
+            model.bump_image_scroll_cooldown();
         }
 
         // TOC
@@ -588,12 +589,12 @@ impl App {
         let mut needs_render = true;
 
         loop {
-            let was_scrolling = model.is_actively_scrolling();
-            model.tick();
-            if was_scrolling && !model.is_actively_scrolling() {
-                // Ensure we repaint once after scroll placeholders expire.
+            let was_settling = model.is_image_scroll_settling();
+            model.tick_image_scroll_cooldown();
+            if was_settling && !model.is_image_scroll_settling() {
+                // Repaint once after scroll placeholders expire to restore inline images.
                 needs_render = true;
-                crate::perf::log_event("scroll.settled", format!("frame={}", frame_idx));
+                crate::perf::log_event("image.scroll.settled", format!("frame={}", frame_idx));
             }
 
             let now_ms = start.elapsed().as_millis() as u64;
@@ -839,7 +840,7 @@ impl Default for Model {
             last_image_scale_width: 80,
             image_layout_heights: HashMap::new(),
             resize_pending: false,
-            scroll_cooldown_ticks: 0,
+            image_scroll_cooldown_ticks: 0,
         }
     }
 }
@@ -973,19 +974,21 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll_sets_highlight_cooldown() {
-        let model = create_long_test_model();
-        let model = update(model, Message::ScrollDown(1));
-        assert!(model.scroll_cooldown_ticks > 0);
-    }
+    fn test_ensure_highlight_overscan_still_highlights_while_scrolling() {
+        let doc = Document::parse_with_layout("Lead line\n\n```rust\nfn main() {}\n```", 80).unwrap();
+        let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
 
-    #[test]
-    fn test_tick_reduces_highlight_cooldown() {
-        let mut model = create_long_test_model();
+        // Highlighting should still run while actively scrolling.
         model = update(model, Message::ScrollDown(1));
-        let before = model.scroll_cooldown_ticks;
-        model.tick();
-        assert!(model.scroll_cooldown_ticks < before);
+
+        model.ensure_highlight_overscan();
+        let lines = model.document.visible_lines(model.viewport.offset(), 10);
+        let code_line = lines
+            .iter()
+            .find(|l| l.content().contains("fn main"))
+            .expect("code line missing");
+        let spans = code_line.spans().expect("code spans missing");
+        assert!(spans.iter().any(|s| s.style().fg.is_some()));
     }
 
     #[test]
