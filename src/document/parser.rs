@@ -1650,7 +1650,7 @@ mod tests {
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 20);
         assert!(lines.iter().any(|l| l.content().contains("[^q]")));
-        assert!(lines.iter().any(|l| l.content().contains("[^q]:")));
+        assert!(lines.iter().any(|l| l.content().contains("[^q] Footnote text")));
     }
 
     #[test]
@@ -1659,7 +1659,7 @@ mod tests {
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 20);
         assert!(lines.iter().any(|l| l.content().contains("[^n]")));
-        assert!(lines.iter().any(|l| l.content().contains("[^n]:")));
+        assert!(lines.iter().any(|l| l.content().contains("[^n] Footnote text")));
     }
 
     #[test]

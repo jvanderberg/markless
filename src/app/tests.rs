@@ -145,9 +145,9 @@ fn test_selected_text_returns_block() {
     let doc = Document::parse("# Title\n\nLine one\n\nLine two").unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
 
-    model = update(model, Message::StartSelection(2));
-    model = update(model, Message::UpdateSelection(4));
-    model = update(model, Message::EndSelection(4));
+    model = update(model, Message::StartSelection(4));
+    model = update(model, Message::UpdateSelection(6));
+    model = update(model, Message::EndSelection(6));
 
     let (text, lines) = model.selected_text().unwrap();
     assert_eq!(lines, 3);
@@ -875,7 +875,7 @@ fn test_resize_debouncer_uses_latest_size() {
 #[test]
 #[ignore = "performance test; run with cargo test paging_perf_test_rendering -- --ignored --nocapture"]
 fn paging_perf_test_rendering() {
-    let md = include_str!("../../test-rendering.md");
+    let md = include_str!("../../examples/test-rendering.md");
     let doc = Document::parse_with_layout(md, 120).unwrap();
     let mut model = Model::new(PathBuf::from("test-rendering.md"), doc, (120, 40));
     model.ensure_highlight_overscan();
