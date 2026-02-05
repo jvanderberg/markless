@@ -149,6 +149,9 @@ fn process_node<'a>(
 
         NodeValue::Heading(heading) => {
             let text = extract_text(node);
+
+            // Keep headings visually separated with two rows above.
+            ensure_trailing_empty_lines(lines, 2);
             let line_num = lines.len();
 
             headings.push(HeadingRef {
@@ -290,14 +293,13 @@ fn process_node<'a>(
                 comrak::nodes::ListDelimType::Paren => ')',
                 comrak::nodes::ListDelimType::Period => '.',
             };
-            let bullet = list.bullet_char as char;
             let list_len = node.children().count();
             let max_number = start + list_len.saturating_sub(1);
             let number_width = max_number.to_string().len();
 
             for (index, child) in node.children().enumerate() {
                 let base_marker = match list.list_type {
-                    comrak::nodes::ListType::Bullet => bullet.to_string(),
+                    comrak::nodes::ListType::Bullet => "•".to_string(),
                     comrak::nodes::ListType::Ordered => {
                         let number = start + index;
                         format!("{:>width$}{}", number, delimiter, width = number_width)
@@ -321,10 +323,8 @@ fn process_node<'a>(
 
         NodeValue::TaskItem(symbol) => {
             let indent = "  ".repeat(depth.saturating_sub(1));
-            let base_marker = list_marker.clone().unwrap_or_else(|| "- ".to_string());
             let task_marker = if symbol.is_some() { "✓" } else { "□" };
-            let trimmed = base_marker.trim_end();
-            let marker = format!("{} {} ", trimmed, task_marker);
+            let marker = format!("{} ", task_marker);
             let prefix_first = format!("{}{}", indent, marker);
             let prefix_next = format!("{}{}", indent, " ".repeat(marker.len()));
 
@@ -362,8 +362,7 @@ fn process_node<'a>(
             let base_marker = list_marker.clone().unwrap_or_else(|| "- ".to_string());
             let task_marker = find_task_marker(node);
             let marker = if let Some(task_marker) = task_marker {
-                let trimmed = base_marker.trim_end();
-                format!("{} {} ", trimmed, task_marker)
+                format!("{} ", task_marker)
             } else {
                 base_marker
             };
@@ -538,6 +537,17 @@ fn process_node<'a>(
                 );
             }
         }
+    }
+}
+
+fn ensure_trailing_empty_lines(lines: &mut Vec<RenderedLine>, count: usize) {
+    let existing = lines
+        .iter()
+        .rev()
+        .take_while(|line| matches!(line.line_type(), LineType::Empty))
+        .count();
+    for _ in existing..count {
+        lines.push(RenderedLine::new(String::new(), LineType::Empty));
     }
 }
 
@@ -871,10 +881,20 @@ mod tests {
     fn test_heading_line_numbers() {
         let doc = parse("# First\n\nParagraph\n\n# Second").unwrap();
         assert_eq!(doc.headings().len(), 2);
-        // First heading should be at line 0
-        assert_eq!(doc.headings()[0].line, 0);
+        // Headings have two rows above them.
+        assert_eq!(doc.headings()[0].line, 2);
         // Second heading should be after the first heading + empty + paragraph + empty
         assert!(doc.headings()[1].line > doc.headings()[0].line);
+    }
+
+    #[test]
+    fn test_heading_has_two_rows_above() {
+        let doc = Document::parse_with_layout("Paragraph\n\n## Heading", 80).unwrap();
+        let heading_line = doc.headings().first().expect("heading missing").line;
+        let lines = doc.visible_lines(0, heading_line + 1);
+        assert!(heading_line >= 2);
+        assert_eq!(*lines[heading_line - 1].line_type(), LineType::Empty);
+        assert_eq!(*lines[heading_line - 2].line_type(), LineType::Empty);
     }
 
     #[test]
@@ -1059,7 +1079,7 @@ mod tests {
             .find(|l| *l.line_type() == LineType::ListItem(1))
             .expect("List line missing");
 
-        assert!(list_line.content().starts_with("* "));
+        assert!(list_line.content().starts_with("• "));
     }
 
     #[test]
@@ -1072,8 +1092,8 @@ mod tests {
             .filter(|l| matches!(l.line_type(), LineType::ListItem(_)))
             .collect();
 
-        assert!(list_lines[0].content().starts_with("- "));
-        assert!(list_lines[1].content().starts_with("  - "));
+        assert!(list_lines[0].content().starts_with("• "));
+        assert!(list_lines[1].content().starts_with("  • "));
     }
 
     #[test]
@@ -1100,8 +1120,8 @@ mod tests {
             .filter(|l| *l.line_type() == LineType::ListItem(1))
             .collect();
 
-        assert!(list_lines[0].content().starts_with("- ✓ "));
-        assert!(list_lines[1].content().starts_with("- □ "));
+        assert!(list_lines[0].content().starts_with("✓ "));
+        assert!(list_lines[1].content().starts_with("□ "));
     }
 
     #[test]
@@ -1128,8 +1148,8 @@ mod tests {
             .filter(|l| matches!(l.line_type(), LineType::ListItem(_)))
             .collect();
 
-        assert!(list_lines[0].content().starts_with("- ✓ "));
-        assert!(list_lines[1].content().starts_with("  - □ "));
+        assert!(list_lines[0].content().starts_with("✓ "));
+        assert!(list_lines[1].content().starts_with("  □ "));
     }
 
     #[test]

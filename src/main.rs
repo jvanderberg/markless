@@ -48,6 +48,10 @@ struct Cli {
     /// Write detailed render/image debug events to a file
     #[arg(long, value_name = "PATH")]
     render_debug_log: Option<PathBuf>,
+
+    /// Force image rendering to use half-cell fallback mode
+    #[arg(long)]
+    force_half_cell: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +100,8 @@ fn main() -> Result<()> {
     // Run the application
     let mut app = App::new(cli.file)
         .with_watch(cli.watch)
-        .with_toc_visible(cli.toc && !cli.no_toc);
+        .with_toc_visible(cli.toc && !cli.no_toc)
+        .with_force_half_cell(cli.force_half_cell);
 
     app.run().context("Application error")
 }
@@ -127,5 +132,11 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.render_debug_log, Some(PathBuf::from("render.log")));
+    }
+
+    #[test]
+    fn test_force_half_cell_flag_parses() {
+        let cli = Cli::try_parse_from(["gander", "--force-half-cell", "README.md"]).unwrap();
+        assert!(cli.force_half_cell);
     }
 }

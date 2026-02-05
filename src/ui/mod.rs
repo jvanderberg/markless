@@ -10,7 +10,7 @@ pub mod viewport;
 pub mod widgets;
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui_image::protocol::StatefulProtocolType;
 use ratatui_image::{CropOptions, Resize, StatefulImage};
 use crate::app::Model;
@@ -71,8 +71,10 @@ fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
 }
 
 fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
+    const DOC_LEFT_PADDING: u16 = 2;
+
     // Reserve last line for status bar
-    let doc_area = Rect {
+    let doc_outer_area = Rect {
         height: area.height.saturating_sub(1),
         ..area
     };
@@ -107,11 +109,14 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
         }
     }
 
-    let doc_block = Block::default().borders(Borders::NONE);
+    let doc_block = Block::default()
+        .borders(Borders::NONE)
+        .padding(Padding::left(DOC_LEFT_PADDING));
+    let doc_area = doc_block.inner(doc_outer_area);
     let doc = Paragraph::new(content).block(doc_block);
     // Clear doc area first so placeholder/image background styles from previous frames do not leak.
-    frame.render_widget(Clear, doc_area);
-    frame.render_widget(doc, doc_area);
+    frame.render_widget(Clear, doc_outer_area);
+    frame.render_widget(doc, doc_outer_area);
 
     // Render images to temp buffer, copy visible portion to frame
     let vp_top = model.viewport.offset() as i32;

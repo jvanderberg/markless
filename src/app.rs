@@ -481,6 +481,7 @@ pub struct App {
     file_path: PathBuf,
     watch_enabled: bool,
     toc_visible: bool,
+    force_half_cell: bool,
 }
 
 struct ResizeDebouncer {
@@ -522,6 +523,7 @@ impl App {
             file_path,
             watch_enabled: false,
             toc_visible: false,
+            force_half_cell: false,
         }
     }
 
@@ -537,13 +539,19 @@ impl App {
         self
     }
 
+    /// Force image rendering to use half-cell fallback mode.
+    pub fn with_force_half_cell(mut self, enabled: bool) -> Self {
+        self.force_half_cell = enabled;
+        self
+    }
+
     /// Run the main event loop.
     pub fn run(&mut self) -> Result<()> {
         let _run_scope = crate::perf::scope("app.run.total");
 
         // Create image picker BEFORE initializing terminal (queries stdio)
         let _picker_scope = crate::perf::scope("app.create_picker");
-        let picker = crate::image::create_picker();
+        let picker = crate::image::create_picker(self.force_half_cell);
         drop(_picker_scope);
 
         // Load the document

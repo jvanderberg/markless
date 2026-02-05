@@ -22,6 +22,7 @@ cargo install --path .
 gander README.md
 gander --watch README.md    # Auto-reload on file changes
 gander --toc README.md      # Start with TOC visible
+gander --force-half-cell README.md  # Force half-cell image rendering (debug)
 ```
 
 ## Key Bindings

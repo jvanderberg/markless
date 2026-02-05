@@ -24,7 +24,12 @@ const PICKER_QUERY_TIMEOUT_MS: u64 = 250;
 /// Create a picker for terminal image rendering.
 ///
 /// The picker detects terminal capabilities and chooses the best protocol.
-pub fn create_picker() -> Option<Picker> {
+pub fn create_picker(force_half_cell: bool) -> Option<Picker> {
+    if force_half_cell {
+        crate::perf::log_event("image.create_picker", "force_half_cell=true protocol=Halfblocks");
+        return Some(Picker::halfblocks());
+    }
+
     // Try to create a picker, which will detect the terminal's capabilities
     let picker = Picker::from_query_stdio_with_options(query_options()).ok()?;
     crate::perf::log_event(
