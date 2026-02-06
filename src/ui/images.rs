@@ -116,7 +116,10 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
         // Non-iTerm2 protocols are safe to render to a temp buffer and then blit row slices.
         let temp_area = Rect::new(0, 0, img_width, img_height);
         let mut temp_buf = ratatui::buffer::Buffer::empty(temp_area);
-        let resize = if matches!(protocol.protocol_type(), StatefulProtocolType::Halfblocks(_)) {
+        let resize = if matches!(
+            protocol.protocol_type(),
+            StatefulProtocolType::Halfblocks(_)
+        ) {
             // Nearest-neighbor causes strong color aliasing artifacts in half-cell mode.
             Resize::Scale(Some(image::imageops::FilterType::CatmullRom))
         } else {
@@ -127,8 +130,10 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
 
         // Terminal.app and other non-truecolor terminals behave better with indexed colors
         // than repeated truecolor updates in halfblock mode.
-        if matches!(protocol.protocol_type(), StatefulProtocolType::Halfblocks(_))
-            && !crate::image::supports_truecolor_terminal()
+        if matches!(
+            protocol.protocol_type(),
+            StatefulProtocolType::Halfblocks(_)
+        ) && !crate::image::supports_truecolor_terminal()
         {
             for row in 0..temp_area.height {
                 for col in 0..temp_area.width {
@@ -160,11 +165,7 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
             "render.image.blit",
             format!(
                 "src={} src_start={} dst_y={} rows={} cols={}",
-                img_ref.src,
-                src_start,
-                dst_y,
-                visible_rows,
-                visible_cols
+                img_ref.src, src_start, dst_y, visible_rows, visible_cols
             ),
         );
     }

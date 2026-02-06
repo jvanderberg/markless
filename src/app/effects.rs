@@ -1,4 +1,5 @@
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::app::{App, Message, Model, ToastLevel};
@@ -44,10 +45,7 @@ impl App {
             }
             Message::ForceReload | Message::FileChanged => {
                 if let Err(err) = model.reload_from_disk() {
-                    model.show_toast(
-                        ToastLevel::Error,
-                        format!("Reload failed: {err}"),
-                    );
+                    model.show_toast(ToastLevel::Error, format!("Reload failed: {err}"));
                     crate::perf::log_event(
                         "reload.error",
                         format!("failed path={} err={err}", model.file_path.display()),
@@ -68,6 +66,33 @@ impl App {
             Message::EndSelection(_) => {
                 self.copy_selection(model);
                 model.clear_selection();
+            }
+            Message::TocSelect | Message::TocClick(_) | Message::TocExpand if model.browse_mode => {
+                self.browse_activate_selected(model);
+            }
+            Message::TocCollapse if model.browse_mode => {
+                self.browse_navigate_parent(model);
+            }
+            Message::EnterBrowseMode => {
+                let dir = model
+                    .file_path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."));
+                if let Err(err) = model.load_directory(&dir) {
+                    model.show_toast(ToastLevel::Error, format!("Browse failed: {err}"));
+                } else {
+                    // Highlight the current file in the listing (compare by name
+                    // since load_directory canonicalizes paths)
+                    if let Some(name) = model.file_path.file_name() {
+                        let name = name.to_string_lossy();
+                        if let Some(idx) = model.browse_entries.iter().position(|e| e.name == *name)
+                        {
+                            model.toc_selected = Some(idx);
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -160,10 +185,68 @@ impl App {
 
         match open_external_link(url) {
             Ok(()) => model.show_toast(ToastLevel::Info, format!("Opened {url}")),
-            Err(err) => model.show_toast(
-                ToastLevel::Error,
-                format!("Open failed: {err}"),
-            ),
+            Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
+        }
+    }
+
+    fn browse_activate_selected(&self, model: &mut Model) {
+        let Some(sel) = model.toc_selected else {
+            return;
+        };
+        let Some(entry) = model.browse_entries.get(sel).cloned() else {
+            return;
+        };
+        let path = entry.path;
+        if entry.is_dir {
+            if let Err(err) = model.load_directory(&path) {
+                model.show_toast(ToastLevel::Error, format!("Browse failed: {err}"));
+            } else {
+                model.toc_selected = Some(0);
+                Self::browse_auto_load_first_file(model);
+            }
+        } else if let Err(err) = model.load_file(&path) {
+            model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
+        }
+    }
+
+    fn browse_navigate_parent(&self, model: &mut Model) {
+        let parent = model
+            .browse_dir
+            .parent()
+            .unwrap_or(&model.browse_dir)
+            .to_path_buf();
+        // Already at filesystem root — nothing to do.
+        if parent == model.browse_dir {
+            return;
+        }
+        let old_name = model
+            .browse_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string());
+        if let Err(err) = model.load_directory(&parent) {
+            model.show_toast(ToastLevel::Error, format!("Browse failed: {err}"));
+        } else {
+            // Try to highlight the directory we came from
+            if let Some(ref name) = old_name {
+                if let Some(idx) = model.browse_entries.iter().position(|e| e.name == *name) {
+                    model.toc_selected = Some(idx);
+                } else {
+                    model.toc_selected = Some(0);
+                }
+            } else {
+                model.toc_selected = Some(0);
+            }
+            Self::browse_auto_load_first_file(model);
+        }
+    }
+
+    fn browse_auto_load_first_file(model: &mut Model) {
+        if let Some((idx, path)) = model.first_viewable_file_index() {
+            if let Err(err) = model.load_file(&path) {
+                model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
+            } else {
+                model.toc_selected = Some(idx);
+            }
         }
     }
 
@@ -176,10 +259,7 @@ impl App {
         }
         match copy_to_clipboard(&text) {
             Ok(()) => model.show_toast(ToastLevel::Info, format!("Copied {lines} line(s)")),
-            Err(err) => model.show_toast(
-                ToastLevel::Error,
-                format!("Copy failed: {err}"),
-            ),
+            Err(err) => model.show_toast(ToastLevel::Error, format!("Copy failed: {err}")),
         }
     }
 }
@@ -187,7 +267,10 @@ impl App {
 fn open_external_link(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(url).spawn()?.wait()?;
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()?
+            .wait()?;
         return Ok(());
     }
     #[cfg(target_os = "windows")]
@@ -225,9 +308,7 @@ fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
 fn copy_to_pbcopy(text: &str) -> std::io::Result<()> {
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new("pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()?;
+    let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(text.as_bytes())?;
     }

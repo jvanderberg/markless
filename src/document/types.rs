@@ -87,19 +87,17 @@ impl Document {
             return None;
         }
         let normalized = normalize_anchor(target);
-        self.headings
-            .iter()
-            .find_map(|h| {
-                if h.id.as_deref().is_some_and(|id| id == target) {
-                    return Some(h.line);
-                }
-                let slug = normalize_anchor(&h.text);
-                if slug == normalized {
-                    Some(h.line)
-                } else {
-                    None
-                }
-            })
+        self.headings.iter().find_map(|h| {
+            if h.id.as_deref().is_some_and(|id| id == target) {
+                return Some(h.line);
+            }
+            let slug = normalize_anchor(&h.text);
+            if slug == normalized {
+                Some(h.line)
+            } else {
+                None
+            }
+        })
     }
 
     /// Get visible lines for rendering.
@@ -122,7 +120,10 @@ impl Document {
     /// Lazily apply syntax highlighting to code blocks intersecting `range`.
     pub fn ensure_highlight_for_range(&mut self, range: Range<usize>) {
         for block in self.code_blocks.iter_mut() {
-            if block.highlighted || block.line_range.end <= range.start || block.line_range.start >= range.end {
+            if block.highlighted
+                || block.line_range.end <= range.start
+                || block.line_range.start >= range.end
+            {
                 continue;
             }
 
@@ -131,15 +132,13 @@ impl Document {
                 &block.raw_lines.join("\n"),
             );
 
-            for (line_idx, spans) in (block.line_range.start..block.line_range.end).zip(highlighted.into_iter()) {
+            for (line_idx, spans) in
+                (block.line_range.start..block.line_range.end).zip(highlighted.into_iter())
+            {
                 let trimmed_spans = truncate_spans_to_chars(&spans, block.content_width);
                 let trimmed_len = spans_char_len(&trimmed_spans);
-                let padding = " ".repeat(
-                    block
-                        .content_width
-                        .saturating_sub(trimmed_len)
-                        + block.right_padding,
-                );
+                let padding = " "
+                    .repeat(block.content_width.saturating_sub(trimmed_len) + block.right_padding);
 
                 let mut line_spans = Vec::new();
                 line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
@@ -149,7 +148,8 @@ impl Document {
                     InlineStyle::default(),
                 ));
                 let content = spans_to_string(&line_spans);
-                self.lines[line_idx] = RenderedLine::with_spans(content, LineType::CodeBlock, line_spans);
+                self.lines[line_idx] =
+                    RenderedLine::with_spans(content, LineType::CodeBlock, line_spans);
             }
 
             block.highlighted = true;

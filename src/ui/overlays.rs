@@ -33,8 +33,16 @@ pub fn render_link_picker_overlay(model: &Model, frame: &mut Frame, area: Rect) 
         let number = format!("{}: ", idx + 1);
         lines.push(Line::from(vec![
             Span::raw(left_margin),
-            Span::styled(number, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(title.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                number,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                title.to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::raw(left_margin),
@@ -93,6 +101,11 @@ TOC
   T                   Toggle + focus TOC
   Tab                 Switch focus
   TOC: j/k, arrows, Enter/Space, mouse, click
+
+Browse
+  B                   Browse directory
+  F                   Focus on file only
+  Backspace           Parent directory (in TOC)
 
 Other
   w                   Toggle watch

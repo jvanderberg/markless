@@ -1,0 +1,19 @@
+#!/bin/sh
+# Pre-commit hook: auto-format staged Rust files with rustfmt.
+#
+# Install: git config core.hooksPath .githooks
+
+# Find staged .rs files
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$')
+
+if [ -z "$STAGED_RS" ]; then
+    exit 0
+fi
+
+# Format only the staged files
+echo "$STAGED_RS" | xargs rustfmt --edition 2024 2>/dev/null
+
+# Re-stage any files that were reformatted
+echo "$STAGED_RS" | xargs git add
+
+exit 0

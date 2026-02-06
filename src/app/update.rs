@@ -96,6 +96,12 @@ pub enum Message {
     /// Clear current selection
     ClearSelection,
 
+    // Browse mode
+    /// Switch to file-only mode (TOC shows headings)
+    EnterFileMode,
+    /// Switch to browse mode (TOC shows directory listing)
+    EnterBrowseMode,
+
     // Window
     /// Terminal resized
     Resize(u16, u16),
@@ -194,7 +200,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         }
         Message::TocDown => {
             if let Some(sel) = model.toc_selected {
-                let max = model.document.headings().len().saturating_sub(1);
+                let max = model.toc_entry_count().saturating_sub(1);
                 let next = (sel + 1).min(max);
                 model.toc_selected = Some(next);
                 let visible = model.toc_visible_rows();
@@ -209,17 +215,23 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             }
         }
         Message::TocSelect => {
-            if let Some(sel) = model.toc_selected {
-                if let Some(heading) = model.document.headings().get(sel) {
-                    model.viewport.go_to_line(heading.line);
+            if !model.browse_mode {
+                if let Some(sel) = model.toc_selected {
+                    if let Some(heading) = model.document.headings().get(sel) {
+                        model.viewport.go_to_line(heading.line);
+                    }
                 }
             }
+            // Browse mode selection handled in effects
         }
         Message::TocClick(idx) => {
             model.toc_selected = Some(idx);
-            if let Some(heading) = model.document.headings().get(idx) {
-                model.viewport.go_to_line(heading.line);
+            if !model.browse_mode {
+                if let Some(heading) = model.document.headings().get(idx) {
+                    model.viewport.go_to_line(heading.line);
+                }
             }
+            // Browse mode click handled in effects
         }
         Message::TocScrollUp => {
             model.toc_scroll_offset = model.toc_scroll_offset.saturating_sub(1);
@@ -228,8 +240,13 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.toc_scroll_offset =
                 (model.toc_scroll_offset + 1).min(model.max_toc_scroll_offset());
         }
-        Message::TocCollapse | Message::TocExpand => {
-            // TODO: Implement collapse/expand
+        Message::TocCollapse => {
+            // In browse mode, handled in effects (navigate to parent dir)
+            // In file mode: TODO collapse/expand
+        }
+        Message::TocExpand => {
+            // In browse mode, handled in effects (open item)
+            // In file mode: TODO collapse/expand
         }
         Message::SwitchFocus => {
             if model.toc_visible {
@@ -309,7 +326,9 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.search_match_index = None;
             model.search_allow_short = false;
         }
-        Message::OpenVisibleLinks | Message::FollowLinkAtLine(_, _) | Message::SelectVisibleLink(_) => {
+        Message::OpenVisibleLinks
+        | Message::FollowLinkAtLine(_, _)
+        | Message::SelectVisibleLink(_) => {
             model.clear_selection();
             // side effect in event loop
         }
@@ -348,6 +367,20 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.clear_selection();
         }
 
+        // Browse mode
+        Message::EnterFileMode => {
+            model.browse_mode = false;
+            // Sync TOC selection to the current viewport so it points at valid
+            // heading indices rather than stale browse-entry indices.
+            model.sync_toc_to_viewport();
+        }
+        Message::EnterBrowseMode => {
+            model.browse_mode = true;
+            model.toc_visible = true;
+            if model.toc_selected.is_none() {
+                model.toc_selected = Some(0);
+            }
+        }
         // Window
         Message::Resize(width, height) => {
             model.viewport.resize(width, height.saturating_sub(1));
@@ -362,7 +395,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.should_quit = true;
         }
     }
-    if should_sync_toc && model.toc_visible && !model.toc_focused {
+    if should_sync_toc && model.toc_visible && !model.toc_focused && !model.browse_mode {
         model.sync_toc_to_viewport();
     }
     model

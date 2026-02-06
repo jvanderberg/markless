@@ -2,8 +2,8 @@ use super::*;
 use crate::app::Model;
 use crate::document::Document;
 use crate::document::LineType;
-use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui_image::picker::Picker;
 use std::path::PathBuf;
 
@@ -44,7 +44,11 @@ fn test_image_protocol_is_loaded_for_document_with_image() {
 
     // For now, this correctly shows 0 because file doesn't exist
     // A proper test needs a real image fixture
-    assert_eq!(model.image_protocols.len(), 0, "No protocol loaded (file doesn't exist)");
+    assert_eq!(
+        model.image_protocols.len(),
+        0,
+        "No protocol loaded (file doesn't exist)"
+    );
 }
 
 #[test]
@@ -61,7 +65,10 @@ fn test_render_shows_image_placeholder_for_missing_image() {
     // Check buffer contains the placeholder
     let buffer = terminal.backend().buffer();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-    assert!(content.contains("[Image: My Image]"), "Should show image placeholder");
+    assert!(
+        content.contains("[Image: My Image]"),
+        "Should show image placeholder"
+    );
 }
 
 #[test]
@@ -79,9 +86,14 @@ fn test_render_with_real_image_creates_protocol() {
 
     // Manually create a protocol for testing (simulating what load_nearby_images would do)
     let test_image = DynamicImage::ImageRgb8(RgbImage::new(100, 100));
-    let protocol = model.picker.as_ref().unwrap().new_resize_protocol(test_image);
+    let protocol = model
+        .picker
+        .as_ref()
+        .unwrap()
+        .new_resize_protocol(test_image);
     // 100x100 image at 65% of 80 cols = 52 cols, aspect ratio preserved = 52 rows (with font 10x20)
-    model.image_protocols
+    model
+        .image_protocols
         .insert("test_image.png".to_string(), (protocol, 52, 26));
 
     assert_eq!(model.image_protocols.len(), 1, "Protocol should be loaded");
@@ -89,7 +101,10 @@ fn test_render_with_real_image_creates_protocol() {
     // Now render and verify it doesn't crash
     let mut terminal = create_test_terminal();
     let result = terminal.draw(|frame| render(&mut model, frame));
-    assert!(result.is_ok(), "Rendering with image protocol should not crash");
+    assert!(
+        result.is_ok(),
+        "Rendering with image protocol should not crash"
+    );
 }
 
 #[test]
@@ -120,7 +135,10 @@ fn test_load_nearby_images_uses_protocol_render_height() {
         .expect("protocol missing");
     let target_width_cols = (model.viewport.width() as f32 * 0.65) as u16;
     let area = ratatui::layout::Rect::new(0, 0, target_width_cols, u16::MAX);
-    let expected = protocol.size_for(Resize::Scale(Some(image::imageops::FilterType::CatmullRom)), area);
+    let expected = protocol.size_for(
+        Resize::Scale(Some(image::imageops::FilterType::CatmullRom)),
+        area,
+    );
     assert_eq!(*width_cols, expected.width);
     assert_eq!(*height_rows, expected.height);
 }
@@ -133,12 +151,8 @@ fn test_help_overlay_shows_config_paths_full_width() {
         (80, 24),
     );
     model.help_visible = true;
-    model.config_global_path = Some(PathBuf::from(
-        "/path/that/should/be/visible/in/help/config",
-    ));
-    model.config_local_path = Some(PathBuf::from(
-        "/local/override/path/visible/in/help/config",
-    ));
+    model.config_global_path = Some(PathBuf::from("/path/that/should/be/visible/in/help/config"));
+    model.config_local_path = Some(PathBuf::from("/local/override/path/visible/in/help/config"));
 
     let mut terminal = create_test_terminal();
     terminal.draw(|frame| render(&mut model, frame)).unwrap();
@@ -162,8 +176,8 @@ fn test_load_nearby_images_with_real_file() {
         return;
     }
     // Test with actual image file fixture
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
 
     // Only run if fixture exists
     if !fixture_path.exists() {
@@ -184,12 +198,19 @@ fn test_load_nearby_images_with_real_file() {
     model.load_nearby_images();
 
     // Verify protocol was created
-    assert_eq!(model.image_protocols.len(), 1, "Protocol should be created for real image");
+    assert_eq!(
+        model.image_protocols.len(),
+        1,
+        "Protocol should be created for real image"
+    );
 
     // Render and verify no crash
     let mut terminal = create_test_terminal();
     let result = terminal.draw(|frame| render(&mut model, frame));
-    assert!(result.is_ok(), "Rendering with loaded image should not crash");
+    assert!(
+        result.is_ok(),
+        "Rendering with loaded image should not crash"
+    );
 
     // Verify buffer has image rendered with colors
     let buffer = terminal.backend().buffer();
@@ -200,7 +221,10 @@ fn test_load_nearby_images_with_real_file() {
             || matches!(c.bg, ratatui::style::Color::Rgb(255, 0, 0))
     });
 
-    assert!(has_red_cells, "Should render red test image with Rgb(255,0,0) color cells");
+    assert!(
+        has_red_cells,
+        "Should render red test image with Rgb(255,0,0) color cells"
+    );
 }
 
 // ==================== NEW TDD TESTS FOR IMAGE LAYOUT ====================
@@ -212,8 +236,8 @@ fn test_image_does_not_overlap_text_below() {
         return;
     }
     // Image should have dedicated vertical space, not overlap text below it
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }
@@ -248,7 +272,10 @@ fn test_image_does_not_overlap_text_below() {
         }
     }
 
-    assert!(found_text_row.is_some(), "Text below image should be visible");
+    assert!(
+        found_text_row.is_some(),
+        "Text below image should be visible"
+    );
 
     let text_row = found_text_row.unwrap();
     // Check that the text row does NOT have red image pixels
@@ -258,7 +285,10 @@ fn test_image_does_not_overlap_text_below() {
             || matches!(cell.bg, ratatui::style::Color::Rgb(255, 0, 0))
     });
 
-    assert!(!text_row_has_red, "Text row should NOT have image pixels overlapping it");
+    assert!(
+        !text_row_has_red,
+        "Text row should NOT have image pixels overlapping it"
+    );
 }
 
 #[test]
@@ -272,7 +302,9 @@ fn test_image_reserves_fixed_height_in_document() {
     let lines = doc.visible_lines(0, 100);
 
     // Find the image line
-    let image_line_idx = lines.iter().position(|l| matches!(l.line_type(), LineType::Image));
+    let image_line_idx = lines
+        .iter()
+        .position(|l| matches!(l.line_type(), LineType::Image));
 
     assert!(image_line_idx.is_some(), "Should have an image line");
 
@@ -285,7 +317,10 @@ fn test_image_reserves_fixed_height_in_document() {
 
     // For proper image layout, we need more than 1 line reserved
     // This test will FAIL with current implementation (only 1 line)
-    assert!(image_lines.len() >= 1, "Image should have at least 1 line (placeholder)");
+    assert!(
+        image_lines.len() >= 1,
+        "Image should have at least 1 line (placeholder)"
+    );
     // TODO: When we fix this, images should reserve actual height based on image dimensions
 }
 
@@ -296,8 +331,8 @@ fn test_image_size_stable_during_scroll() {
         return;
     }
     // Image should maintain EXACT same size regardless of scroll position
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }
@@ -359,8 +394,8 @@ fn test_image_clips_not_resizes_when_scrolling() {
     // CRITICAL: When scrolling, the image should be CLIPPED (cropped), not RESIZED
     // This means: at any scroll position where the image is visible,
     // the WIDTH should be the same (65% of viewport)
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }
@@ -430,8 +465,8 @@ fn test_image_scrolls_off_top_of_screen() {
     }
     // When we scroll past the image entirely, it should NOT be visible at all
     // (it should scroll off, not stick to the top)
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }
@@ -482,8 +517,8 @@ fn test_image_partially_visible_when_scrolled_off_top() {
     }
     // When image top is scrolled off, the BOTTOM portion should still be visible
     // Image should render at y=0 with reduced height, showing bottom portion (clip_top)
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }
@@ -559,8 +594,8 @@ fn test_image_partially_visible_when_near_bottom() {
     }
     // When image extends past bottom of viewport, it should be clipped
     // but the visible portion should render at FULL WIDTH
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }
@@ -630,8 +665,8 @@ fn test_image_width_is_65_percent_of_viewport() {
         return;
     }
     // Image should be sized to ~65% of viewport width
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }
@@ -642,7 +677,11 @@ fn test_image_width_is_65_percent_of_viewport() {
     let picker = Picker::halfblocks();
     let terminal_width = 80u16;
     let terminal_height = 40u16;
-    let mut model = Model::new(PathBuf::from("test.md"), doc, (terminal_width, terminal_height));
+    let mut model = Model::new(
+        PathBuf::from("test.md"),
+        doc,
+        (terminal_width, terminal_height),
+    );
     model.picker = Some(picker);
     model.load_nearby_images();
 
@@ -840,8 +879,7 @@ fn test_document_reserves_scaled_image_height() {
 
     let reserved_lines = image_ref.line_range.end - image_ref.line_range.start;
     assert_eq!(
-        reserved_lines,
-        *height_rows as usize,
+        reserved_lines, *height_rows as usize,
         "Document should reserve the scaled image height"
     );
 }
@@ -853,8 +891,8 @@ fn test_image_rescales_on_viewport_resize() {
         return;
     }
     // When viewport is resized, images should rescale to maintain 65% of new width
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/test_image.png");
+    let fixture_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_image.png");
     if !fixture_path.exists() {
         return;
     }

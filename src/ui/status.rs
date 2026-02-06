@@ -71,10 +71,9 @@ pub fn render_toast_bar(model: &Model, frame: &mut Frame, area: Rect) {
             "[warn]",
             Style::default().bg(Color::Yellow).fg(Color::Black),
         ),
-        crate::app::ToastLevel::Error => (
-            "[error]",
-            Style::default().bg(Color::Red).fg(Color::White),
-        ),
+        crate::app::ToastLevel::Error => {
+            ("[error]", Style::default().bg(Color::Red).fg(Color::White))
+        }
     };
     let toast = Paragraph::new(format!("{} {}", prefix, message)).style(style);
     frame.render_widget(toast, area);

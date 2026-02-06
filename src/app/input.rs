@@ -1,6 +1,8 @@
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::Frame;
+use ratatui::layout::Rect;
 
 use crate::app::{App, Message, Model};
 
@@ -121,8 +123,8 @@ impl App {
             if in_toc {
                 match mouse.kind {
                     MouseEventKind::Up(MouseButton::Left) => {
-                        let headings_len = model.document.headings().len();
-                        if headings_len == 0 {
+                        let entry_count = model.toc_entry_count();
+                        if entry_count == 0 {
                             return None;
                         }
                         if mouse.row <= toc_area.y
@@ -134,11 +136,11 @@ impl App {
                         if inner_height == 0 {
                             return None;
                         }
-                        let max_start = headings_len.saturating_sub(inner_height);
+                        let max_start = entry_count.saturating_sub(inner_height);
                         let start = model.toc_scroll_offset.min(max_start);
                         let rel_row = (mouse.row - toc_area.y - 1) as usize;
                         let idx = start + rel_row;
-                        if idx < headings_len {
+                        if idx < entry_count {
                             return Some(Message::TocClick(idx));
                         }
                         return None;
@@ -150,7 +152,8 @@ impl App {
                 }
             }
 
-            if !model.selection_dragging() && in_doc && matches!(mouse.kind, MouseEventKind::Moved) {
+            if !model.selection_dragging() && in_doc && matches!(mouse.kind, MouseEventKind::Moved)
+            {
                 if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
                     let content_col = mouse
                         .column
@@ -248,10 +251,13 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => Some(Message::TocUp),
                 KeyCode::Enter | KeyCode::Char(' ') => Some(Message::TocSelect),
                 KeyCode::Char('h') | KeyCode::Left => Some(Message::TocCollapse),
+                KeyCode::Backspace if model.browse_mode => Some(Message::TocCollapse),
                 KeyCode::Char('l') | KeyCode::Right => Some(Message::TocExpand),
                 KeyCode::Tab => Some(Message::SwitchFocus),
                 KeyCode::Char('?') | KeyCode::F(1) => Some(Message::ToggleHelp),
                 KeyCode::Char('t') => Some(Message::ToggleToc),
+                KeyCode::Char('B') => Some(Message::EnterBrowseMode),
+                KeyCode::Char('F') => Some(Message::EnterFileMode),
                 KeyCode::Char('q') => Some(Message::Quit),
                 KeyCode::Esc => Some(Message::SwitchFocus),
                 _ => None,
@@ -310,6 +316,10 @@ impl App {
             KeyCode::Char('t') => Some(Message::ToggleToc),
             KeyCode::Char('T') => Some(Message::ToggleTocFocus),
             KeyCode::Tab if model.toc_visible => Some(Message::SwitchFocus),
+
+            // Browse mode
+            KeyCode::Char('B') => Some(Message::EnterBrowseMode),
+            KeyCode::Char('F') => Some(Message::EnterFileMode),
 
             // File
             KeyCode::Char('w') => Some(Message::ToggleWatch),
@@ -407,18 +417,10 @@ fn document_mouse_area(model: &Model) -> Rect {
 }
 
 fn point_in_rect(col: u16, row: u16, rect: Rect) -> bool {
-    col >= rect.x
-        && col < rect.x + rect.width
-        && row >= rect.y
-        && row < rect.y + rect.height
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
-fn doc_line_for_row(
-    model: &Model,
-    doc_area: Rect,
-    row: u16,
-    clamp: bool,
-) -> Option<usize> {
+fn doc_line_for_row(model: &Model, doc_area: Rect, row: u16, clamp: bool) -> Option<usize> {
     if doc_area.height == 0 || model.document.line_count() == 0 {
         return None;
     }

@@ -26,10 +26,7 @@ mod tests {
         let lines = highlight_code(Some("rust"), code);
 
         assert_eq!(lines.len(), 3);
-        let has_color = lines
-            .iter()
-            .flatten()
-            .any(|span| span.style().fg.is_some());
+        let has_color = lines.iter().flatten().any(|span| span.style().fg.is_some());
         assert!(has_color, "Expected at least one colored span for Rust");
     }
 
@@ -39,10 +36,7 @@ mod tests {
         let lines = highlight_code(Some("nope"), code);
 
         assert_eq!(lines.len(), 1);
-        let has_color = lines
-            .iter()
-            .flatten()
-            .any(|span| span.style().fg.is_some());
+        let has_color = lines.iter().flatten().any(|span| span.style().fg.is_some());
         assert!(!has_color, "Unknown language should not colorize");
     }
 
@@ -58,10 +52,7 @@ mod tests {
     fn test_highlight_does_not_set_background_color() {
         let code = "fn main() {}";
         let lines = highlight_code(Some("rust"), code);
-        let has_bg = lines
-            .iter()
-            .flatten()
-            .any(|span| span.style().bg.is_some());
+        let has_bg = lines.iter().flatten().any(|span| span.style().bg.is_some());
         assert!(!has_bg, "Highlighting should not override background");
     }
 
@@ -105,6 +96,24 @@ mod tests {
     }
 
     #[test]
+    fn test_language_for_file_returns_rust_for_rs() {
+        let lang = language_for_file(std::path::Path::new("foo.rs"));
+        assert_eq!(lang, Some("Rust"));
+    }
+
+    #[test]
+    fn test_language_for_file_returns_none_for_md() {
+        let lang = language_for_file(std::path::Path::new("README.md"));
+        assert!(lang.is_none(), "Markdown files should return None");
+    }
+
+    #[test]
+    fn test_language_for_file_returns_none_for_unknown() {
+        let lang = language_for_file(std::path::Path::new("foo.xyz"));
+        assert!(lang.is_none(), "Unknown extensions should return None");
+    }
+
+    #[test]
     fn test_light_mode_caps_luma_for_readability() {
         let bright = InlineColor {
             r: 240,
@@ -117,6 +126,33 @@ mod tests {
             + (0.0722 * adjusted.b as f32);
         assert!(luma < 120.0, "Adjusted color still too bright: {luma}");
     }
+}
+
+/// Returns the syntax language name for a file path, or `None` if the file
+/// is markdown or has no recognized syntax.
+pub fn language_for_file(path: &std::path::Path) -> Option<&'static str> {
+    let ss = syntax_set();
+    let syntax = ss.find_syntax_for_file(path).ok().flatten()?;
+    if syntax.name == "Markdown" {
+        return None;
+    }
+    // Leak the name so we get a 'static str — the SyntaxSet is 'static anyway.
+    Some(leak_str(&syntax.name))
+}
+
+/// Cache interned strings to avoid leaking duplicates.
+fn leak_str(s: &str) -> &'static str {
+    use std::collections::HashSet;
+
+    static INTERNED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let lock = INTERNED.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut set = lock.lock().expect("intern lock");
+    if let Some(existing) = set.get(s) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    set.insert(leaked);
+    leaked
 }
 
 pub fn highlight_code(language: Option<&str>, code: &str) -> Vec<Vec<InlineSpan>> {
@@ -182,12 +218,9 @@ fn theme() -> &'static Theme {
                 "base16-ocean.dark",
             ]
             .as_slice(),
-            BackgroundMode::Light => [
-                "InspiredGitHub",
-                "Solarized (light)",
-                "base16-ocean.light",
-            ]
-            .as_slice(),
+            BackgroundMode::Light => {
+                ["InspiredGitHub", "Solarized (light)", "base16-ocean.light"].as_slice()
+            }
         };
 
         for name in preferred {
@@ -272,9 +305,8 @@ fn adjust_fg_for_background(color: InlineColor, mode: BackgroundMode) -> InlineC
     match mode {
         BackgroundMode::Dark => color,
         BackgroundMode::Light => {
-            let luma = (0.2126 * color.r as f32)
-                + (0.7152 * color.g as f32)
-                + (0.0722 * color.b as f32);
+            let luma =
+                (0.2126 * color.r as f32) + (0.7152 * color.g as f32) + (0.0722 * color.b as f32);
             if luma < 155.0 {
                 return color;
             }

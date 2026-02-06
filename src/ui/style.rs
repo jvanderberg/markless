@@ -15,32 +15,64 @@ pub fn style_for_line_type(line_type: &LineType) -> Style {
     match line_type {
         // Headings - bold with distinct colors per level
         LineType::Heading(1) => Style::default()
-            .fg(if light_bg { Color::Indexed(24) } else { Color::Cyan })
+            .fg(if light_bg {
+                Color::Indexed(24)
+            } else {
+                Color::Cyan
+            })
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         LineType::Heading(2) => Style::default()
-            .fg(if light_bg { Color::Indexed(22) } else { Color::Green })
+            .fg(if light_bg {
+                Color::Indexed(22)
+            } else {
+                Color::Green
+            })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(3) => Style::default()
-            .fg(if light_bg { Color::Indexed(58) } else { Color::Yellow })
+            .fg(if light_bg {
+                Color::Indexed(58)
+            } else {
+                Color::Yellow
+            })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(4) => Style::default()
-            .fg(if light_bg { Color::Indexed(24) } else { Color::Blue })
+            .fg(if light_bg {
+                Color::Indexed(24)
+            } else {
+                Color::Blue
+            })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(5) => Style::default()
-            .fg(if light_bg { Color::Indexed(54) } else { Color::Magenta })
+            .fg(if light_bg {
+                Color::Indexed(54)
+            } else {
+                Color::Magenta
+            })
             .add_modifier(Modifier::BOLD),
         LineType::Heading(_) => Style::default()
-            .fg(if light_bg { Color::Indexed(24) } else { Color::Cyan })
+            .fg(if light_bg {
+                Color::Indexed(24)
+            } else {
+                Color::Cyan
+            })
             .add_modifier(Modifier::BOLD),
 
         // Code blocks - use a dimmer color, italic for differentiation
         LineType::CodeBlock => Style::default()
-            .fg(if light_bg { Color::Indexed(238) } else { Color::Indexed(245) })
+            .fg(if light_bg {
+                Color::Indexed(238)
+            } else {
+                Color::Indexed(245)
+            })
             .add_modifier(Modifier::DIM),
 
         // Block quotes - italic blue
         LineType::BlockQuote => Style::default()
-            .fg(if light_bg { Color::Indexed(24) } else { Color::Blue })
+            .fg(if light_bg {
+                Color::Indexed(24)
+            } else {
+                Color::Blue
+            })
             .add_modifier(Modifier::ITALIC),
 
         // List items - slightly dimmed bullet, normal text
@@ -51,12 +83,20 @@ pub fn style_for_line_type(line_type: &LineType) -> Style {
 
         // Horizontal rule - dim
         LineType::HorizontalRule => Style::default()
-            .fg(if light_bg { Color::Indexed(241) } else { Color::Indexed(240) })
+            .fg(if light_bg {
+                Color::Indexed(241)
+            } else {
+                Color::Indexed(240)
+            })
             .add_modifier(Modifier::DIM),
 
         // Images - magenta italic to stand out as placeholder
         LineType::Image => Style::default()
-            .fg(if light_bg { Color::Indexed(90) } else { Color::Magenta })
+            .fg(if light_bg {
+                Color::Indexed(90)
+            } else {
+                Color::Magenta
+            })
             .add_modifier(Modifier::ITALIC),
 
         // Normal text
@@ -90,13 +130,21 @@ pub fn style_for_inline(base: Style, inline: InlineStyle) -> Style {
         style = style.add_modifier(Modifier::UNDERLINED);
         if inline.fg.is_none() {
             let light_bg = crate::highlight::is_light_background();
-            style = style.fg(if light_bg { Color::Blue } else { Color::LightBlue });
+            style = style.fg(if light_bg {
+                Color::Blue
+            } else {
+                Color::LightBlue
+            });
         }
     }
     if inline.code && inline.fg.is_none() {
         let light_bg = crate::highlight::is_light_background();
         style = style
-            .fg(if light_bg { Color::Indexed(88) } else { Color::Red })
+            .fg(if light_bg {
+                Color::Indexed(88)
+            } else {
+                Color::Red
+            })
             .add_modifier(Modifier::BOLD);
     }
 
@@ -201,9 +249,7 @@ impl Default for Theme {
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
             code: Style::default().fg(Color::Indexed(245)),
-            inline_code: Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            inline_code: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             quote: Style::default()
                 .fg(Color::Blue)
                 .add_modifier(Modifier::ITALIC),
@@ -331,7 +377,10 @@ mod tests {
 
     #[test]
     fn test_truecolor_detection_with_colorterm() {
-        assert!(supports_truecolor_from_env(Some("truecolor"), Some("xterm-256color")));
+        assert!(supports_truecolor_from_env(
+            Some("truecolor"),
+            Some("xterm-256color")
+        ));
     }
 
     #[test]

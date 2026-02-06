@@ -2,15 +2,15 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
-use ratatui::Terminal;
 use tempfile::tempdir;
 
 use crate::document::Document;
 
-use super::event_loop::ResizeDebouncer;
-use super::{update, App, Message, Model, ToastLevel};
+use super::event_loop::{BrowseDebouncer, ResizeDebouncer};
+use super::{App, Message, Model, ToastLevel, update};
 
 fn create_test_model() -> Model {
     let doc = Document::parse("# Test\n\nHello world").unwrap();
@@ -213,10 +213,7 @@ fn test_selected_text_uses_link_urls_for_copy() {
     model = update(model, Message::EndSelection(0));
 
     let (text, _) = model.selected_text().unwrap();
-    assert_eq!(
-        text,
-        "See https://one.test and https://two.test."
-    );
+    assert_eq!(text, "See https://one.test and https://two.test.");
 }
 
 #[test]
@@ -322,7 +319,10 @@ fn test_resize_reflows_document_using_content_width() {
         .iter()
         .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
         .collect();
-    assert!(paragraph_lines.len() > 1, "expected wrapped paragraph lines");
+    assert!(
+        paragraph_lines.len() > 1,
+        "expected wrapped paragraph lines"
+    );
     for line in paragraph_lines {
         assert!(
             line.content().len() <= 18,
@@ -495,7 +495,10 @@ fn test_search_mode_char_input_appends_query() {
     model = update(model, Message::StartSearch);
     model = update(model, Message::SearchInput("a".to_string()));
 
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+        &model,
+    );
     assert_eq!(msg, Some(Message::SearchInput("an".to_string())));
 }
 
@@ -506,7 +509,10 @@ fn test_search_mode_enter_moves_to_next_match() {
     model = update(model, Message::StartSearch);
     model = update(model, Message::SearchInput("test".to_string()));
 
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &model,
+    );
     assert_eq!(msg, Some(Message::NextMatch));
 }
 
@@ -518,7 +524,10 @@ fn test_toc_focus_space_selects_heading() {
     model.toc_focused = true;
     model.toc_selected = Some(0);
 
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        &model,
+    );
     assert_eq!(msg, Some(Message::TocSelect));
 }
 
@@ -527,7 +536,10 @@ fn test_question_mark_opens_help_when_not_searching() {
     let app = App::new(PathBuf::from("test.md"));
     let model = create_test_model();
 
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+        &model,
+    );
     assert_eq!(msg, Some(Message::ToggleHelp));
 }
 
@@ -537,7 +549,10 @@ fn test_help_mode_esc_closes_help() {
     let mut model = create_test_model();
     model.help_visible = true;
 
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        &model,
+    );
     assert_eq!(msg, Some(Message::HideHelp));
 }
 
@@ -547,7 +562,10 @@ fn test_help_mode_any_key_closes_help() {
     let mut model = create_test_model();
     model.help_visible = true;
 
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &model,
+    );
     assert_eq!(msg, Some(Message::HideHelp));
 }
 
@@ -594,12 +612,8 @@ fn test_mouse_click_on_image_body_emits_follow_message() {
     let app = App::new(PathBuf::from("test.md"));
     let mut heights = std::collections::HashMap::new();
     heights.insert("image.png".to_string(), 3);
-    let doc = Document::parse_with_layout_and_image_heights(
-        "![Alt text](image.png)",
-        80,
-        &heights,
-    )
-    .unwrap();
+    let doc = Document::parse_with_layout_and_image_heights("![Alt text](image.png)", 80, &heights)
+        .unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model.toc_visible = true;
 
@@ -620,12 +634,8 @@ fn test_mouse_click_on_image_body_after_press_emits_follow_message() {
     let app = App::new(PathBuf::from("test.md"));
     let mut heights = std::collections::HashMap::new();
     heights.insert("image.png".to_string(), 3);
-    let doc = Document::parse_with_layout_and_image_heights(
-        "![Alt text](image.png)",
-        80,
-        &heights,
-    )
-    .unwrap();
+    let doc = Document::parse_with_layout_and_image_heights("![Alt text](image.png)", 80, &heights)
+        .unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model.toc_visible = true;
 
@@ -676,12 +686,8 @@ fn test_mouse_hover_on_image_body_emits_hover_message() {
     let app = App::new(PathBuf::from("test.md"));
     let mut heights = std::collections::HashMap::new();
     heights.insert("image.png".to_string(), 3);
-    let doc = Document::parse_with_layout_and_image_heights(
-        "![Alt text](image.png)",
-        80,
-        &heights,
-    )
-    .unwrap();
+    let doc = Document::parse_with_layout_and_image_heights("![Alt text](image.png)", 80, &heights)
+        .unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model.toc_visible = true;
 
@@ -694,10 +700,7 @@ fn test_mouse_hover_on_image_body_emits_hover_message() {
         modifiers: KeyModifiers::NONE,
     };
     let msg = app.handle_mouse(mouse, &model);
-    assert_eq!(
-        msg,
-        Some(Message::HoverLink(Some("image.png".to_string())))
-    );
+    assert_eq!(msg, Some(Message::HoverLink(Some("image.png".to_string()))));
 }
 
 #[test]
@@ -731,7 +734,10 @@ fn test_hover_prefers_link_at_column_when_multiple() {
 fn test_o_key_triggers_open_visible_links_message() {
     let app = App::new(PathBuf::from("test.md"));
     let model = create_test_model();
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+        &model,
+    );
     assert_eq!(msg, Some(Message::OpenVisibleLinks));
 }
 
@@ -775,7 +781,11 @@ fn test_follow_link_on_image_line_uses_image_src() {
 
     let line = 1; // inside image body
     model = update(model, Message::FollowLinkAtLine(line, None));
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::FollowLinkAtLine(line, None));
+    app.handle_message_side_effects(
+        &mut model,
+        &mut watcher,
+        &Message::FollowLinkAtLine(line, None),
+    );
 
     assert!(model.viewport.offset() > 0);
 }
@@ -802,11 +812,17 @@ fn test_follow_link_at_column_picks_correct_link_on_same_line() {
 
     let first_line = model.document.resolve_internal_anchor("first").unwrap();
     let second_line = model.document.resolve_internal_anchor("second").unwrap();
-    assert!(model.viewport.offset() >= second_line.saturating_sub(1),
+    assert!(
+        model.viewport.offset() >= second_line.saturating_sub(1),
         "Should jump near #second (line {}), not #first (line {}), got offset {}",
-        second_line, first_line, model.viewport.offset());
-    assert!(model.viewport.offset() > first_line,
-        "Should have scrolled past #first heading");
+        second_line,
+        first_line,
+        model.viewport.offset()
+    );
+    assert!(
+        model.viewport.offset() > first_line,
+        "Should have scrolled past #first heading"
+    );
 }
 
 #[test]
@@ -858,7 +874,10 @@ fn test_link_picker_key_other_than_number_cancels() {
         line: 0,
     }];
 
-    let msg = app.handle_key(event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE), &model);
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &model,
+    );
     assert_eq!(msg, Some(Message::CancelVisibleLinkPicker));
 }
 
@@ -889,6 +908,35 @@ fn test_resize_debouncer_waits_for_quiet_period() {
 
     assert!(debouncer.take_ready(50).is_none());
     assert_eq!(debouncer.take_ready(100), Some((120, 40)));
+}
+
+#[test]
+fn test_browse_debouncer_waits_for_quiet_period() {
+    let mut debouncer = BrowseDebouncer::new(150);
+    debouncer.queue(3, 0);
+
+    assert!(debouncer.take_ready(100).is_none());
+    assert_eq!(debouncer.take_ready(150), Some(3));
+}
+
+#[test]
+fn test_browse_debouncer_uses_latest_index() {
+    let mut debouncer = BrowseDebouncer::new(150);
+    debouncer.queue(3, 0);
+    debouncer.queue(5, 50);
+
+    assert!(debouncer.take_ready(100).is_none());
+    assert_eq!(debouncer.take_ready(200), Some(5));
+}
+
+#[test]
+fn test_browse_debouncer_cancel_clears_pending() {
+    let mut debouncer = BrowseDebouncer::new(150);
+    debouncer.queue(3, 0);
+    debouncer.cancel();
+
+    assert!(debouncer.take_ready(200).is_none());
+    assert!(!debouncer.is_pending());
 }
 
 #[test]
@@ -968,5 +1016,326 @@ fn paging_perf_test_rendering() {
         "total frame time {:.2}ms exceeded {:.2}ms",
         total_ms,
         total_limit_ms
+    );
+}
+
+// ---- Browse Mode Tests ----
+
+#[test]
+fn test_browse_mode_default_is_false() {
+    let model = create_test_model();
+    assert!(!model.browse_mode);
+    assert!(model.browse_entries.is_empty());
+}
+
+#[test]
+fn test_load_directory_populates_entries() {
+    let dir = tempdir().unwrap();
+    let sub = dir.path().join("subdir");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(dir.path().join("beta.md"), "# Beta").unwrap();
+    std::fs::write(dir.path().join("alpha.md"), "# Alpha").unwrap();
+    std::fs::write(dir.path().join(".hidden"), "secret").unwrap();
+
+    let mut model = create_test_model();
+    model.load_directory(dir.path()).unwrap();
+
+    // canonicalize to handle /private symlink on macOS
+    let expected_dir = dir.path().canonicalize().unwrap();
+    assert_eq!(model.browse_dir, expected_dir);
+    // Should have: "..", "subdir/", "alpha.md", "beta.md" (sorted, hidden skipped)
+    assert!(model.browse_entries.len() >= 3);
+    assert_eq!(model.browse_entries[0].name, "..");
+    assert!(model.browse_entries[0].is_dir);
+    // Dirs before files
+    let first_file_idx = model.browse_entries.iter().position(|e| !e.is_dir).unwrap();
+    assert!(first_file_idx > 1); // ".." + subdir before files
+    // Files are sorted
+    let file_names: Vec<&str> = model
+        .browse_entries
+        .iter()
+        .filter(|e| !e.is_dir)
+        .map(|e| e.name.as_str())
+        .collect();
+    assert_eq!(file_names, vec!["alpha.md", "beta.md"]);
+}
+
+#[test]
+fn test_load_directory_skips_hidden_files() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join(".hidden"), "secret").unwrap();
+    std::fs::write(dir.path().join("visible.md"), "# Hi").unwrap();
+
+    let mut model = create_test_model();
+    model.load_directory(dir.path()).unwrap();
+
+    let names: Vec<&str> = model
+        .browse_entries
+        .iter()
+        .map(|e| e.name.as_str())
+        .collect();
+    assert!(!names.contains(&".hidden"));
+    assert!(names.contains(&"visible.md"));
+}
+
+#[test]
+fn test_toc_entry_count_uses_headings_in_file_mode() {
+    let model = create_test_model();
+    assert!(!model.browse_mode);
+    assert_eq!(model.toc_entry_count(), model.document.headings().len());
+}
+
+#[test]
+fn test_toc_entry_count_uses_browse_entries_in_browse_mode() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), "# A").unwrap();
+    std::fs::write(dir.path().join("b.md"), "# B").unwrap();
+
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.load_directory(dir.path()).unwrap();
+
+    assert_eq!(model.toc_entry_count(), model.browse_entries.len());
+}
+
+#[test]
+fn test_load_file_updates_document() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("doc.md");
+    std::fs::write(&file_path, "# Hello\n\nWorld").unwrap();
+
+    let mut model = create_test_model();
+    model.load_file(&file_path).unwrap();
+
+    assert!(model.document.source().contains("# Hello"));
+    assert_eq!(model.file_path, file_path);
+}
+
+#[test]
+fn test_enter_browse_mode_message() {
+    let mut model = create_test_model();
+    model.browse_mode = false;
+    let model = update(model, Message::EnterBrowseMode);
+    assert!(model.browse_mode);
+    assert!(model.toc_visible);
+}
+
+#[test]
+fn test_enter_file_mode_message() {
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    let model = update(model, Message::EnterFileMode);
+    assert!(!model.browse_mode);
+}
+
+#[test]
+fn test_enter_file_mode_syncs_toc_to_headings() {
+    let mut model = create_many_headings_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.toc_focused = true; // typical for browse mode
+    // Simulate browse mode with toc_selected pointing at a browse entry index
+    // that would be out of range for the headings list
+    model.toc_selected = Some(50);
+    model.toc_scroll_offset = 40;
+
+    let model = update(model, Message::EnterFileMode);
+
+    assert!(!model.browse_mode);
+    // toc_selected should now be valid for headings (synced to viewport position)
+    if let Some(sel) = model.toc_selected {
+        assert!(
+            sel < model.document.headings().len(),
+            "toc_selected {} should be < headings count {}",
+            sel,
+            model.document.headings().len()
+        );
+    }
+    assert!(
+        model.toc_scroll_offset <= model.max_toc_scroll_offset(),
+        "toc_scroll_offset {} should be <= max {}",
+        model.toc_scroll_offset,
+        model.max_toc_scroll_offset()
+    );
+}
+
+#[test]
+fn test_toc_down_in_browse_mode_uses_browse_entries_len() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), "# A").unwrap();
+    std::fs::write(dir.path().join("b.md"), "# B").unwrap();
+
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+    model.toc_selected = Some(0);
+
+    let model = update(model, Message::TocDown);
+    assert_eq!(model.toc_selected, Some(1));
+}
+
+#[test]
+fn test_sync_toc_skipped_in_browse_mode() {
+    let mut model = create_many_headings_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.toc_focused = false;
+    model.toc_selected = Some(0);
+
+    // Scrolling should NOT auto-sync TOC selection in browse mode
+    let model = update(model, Message::ScrollDown(5));
+    assert_eq!(model.toc_selected, Some(0));
+}
+
+#[test]
+fn test_b_key_sends_enter_browse_mode() {
+    let app = App::new(PathBuf::from("test.md"));
+    let model = create_test_model();
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EnterBrowseMode));
+}
+
+#[test]
+fn test_f_key_sends_enter_file_mode() {
+    let app = App::new(PathBuf::from("test.md"));
+    let model = create_test_model();
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EnterFileMode));
+}
+
+#[test]
+fn test_load_file_handles_image_file() {
+    let dir = tempdir().unwrap();
+    let img_path = dir.path().join("photo.png");
+    // Write a minimal valid PNG (1x1 pixel)
+    let png_bytes: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+        0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, // color type, etc
+        0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, // IDAT chunk
+        0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, // compressed data
+        0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, // CRC
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, // IEND chunk
+        0xae, 0x42, 0x60, 0x82, // IEND CRC
+    ];
+    std::fs::write(&img_path, png_bytes).unwrap();
+
+    let mut model = create_test_model();
+    model.load_file(&img_path).unwrap();
+
+    // Document should contain the image reference
+    assert!(
+        model.document.source().contains("![photo.png]"),
+        "Image file should be wrapped as markdown image ref"
+    );
+    assert!(
+        !model.document.images().is_empty(),
+        "Should have an ImageRef"
+    );
+    assert_eq!(model.file_path, img_path);
+}
+
+#[test]
+fn test_browse_auto_load_selects_file_in_listing() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("alpha.md"), "# Alpha").unwrap();
+    std::fs::write(dir.path().join("beta.md"), "# Beta").unwrap();
+
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+
+    // Simulate auto-loading first file (what browse_auto_load_first_file does)
+    let first_file = model
+        .browse_entries
+        .iter()
+        .find(|e| !e.is_dir)
+        .map(|e| e.path.clone())
+        .unwrap();
+    model.load_file(&first_file).unwrap();
+
+    // The loaded file should be selectable by filename comparison
+    let loaded_name = model.file_path.file_name().unwrap().to_string_lossy();
+    let idx = model
+        .browse_entries
+        .iter()
+        .position(|e| e.name == loaded_name);
+    assert!(
+        idx.is_some(),
+        "Should find loaded file '{}' in browse entries by name",
+        loaded_name
+    );
+}
+
+#[test]
+fn test_browse_auto_load_prefers_markdown() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("aaa.txt"), "text file").unwrap();
+    std::fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
+    std::fs::write(dir.path().join("zzz.rs"), "fn main() {}").unwrap();
+
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+
+    // Find the first preferred file (should prefer .md over .txt alphabetically earlier)
+    let preferred = model.first_viewable_file_index();
+    assert!(preferred.is_some(), "Should find a viewable file");
+    let (idx, _) = preferred.unwrap();
+    assert_eq!(
+        model.browse_entries[idx].name, "readme.md",
+        "Should prefer markdown file over alphabetically-earlier txt"
+    );
+}
+
+#[test]
+fn test_browse_toc_backspace_sends_toc_collapse() {
+    let app = App::new(PathBuf::from("test.md"));
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.toc_focused = true;
+    model.toc_selected = Some(0);
+
+    let msg = app.handle_key(
+        event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::TocCollapse));
+}
+
+#[test]
+fn test_browse_navigate_parent_at_root_is_noop() {
+    let app = App::new(PathBuf::from("test.md"));
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.browse_dir = PathBuf::from("/");
+    model.browse_entries = vec![super::model::DirEntry {
+        name: "..".to_string(),
+        path: PathBuf::from("/"),
+        is_dir: true,
+    }];
+    model.toc_selected = Some(0);
+
+    // TocCollapse in browse mode triggers browse_navigate_parent
+    let mut watcher: Option<crate::watcher::FileWatcher> = None;
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::TocCollapse);
+
+    // Should stay at root without error
+    assert_eq!(model.browse_dir, PathBuf::from("/"));
+    assert!(
+        model.active_toast().is_none(),
+        "Should not show error toast"
     );
 }

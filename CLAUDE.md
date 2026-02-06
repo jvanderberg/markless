@@ -69,6 +69,13 @@ cargo fmt                     # Format code
 cargo fmt --check             # Check formatting (CI)
 cargo clippy                  # Lint
 cargo clippy -- -D warnings   # Lint, fail on warnings (CI)
+./scripts/check.sh            # Run all local checks (format + tests)
+```
+
+A pre-commit hook auto-formats staged `.rs` files. To enable:
+
+```bash
+git config core.hooksPath .githooks
 ```
 
 ### Documentation
