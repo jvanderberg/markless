@@ -4,16 +4,18 @@ Markless is a terminal markdown viewer with image support. It is focused on fast
 
 ## Screenshots
 
-![Table of Contents sidebar](<table of contents.png>)
-![Inline image support using Kitty](<image support.png>)
-![Code syntax highlighting](<code highlighting.png>)
-![Table Support](tables.png)
+![Table of Contents sidebar](<images/table of contents.png>)
+![Directory browse mode](<images/browser.png>)
+![Inline image support using Kitty](<images/image support.png>)
+![Code syntax highlighting](<images/code highlighting.png>)
+![Table Support](images/tables.png)
 
 ## Features
 
 - Markdown rendering with headings, lists, tables, block quotes, code blocks, and footnotes
 - Syntax-highlighted code blocks with lazy highlighting for performance
 - Inline images (Kitty, Sixel, iTerm2, and half-block fallback)
+- Directory browse mode with file preview
 - Table of contents sidebar with keyboard and mouse support
 - Search with match navigation and highlight
 - File watching for live reload
@@ -38,8 +40,13 @@ cargo install markless
 ## Usage
 
 ```bash
-markless README.md
+markless README.md          # View a file
+markless .                  # Browse current directory
+markless                    # Browse current directory (default)
+markless src/               # Browse a directory
 ```
+
+When given a directory, markless opens in browse mode: the sidebar shows the file listing and the first markdown file (or first file) is previewed automatically. Navigate with arrow keys, press Enter to open, and Backspace to go to the parent directory.
 
 ## Command Line Options
 
@@ -77,6 +84,11 @@ TOC
 - `T`: toggle + focus TOC
 - `Tab`: switch focus
 - `j` / `k`, arrows, `Enter` / `Space`: navigate + jump
+
+Browse
+- `B`: enter directory browse mode
+- `F`: return to file-only mode (heading TOC)
+- `Backspace`: navigate to parent directory (in TOC)
 
 Other
 - `w`: toggle watch
