@@ -489,6 +489,26 @@ impl Model {
         Ok(())
     }
 
+    /// Return the index and path of the first viewable file in browse_entries,
+    /// preferring markdown files over other types.
+    pub fn first_viewable_file_index(&self) -> Option<(usize, PathBuf)> {
+        // Prefer markdown files
+        if let Some((idx, entry)) = self
+            .browse_entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| !e.is_dir && is_markdown_ext(&e.name))
+        {
+            return Some((idx, entry.path.clone()));
+        }
+        // Fall back to first non-directory entry
+        self.browse_entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| !e.is_dir)
+            .map(|(idx, e)| (idx, e.path.clone()))
+    }
+
     pub(super) fn show_toast(&mut self, level: ToastLevel, message: impl Into<String>) {
         self.toast = Some(Toast {
             level,
@@ -681,6 +701,11 @@ fn clean_selected_line(
         return Some(out);
     }
     Some(content.to_string())
+}
+
+fn is_markdown_ext(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
 }
 
 // Implement Default for Model to allow std::mem::take

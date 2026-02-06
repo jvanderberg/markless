@@ -94,20 +94,6 @@ impl App {
                     }
                 }
             }
-            Message::BrowseOpenFile(path) => {
-                let path = path.clone();
-                if let Err(err) = model.load_file(&path) {
-                    model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
-                }
-            }
-            Message::BrowseEnterDir(path) => {
-                let path = path.clone();
-                if let Err(err) = model.load_directory(&path) {
-                    model.show_toast(ToastLevel::Error, format!("Browse failed: {err}"));
-                } else {
-                    Self::browse_auto_load_first_file(model);
-                }
-            }
             _ => {}
         }
     }
@@ -229,6 +215,10 @@ impl App {
             .parent()
             .unwrap_or(&model.browse_dir)
             .to_path_buf();
+        // Already at filesystem root — nothing to do.
+        if parent == model.browse_dir {
+            return;
+        }
         let old_name = model
             .browse_dir
             .file_name()
@@ -251,13 +241,7 @@ impl App {
     }
 
     fn browse_auto_load_first_file(model: &mut Model) {
-        let first_file = model
-            .browse_entries
-            .iter()
-            .enumerate()
-            .find(|(_, e)| !e.is_dir)
-            .map(|(idx, e)| (idx, e.path.clone()));
-        if let Some((idx, path)) = first_file {
+        if let Some((idx, path)) = model.first_viewable_file_index() {
             if let Err(err) = model.load_file(&path) {
                 model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
             } else {

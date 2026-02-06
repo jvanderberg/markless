@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use crate::app::Model;
 use crate::app::model::{LineSelection, SelectionState};
 
@@ -103,10 +101,6 @@ pub enum Message {
     EnterFileMode,
     /// Switch to browse mode (TOC shows directory listing)
     EnterBrowseMode,
-    /// Open a file from browse mode
-    BrowseOpenFile(PathBuf),
-    /// Enter a directory in browse mode
-    BrowseEnterDir(PathBuf),
 
     // Window
     /// Terminal resized
@@ -376,6 +370,9 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // Browse mode
         Message::EnterFileMode => {
             model.browse_mode = false;
+            // Sync TOC selection to the current viewport so it points at valid
+            // heading indices rather than stale browse-entry indices.
+            model.sync_toc_to_viewport();
         }
         Message::EnterBrowseMode => {
             model.browse_mode = true;
@@ -384,10 +381,6 @@ pub fn update(mut model: Model, msg: Message) -> Model {
                 model.toc_selected = Some(0);
             }
         }
-        Message::BrowseOpenFile(_) | Message::BrowseEnterDir(_) => {
-            // Side effects handled in effects.rs
-        }
-
         // Window
         Message::Resize(width, height) => {
             model.viewport.resize(width, height.saturating_sub(1));

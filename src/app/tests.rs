@@ -1129,6 +1129,37 @@ fn test_enter_file_mode_message() {
 }
 
 #[test]
+fn test_enter_file_mode_syncs_toc_to_headings() {
+    let mut model = create_many_headings_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.toc_focused = true; // typical for browse mode
+    // Simulate browse mode with toc_selected pointing at a browse entry index
+    // that would be out of range for the headings list
+    model.toc_selected = Some(50);
+    model.toc_scroll_offset = 40;
+
+    let model = update(model, Message::EnterFileMode);
+
+    assert!(!model.browse_mode);
+    // toc_selected should now be valid for headings (synced to viewport position)
+    if let Some(sel) = model.toc_selected {
+        assert!(
+            sel < model.document.headings().len(),
+            "toc_selected {} should be < headings count {}",
+            sel,
+            model.document.headings().len()
+        );
+    }
+    assert!(
+        model.toc_scroll_offset <= model.max_toc_scroll_offset(),
+        "toc_scroll_offset {} should be <= max {}",
+        model.toc_scroll_offset,
+        model.max_toc_scroll_offset()
+    );
+}
+
+#[test]
 fn test_toc_down_in_browse_mode_uses_browse_entries_len() {
     let dir = tempdir().unwrap();
     std::fs::write(dir.path().join("a.md"), "# A").unwrap();
@@ -1246,6 +1277,28 @@ fn test_browse_auto_load_selects_file_in_listing() {
 }
 
 #[test]
+fn test_browse_auto_load_prefers_markdown() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("aaa.txt"), "text file").unwrap();
+    std::fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
+    std::fs::write(dir.path().join("zzz.rs"), "fn main() {}").unwrap();
+
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+
+    // Find the first preferred file (should prefer .md over .txt alphabetically earlier)
+    let preferred = model.first_viewable_file_index();
+    assert!(preferred.is_some(), "Should find a viewable file");
+    let (idx, _) = preferred.unwrap();
+    assert_eq!(
+        model.browse_entries[idx].name, "readme.md",
+        "Should prefer markdown file over alphabetically-earlier txt"
+    );
+}
+
+#[test]
 fn test_browse_toc_backspace_sends_toc_collapse() {
     let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
@@ -1259,4 +1312,30 @@ fn test_browse_toc_backspace_sends_toc_collapse() {
         &model,
     );
     assert_eq!(msg, Some(Message::TocCollapse));
+}
+
+#[test]
+fn test_browse_navigate_parent_at_root_is_noop() {
+    let app = App::new(PathBuf::from("test.md"));
+    let mut model = create_test_model();
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.browse_dir = PathBuf::from("/");
+    model.browse_entries = vec![super::model::DirEntry {
+        name: "..".to_string(),
+        path: PathBuf::from("/"),
+        is_dir: true,
+    }];
+    model.toc_selected = Some(0);
+
+    // TocCollapse in browse mode triggers browse_navigate_parent
+    let mut watcher: Option<crate::watcher::FileWatcher> = None;
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::TocCollapse);
+
+    // Should stay at root without error
+    assert_eq!(model.browse_dir, PathBuf::from("/"));
+    assert!(
+        model.active_toast().is_none(),
+        "Should not show error toast"
+    );
 }
