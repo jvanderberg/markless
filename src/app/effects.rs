@@ -59,8 +59,8 @@ impl App {
             Message::OpenVisibleLinks => {
                 self.open_visible_links(model);
             }
-            Message::FollowLinkAtLine(line) => {
-                self.follow_link_on_line(model, *line);
+            Message::FollowLinkAtLine(line, col) => {
+                self.follow_link_on_line(model, *line, *col);
             }
             Message::SelectVisibleLink(index) => {
                 self.follow_link_picker_index(model, *index);
@@ -108,7 +108,15 @@ impl App {
         self.follow_resolved_link(model, &url);
     }
 
-    fn follow_link_on_line(&self, model: &mut Model, line: usize) {
+    fn follow_link_on_line(&self, model: &mut Model, line: usize, col: Option<usize>) {
+        if let Some(col) = col {
+            if let Some(link) = self.link_at_column(model, line, col) {
+                let url = link.url.clone();
+                model.link_picker_items.clear();
+                self.follow_resolved_link(model, &url);
+                return;
+            }
+        }
         if let Some(link) = model.document.links().iter().find(|link| link.line == line) {
             let url = link.url.clone();
             model.link_picker_items.clear();
@@ -184,10 +192,13 @@ fn open_external_link(url: &str) -> std::io::Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::process::Stdio;
         std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
-            .spawn()?
-            .wait()?;
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
         return Ok(());
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

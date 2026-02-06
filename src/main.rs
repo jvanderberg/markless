@@ -76,21 +76,23 @@ struct Cli {
 
 // Query the terminal background using OSC 11.
 // We talk to /dev/tty so the terminal responds even when stdout is piped.
+// On non-Unix platforms we skip the query entirely because the fallback
+// (stdin/stdout) leaves an orphaned reader thread that blocks the console
+// input buffer, preventing crossterm from receiving any keyboard events.
+#[cfg(not(unix))]
+fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
+    Ok(None)
+}
+
+#[cfg(unix)]
 fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
     use std::io::{Read, Write};
     use std::sync::mpsc;
 
     let (tx, rx) = mpsc::channel();
 
-    #[cfg(unix)]
     let mut io = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")?;
-    #[cfg(unix)]
     let reader = io.try_clone()?;
-
-    #[cfg(not(unix))]
-    let mut io = std::io::stdout();
-    #[cfg(not(unix))]
-    let reader = std::io::stdin();
 
     // OSC 11 query: ESC ] 11 ; ? BEL
     io.write_all(b"\x1b]11;?\x07")?;

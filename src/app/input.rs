@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
@@ -15,7 +15,7 @@ impl App {
         resize_debouncer: &mut ResizeDebouncer,
     ) -> Option<Message> {
         match event {
-            Event::Key(key) => self.handle_key(key, model),
+            Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key, model),
             Event::Mouse(mouse) => self.handle_mouse(mouse, model),
             Event::Resize(w, h) => {
                 crate::perf::log_event("event.resize.queue", format!("width={} height={}", w, h));
@@ -91,12 +91,12 @@ impl App {
                             .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
                             as usize;
                         if self.link_at_column(model, line, content_col).is_some() {
-                            return Some(Message::FollowLinkAtLine(line));
+                            return Some(Message::FollowLinkAtLine(line, Some(content_col)));
                         }
                         if image_at_line(model, line) {
-                            return Some(Message::FollowLinkAtLine(line));
+                            return Some(Message::FollowLinkAtLine(line, None));
                         }
-                        return Some(Message::EndSelection(line));
+                        return Some(Message::ClearSelection);
                     }
                     return Some(Message::ClearSelection);
                 }
@@ -178,10 +178,10 @@ impl App {
                     .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
                     as usize;
                 if self.link_at_column(model, line, content_col).is_some() {
-                    return Some(Message::FollowLinkAtLine(line));
+                    return Some(Message::FollowLinkAtLine(line, Some(content_col)));
                 }
                 if image_at_line(model, line) {
-                    return Some(Message::FollowLinkAtLine(line));
+                    return Some(Message::FollowLinkAtLine(line, None));
                 }
             }
         }
@@ -336,7 +336,7 @@ impl App {
         crate::ui::render(model, frame);
     }
 
-    fn link_at_column(
+    pub(super) fn link_at_column(
         &self,
         model: &Model,
         line: usize,

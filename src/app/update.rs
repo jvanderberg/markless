@@ -79,8 +79,8 @@ pub enum Message {
     ClearSearch,
     /// Open visible-link picker (or follow directly when single link)
     OpenVisibleLinks,
-    /// Follow link on an exact rendered line
-    FollowLinkAtLine(usize),
+    /// Follow link on an exact rendered line, optionally at a specific column
+    FollowLinkAtLine(usize, Option<usize>),
     /// Follow numbered link in the picker
     SelectVisibleLink(u8),
     /// Close visible-link picker
@@ -309,7 +309,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.search_match_index = None;
             model.search_allow_short = false;
         }
-        Message::OpenVisibleLinks | Message::FollowLinkAtLine(_) | Message::SelectVisibleLink(_) => {
+        Message::OpenVisibleLinks | Message::FollowLinkAtLine(_, _) | Message::SelectVisibleLink(_) => {
             model.clear_selection();
             // side effect in event loop
         }

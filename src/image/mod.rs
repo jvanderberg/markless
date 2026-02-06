@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
 use ratatui_image::picker::Picker;
+#[cfg(unix)]
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
 
 const PICKER_QUERY_TIMEOUT_MS: u64 = 250;
@@ -30,19 +31,31 @@ pub fn create_picker(force_half_cell: bool) -> Option<Picker> {
         return Some(Picker::halfblocks());
     }
 
+    // On Windows, skip the stdio capability query — it can leave orphaned reader
+    // threads on the console input buffer, causing the app to lock up in some
+    // terminals (e.g. Fluent Terminal). Fall back to half-block rendering.
+    #[cfg(not(unix))]
+    {
+        crate::perf::log_event("image.create_picker", "windows fallback protocol=Halfblocks");
+        return Some(Picker::halfblocks());
+    }
+
     // Try to create a picker, which will detect the terminal's capabilities
-    let picker = Picker::from_query_stdio_with_options(query_options()).ok()?;
-    crate::perf::log_event(
-        "image.create_picker",
-        format!(
-            "term_program={} term={} colorterm={} protocol={:?}",
-            std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "<unset>".to_string()),
-            std::env::var("TERM").unwrap_or_else(|_| "<unset>".to_string()),
-            std::env::var("COLORTERM").unwrap_or_else(|_| "<unset>".to_string()),
-            picker.protocol_type()
-        ),
-    );
-    Some(picker)
+    #[cfg(unix)]
+    {
+        let picker = Picker::from_query_stdio_with_options(query_options()).ok()?;
+        crate::perf::log_event(
+            "image.create_picker",
+            format!(
+                "term_program={} term={} colorterm={} protocol={:?}",
+                std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "<unset>".to_string()),
+                std::env::var("TERM").unwrap_or_else(|_| "<unset>".to_string()),
+                std::env::var("COLORTERM").unwrap_or_else(|_| "<unset>".to_string()),
+                picker.protocol_type()
+            ),
+        );
+        Some(picker)
+    }
 }
 
 /// Load an image from a file path relative to a base directory.
@@ -90,6 +103,7 @@ pub fn quantize_to_ansi256(image: &DynamicImage) -> DynamicImage {
     DynamicImage::ImageRgba8(out)
 }
 
+#[cfg(unix)]
 fn query_options() -> QueryStdioOptions {
     QueryStdioOptions {
         timeout: Duration::from_millis(PICKER_QUERY_TIMEOUT_MS),

@@ -567,7 +567,7 @@ fn test_mouse_click_on_doc_link_emits_follow_message() {
         modifiers: KeyModifiers::NONE,
     };
     let msg = app.handle_mouse(mouse, &model);
-    assert_eq!(msg, Some(Message::FollowLinkAtLine(0)));
+    assert_eq!(msg, Some(Message::FollowLinkAtLine(0, Some(0))));
 }
 
 #[test]
@@ -586,7 +586,7 @@ fn test_mouse_click_on_image_emits_follow_message() {
         modifiers: KeyModifiers::NONE,
     };
     let msg = app.handle_mouse(mouse, &model);
-    assert_eq!(msg, Some(Message::FollowLinkAtLine(0)));
+    assert_eq!(msg, Some(Message::FollowLinkAtLine(0, Some(0))));
 }
 
 #[test]
@@ -612,7 +612,7 @@ fn test_mouse_click_on_image_body_emits_follow_message() {
         modifiers: KeyModifiers::NONE,
     };
     let msg = app.handle_mouse(mouse, &model);
-    assert_eq!(msg, Some(Message::FollowLinkAtLine(1)));
+    assert_eq!(msg, Some(Message::FollowLinkAtLine(1, Some(0))));
 }
 
 #[test]
@@ -646,7 +646,7 @@ fn test_mouse_click_on_image_body_after_press_emits_follow_message() {
     let _ = app.handle_mouse(down, &model);
     let model = update(model, Message::StartSelection(1));
     let msg = app.handle_mouse(up, &model);
-    assert_eq!(msg, Some(Message::FollowLinkAtLine(1)));
+    assert_eq!(msg, Some(Message::FollowLinkAtLine(1, Some(0))));
 }
 
 #[test]
@@ -774,10 +774,39 @@ fn test_follow_link_on_image_line_uses_image_src() {
     let mut watcher = None;
 
     let line = 1; // inside image body
-    model = update(model, Message::FollowLinkAtLine(line));
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::FollowLinkAtLine(line));
+    model = update(model, Message::FollowLinkAtLine(line, None));
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::FollowLinkAtLine(line, None));
 
     assert!(model.viewport.offset() > 0);
+}
+
+#[test]
+fn test_follow_link_at_column_picks_correct_link_on_same_line() {
+    // Two links on the same rendered line pointing to different anchors.
+    // Clicking on the second link's column should jump to #second, not #first.
+    let md = "[First](#first) [Second](#second)\n\n\
+              filler\n\nfiller\n\nfiller\n\nfiller\n\nfiller\n\n\
+              ## First\n\n## Second";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
+    let app = App::new(PathBuf::from("test.md"));
+    let mut watcher = None;
+
+    let link_line = model.document.links()[0].line;
+    // Rendered text is "First Second"; "Second" starts at column 6
+    let col = 6;
+
+    let msg = Message::FollowLinkAtLine(link_line, Some(col));
+    model = update(model, msg.clone());
+    app.handle_message_side_effects(&mut model, &mut watcher, &msg);
+
+    let first_line = model.document.resolve_internal_anchor("first").unwrap();
+    let second_line = model.document.resolve_internal_anchor("second").unwrap();
+    assert!(model.viewport.offset() >= second_line.saturating_sub(1),
+        "Should jump near #second (line {}), not #first (line {}), got offset {}",
+        second_line, first_line, model.viewport.offset());
+    assert!(model.viewport.offset() > first_line,
+        "Should have scrolled past #first heading");
 }
 
 #[test]
