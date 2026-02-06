@@ -65,7 +65,10 @@ pub fn global_config_path() -> PathBuf {
             return PathBuf::from(xdg).join("markless").join("config");
         }
         if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(".config").join("markless").join("config");
+            return PathBuf::from(home)
+                .join(".config")
+                .join("markless")
+                .join("config");
         }
     }
 

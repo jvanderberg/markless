@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use markless::config::{
-    load_config_flags, parse_flag_tokens, ConfigFlags, ThemeMode,
-};
+use markless::config::{ConfigFlags, ThemeMode, load_config_flags, parse_flag_tokens};
 
 #[test]
 fn test_config_file_parsing_ignores_comments_and_blank_lines() {
@@ -43,7 +41,11 @@ fn test_cli_flags_override_file_flags() {
     let effective = file_flags.union(&cli_flags);
     assert!(effective.watch, "file flags should remain enabled");
     assert!(effective.force_half_cell, "cli flags should be applied");
-    assert_eq!(effective.theme, Some(ThemeMode::Dark), "cli should override theme");
+    assert_eq!(
+        effective.theme,
+        Some(ThemeMode::Dark),
+        "cli should override theme"
+    );
     assert_eq!(
         effective.render_debug_log,
         Some(PathBuf::from("file.log")),

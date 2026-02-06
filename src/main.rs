@@ -18,19 +18,19 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use markless::app::App;
 use markless::config::{
-    clear_config_flags, global_config_path, load_config_flags, local_override_path,
-    parse_flag_tokens, save_config_flags, ConfigFlags, ThemeMode,
+    ConfigFlags, ThemeMode, clear_config_flags, global_config_path, load_config_flags,
+    local_override_path, parse_flag_tokens, save_config_flags,
 };
-use markless::highlight::{set_background_mode, HighlightBackground};
+use markless::highlight::{HighlightBackground, set_background_mode};
 use markless::perf;
 
 /// A terminal markdown viewer with image support
 #[derive(Parser, Debug)]
 #[command(name = "markless", version, about, long_about = None)]
 struct Cli {
-    /// Markdown file to view
-    #[arg(value_name = "FILE")]
-    file: PathBuf,
+    /// Markdown file or directory to view
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
 
     /// Watch file for changes and auto-reload
     #[arg(short, long)]
@@ -71,7 +71,6 @@ struct Cli {
     /// Clear saved defaults in .marklessrc
     #[arg(long)]
     clear: bool,
-
 }
 
 // Query the terminal background using OSC 11.
@@ -91,7 +90,10 @@ fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
 
     let (tx, rx) = mpsc::channel();
 
-    let mut io = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+    let mut io = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")?;
     let reader = io.try_clone()?;
 
     // OSC 11 query: ESC ] 11 ; ? BEL
@@ -107,8 +109,7 @@ fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
                 Ok(0) => continue,
                 Ok(n) => {
                     collected.extend_from_slice(&buf[..n]);
-                    if collected.contains(&b'\x07')
-                        || collected.windows(2).any(|w| w == b"\x1b\\")
+                    if collected.contains(&b'\x07') || collected.windows(2).any(|w| w == b"\x1b\\")
                     {
                         let _ = tx.send(collected);
                         break;
@@ -148,7 +149,10 @@ fn detect_theme() -> Option<HighlightBackground> {
     let _raw = enable_raw_mode();
     let result = query_terminal_background();
     let _ = disable_raw_mode();
-    result.ok().flatten().map(|(r, g, b)| theme_from_rgb(r, g, b))
+    result
+        .ok()
+        .flatten()
+        .map(|(r, g, b)| theme_from_rgb(r, g, b))
 }
 
 fn relaunch_with_theme(mode: HighlightBackground, raw_args: &[String]) -> Result<()> {
@@ -215,7 +219,11 @@ fn parse_osc11_reply(reply: &str) -> Option<(u8, u8, u8)> {
     let r = parts.next()?;
     let g = parts.next()?;
     let b = parts.next()?;
-    Some((parse_osc_component(r)?, parse_osc_component(g)?, parse_osc_component(b)?))
+    Some((
+        parse_osc_component(r)?,
+        parse_osc_component(g)?,
+        parse_osc_component(b)?,
+    ))
 }
 
 fn parse_osc_component(s: &str) -> Option<u8> {
@@ -287,17 +295,20 @@ fn main() -> Result<()> {
         ThemeMode::Dark => set_background_mode(Some(HighlightBackground::Dark)),
     }
 
-    // Verify file exists
-    if !cli.file.exists() {
-        anyhow::bail!("File not found: {}", cli.file.display());
+    // Verify path exists
+    if !cli.path.exists() {
+        anyhow::bail!("Path not found: {}", cli.path.display());
     }
 
+    let is_directory = cli.path.is_dir();
+
     // Run the application
-    let mut app = App::new(cli.file)
+    let mut app = App::new(cli.path)
         .with_watch(effective.watch)
         .with_toc_visible(effective.toc && !effective.no_toc)
         .with_force_half_cell(effective.force_half_cell)
         .with_images_enabled(!effective.no_images)
+        .with_browse_mode(is_directory)
         .with_config_paths(
             Some(global_path.clone()),
             if local_path.exists() {

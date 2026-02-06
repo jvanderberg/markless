@@ -10,7 +10,7 @@ mod loader;
 mod protocol;
 
 pub use loader::{ImageCache, ImageLoader};
-pub use protocol::{detect_protocol, ImageProtocol};
+pub use protocol::{ImageProtocol, detect_protocol};
 
 use std::path::Path;
 use std::time::Duration;
@@ -27,7 +27,10 @@ const PICKER_QUERY_TIMEOUT_MS: u64 = 250;
 /// The picker detects terminal capabilities and chooses the best protocol.
 pub fn create_picker(force_half_cell: bool) -> Option<Picker> {
     if force_half_cell {
-        crate::perf::log_event("image.create_picker", "force_half_cell=true protocol=Halfblocks");
+        crate::perf::log_event(
+            "image.create_picker",
+            "force_half_cell=true protocol=Halfblocks",
+        );
         return Some(Picker::halfblocks());
     }
 
@@ -36,7 +39,10 @@ pub fn create_picker(force_half_cell: bool) -> Option<Picker> {
     // terminals (e.g. Fluent Terminal). Fall back to half-block rendering.
     #[cfg(not(unix))]
     {
-        crate::perf::log_event("image.create_picker", "windows fallback protocol=Halfblocks");
+        crate::perf::log_event(
+            "image.create_picker",
+            "windows fallback protocol=Halfblocks",
+        );
         return Some(Picker::halfblocks());
     }
 
@@ -180,7 +186,10 @@ mod tests {
 
     #[test]
     fn test_supports_truecolor_from_env_detects_24bit() {
-        assert!(supports_truecolor_from_env(Some("truecolor"), Some("xterm-256color")));
+        assert!(supports_truecolor_from_env(
+            Some("truecolor"),
+            Some("xterm-256color")
+        ));
         assert!(supports_truecolor_from_env(Some("24BIT"), Some("screen")));
     }
 
@@ -195,5 +204,4 @@ mod tests {
         let quantized = quantize_to_ansi256(&image).to_rgba8();
         assert_eq!(quantized.get_pixel(0, 0)[3], 77);
     }
-
 }

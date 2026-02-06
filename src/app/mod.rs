@@ -26,6 +26,7 @@ pub struct App {
     images_enabled: bool,
     config_global_path: Option<PathBuf>,
     config_local_path: Option<PathBuf>,
+    browse_mode: bool,
 }
 
 impl App {
@@ -39,6 +40,7 @@ impl App {
             images_enabled: true,
             config_global_path: None,
             config_local_path: None,
+            browse_mode: false,
         }
     }
 
@@ -63,6 +65,12 @@ impl App {
     /// Enable or disable inline image rendering.
     pub fn with_images_enabled(mut self, enabled: bool) -> Self {
         self.images_enabled = enabled;
+        self
+    }
+
+    /// Enable directory browse mode.
+    pub fn with_browse_mode(mut self, enabled: bool) -> Self {
+        self.browse_mode = enabled;
         self
     }
 

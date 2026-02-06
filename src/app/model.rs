@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -28,6 +28,17 @@ struct Toast {
     level: ToastLevel,
     message: String,
     expires_at: Instant,
+}
+
+/// A directory entry shown in the browse-mode TOC.
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    /// Display name (filename or "..")
+    pub name: String,
+    /// Full path to the entry
+    pub path: PathBuf,
+    /// Whether this entry is a directory
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +116,12 @@ pub struct Model {
     pub selection: Option<LineSelection>,
     /// Whether inline images are enabled
     pub images_enabled: bool,
+    /// Whether directory browse mode is active
+    pub browse_mode: bool,
+    /// Current directory being browsed
+    pub browse_dir: PathBuf,
+    /// Directory entries shown in browse-mode TOC
+    pub browse_entries: Vec<DirEntry>,
 }
 
 impl std::fmt::Debug for Model {
@@ -134,7 +151,7 @@ impl Model {
                 total_lines,
             ),
             file_path,
-            base_dir,
+            base_dir: base_dir.clone(),
             toc_visible: false,
             toc_selected: None,
             toc_scroll_offset: 0,
@@ -161,6 +178,9 @@ impl Model {
             force_half_cell: false,
             selection: None,
             images_enabled: true,
+            browse_mode: false,
+            browse_dir: base_dir.clone(),
+            browse_entries: Vec::new(),
         }
     }
 
@@ -237,15 +257,15 @@ impl Model {
 
             if needs_protocol {
                 // Try to get original image from cache, or load from disk
-                let original: Option<DynamicImage> = if let Some(img) = self.original_images.get(&src)
-                {
-                    Some(img.clone())
-                } else if let Some(img) = loader.load_sync(&src) {
-                    self.original_images.insert(src.clone(), img.clone());
-                    Some(img)
-                } else {
-                    None
-                };
+                let original: Option<DynamicImage> =
+                    if let Some(img) = self.original_images.get(&src) {
+                        Some(img.clone())
+                    } else if let Some(img) = loader.load_sync(&src) {
+                        self.original_images.insert(src.clone(), img.clone());
+                        Some(img)
+                    } else {
+                        None
+                    };
 
                 if let Some(img) = original {
                     // Scale to fit target width, preserving aspect ratio
@@ -348,15 +368,24 @@ impl Model {
         self.viewport.height().saturating_sub(1) as usize
     }
 
+    /// Number of entries in the TOC pane (browse entries or headings).
+    pub fn toc_entry_count(&self) -> usize {
+        if self.browse_mode {
+            self.browse_entries.len()
+        } else {
+            self.document.headings().len()
+        }
+    }
+
     pub(super) fn max_toc_scroll_offset(&self) -> usize {
-        self.document
-            .headings()
-            .len()
+        self.toc_entry_count()
             .saturating_sub(self.toc_visible_rows())
     }
 
     pub(super) fn sync_toc_to_viewport(&mut self) {
-        let Some(selected) = closest_heading_to_line(self.document.headings(), self.viewport.offset()) else {
+        let Some(selected) =
+            closest_heading_to_line(self.document.headings(), self.viewport.offset())
+        else {
             self.toc_selected = None;
             self.toc_scroll_offset = 0;
             return;
@@ -378,6 +407,86 @@ impl Model {
             refresh_search_matches(self, false, allow_short);
             self.clamp_selection();
         }
+    }
+
+    /// Scan a directory and populate browse_entries.
+    pub fn load_directory(&mut self, dir: &Path) -> Result<()> {
+        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        self.browse_dir = dir.clone();
+        self.browse_entries.clear();
+
+        // Add parent directory entry
+        self.browse_entries.push(DirEntry {
+            name: "..".to_string(),
+            path: dir.parent().unwrap_or(&dir).to_path_buf(),
+            is_dir: true,
+        });
+
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Skip hidden files/dirs
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let is_dir = entry.file_type()?.is_dir();
+            if is_dir {
+                dirs.push(DirEntry { name, path, is_dir });
+            } else {
+                files.push(DirEntry {
+                    name,
+                    path,
+                    is_dir: false,
+                });
+            }
+        }
+
+        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        self.browse_entries.extend(dirs);
+        self.browse_entries.extend(files);
+        self.toc_scroll_offset = 0;
+
+        Ok(())
+    }
+
+    /// Load a file into the document area.
+    pub fn load_file(&mut self, path: &Path) -> Result<()> {
+        let content = if crate::document::is_image_file(path) {
+            crate::document::image_markdown(path)
+        } else {
+            let raw = std::fs::read_to_string(path)?;
+            crate::document::prepare_content(path, raw)
+        };
+        let document = Document::parse_with_layout_and_image_heights(
+            &content,
+            self.layout_width(),
+            &self.image_layout_heights,
+        )?;
+        self.file_path = path.to_path_buf();
+        self.base_dir = path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.document = document;
+
+        // Clear image caches for old file
+        self.image_protocols.clear();
+        self.original_images.clear();
+        self.image_layout_heights.clear();
+
+        self.viewport.set_total_lines(self.document.line_count());
+        self.viewport.go_to_top();
+        self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
+        let allow_short = self.search_allow_short;
+        refresh_search_matches(self, false, allow_short);
+        self.clamp_selection();
+        Ok(())
     }
 
     pub(super) fn show_toast(&mut self, level: ToastLevel, message: impl Into<String>) {
@@ -411,7 +520,12 @@ impl Model {
     }
 
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
-        let content = std::fs::read_to_string(&self.file_path)?;
+        let content = if crate::document::is_image_file(&self.file_path) {
+            crate::document::image_markdown(&self.file_path)
+        } else {
+            let raw = std::fs::read_to_string(&self.file_path)?;
+            crate::document::prepare_content(&self.file_path, raw)
+        };
         let document = Document::parse_with_layout_and_image_heights(
             &content,
             self.layout_width(),
@@ -603,6 +717,9 @@ impl Default for Model {
             force_half_cell: false,
             selection: None,
             images_enabled: true,
+            browse_mode: false,
+            browse_dir: PathBuf::from("."),
+            browse_entries: Vec::new(),
         }
     }
 }

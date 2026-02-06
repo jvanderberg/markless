@@ -1,4 +1,4 @@
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -7,7 +7,7 @@ use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use ratatui::DefaultTerminal;
 
-use crate::app::{update, App, Message, Model, ToastLevel};
+use crate::app::{App, Message, Model, ToastLevel, update};
 use crate::watcher::FileWatcher;
 
 pub(super) struct ResizeDebouncer {
@@ -42,6 +42,42 @@ impl ResizeDebouncer {
     }
 }
 
+pub(super) struct BrowseDebouncer {
+    delay_ms: u64,
+    pending: Option<(usize, u64)>,
+}
+
+impl BrowseDebouncer {
+    pub(super) fn new(delay_ms: u64) -> Self {
+        Self {
+            delay_ms,
+            pending: None,
+        }
+    }
+
+    pub(super) fn queue(&mut self, idx: usize, now_ms: u64) {
+        self.pending = Some((idx, now_ms));
+    }
+
+    pub(super) fn take_ready(&mut self, now_ms: u64) -> Option<usize> {
+        let (idx, queued_at) = self.pending?;
+        if now_ms.saturating_sub(queued_at) >= self.delay_ms {
+            self.pending = None;
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn cancel(&mut self) {
+        self.pending = None;
+    }
+
+    pub(super) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+}
+
 impl App {
     /// Run the main event loop.
     pub fn run(&mut self) -> Result<()> {
@@ -57,9 +93,27 @@ impl App {
             None
         };
 
+        // Determine the file to load (may be overridden in browse mode)
+        let initial_file = if self.browse_mode {
+            self.find_first_viewable_file(&self.file_path.clone())
+        } else {
+            Some(self.file_path.clone())
+        };
+
         // Load the document
         let _read_scope = crate::perf::scope("app.read_file");
-        let content = std::fs::read_to_string(&self.file_path)?;
+        let (content, effective_file) = if let Some(ref file) = initial_file {
+            let c = if crate::document::is_image_file(file) {
+                crate::document::image_markdown(file)
+            } else {
+                let raw = std::fs::read_to_string(file)?;
+                crate::document::prepare_content(file, raw)
+            };
+            (c, file.clone())
+        } else {
+            // No viewable file found; show empty document
+            (String::new(), self.file_path.clone())
+        };
         drop(_read_scope);
 
         // Initialize terminal
@@ -69,19 +123,39 @@ impl App {
         drop(_init_scope);
 
         let _parse_scope = crate::perf::scope("app.parse_with_layout");
-        let layout_width = crate::ui::document_content_width(size.width, self.toc_visible);
+        let toc_visible = self.toc_visible || self.browse_mode;
+        let layout_width = crate::ui::document_content_width(size.width, toc_visible);
         let document = crate::document::Document::parse_with_layout(&content, layout_width)?;
         drop(_parse_scope);
 
         // Create initial model
-        let mut model = Model::new(self.file_path.clone(), document, (size.width, size.height))
-            .with_picker(picker);
+        let mut model =
+            Model::new(effective_file, document, (size.width, size.height)).with_picker(picker);
         model.watch_enabled = self.watch_enabled;
-        model.toc_visible = self.toc_visible;
+        model.toc_visible = toc_visible;
         model.force_half_cell = self.force_half_cell;
         model.images_enabled = self.images_enabled;
         model.config_global_path = self.config_global_path.clone();
         model.config_local_path = self.config_local_path.clone();
+
+        // Initialize browse mode
+        if self.browse_mode {
+            model.browse_mode = true;
+            model.toc_focused = true;
+            let browse_dir = self.file_path.clone();
+            if let Err(err) = model.load_directory(&browse_dir) {
+                model.show_toast(ToastLevel::Warning, format!("Browse failed: {err}"));
+            } else if let Some(ref file) = initial_file {
+                // Highlight the loaded file in the listing (compare by name
+                // since load_directory canonicalizes paths)
+                if let Some(name) = file.file_name() {
+                    let name = name.to_string_lossy();
+                    if let Some(idx) = model.browse_entries.iter().position(|e| e.name == *name) {
+                        model.toc_selected = Some(idx);
+                    }
+                }
+            }
+        }
 
         // Pre-load images from the document
         let _images_scope = crate::perf::scope("app.load_nearby_images.initial");
@@ -97,6 +171,53 @@ impl App {
         ratatui::restore();
 
         result
+    }
+
+    /// Find the first viewable file in a directory.
+    fn find_first_viewable_file(&self, dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return None;
+        };
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_type().ok().is_some_and(|ft| ft.is_file())
+                    && !e.file_name().to_string_lossy().starts_with('.')
+            })
+            .map(|e| e.path())
+            .collect();
+        files.sort();
+        // Prefer markdown files
+        if let Some(md) = files.iter().find(|f| {
+            f.extension()
+                .is_some_and(|ext| ext == "md" || ext == "markdown")
+        }) {
+            return Some(md.clone());
+        }
+        files.into_iter().next()
+    }
+
+    fn update_browse_debouncer(
+        &self,
+        model: &Model,
+        msg: &Message,
+        now_ms: u64,
+        debouncer: &mut BrowseDebouncer,
+    ) {
+        if !model.browse_mode {
+            return;
+        }
+        match msg {
+            Message::TocUp | Message::TocDown | Message::TocScrollUp | Message::TocScrollDown => {
+                if let Some(sel) = model.toc_selected {
+                    debouncer.queue(sel, now_ms);
+                }
+            }
+            Message::TocSelect | Message::TocClick(_) | Message::TocExpand => {
+                debouncer.cancel();
+            }
+            _ => {}
+        }
     }
 
     fn event_loop(&self, terminal: &mut DefaultTerminal, model: &mut Model) -> Result<()> {
@@ -118,6 +239,7 @@ impl App {
         } else {
             None
         };
+        let mut browse_debouncer = BrowseDebouncer::new(400);
         let mut frame_idx: u64 = 0;
         let mut needs_render = true;
         let mut mouse_capture_enabled = false;
@@ -158,6 +280,20 @@ impl App {
                 needs_render = true;
             }
 
+            // Auto-load file in browse mode after navigation settles
+            if let Some(sel) = browse_debouncer.take_ready(now_ms) {
+                if model.browse_mode {
+                    if let Some(entry) = model.browse_entries.get(sel).cloned() {
+                        if !entry.is_dir {
+                            if let Err(err) = model.load_file(&entry.path) {
+                                model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
+                            }
+                            needs_render = true;
+                        }
+                    }
+                }
+            }
+
             if model.watch_enabled
                 && file_watcher
                     .as_mut()
@@ -181,30 +317,44 @@ impl App {
             // Handle events
             let poll_ms = if needs_render {
                 0
-            } else if resize_debouncer.is_pending() {
+            } else if resize_debouncer.is_pending() || browse_debouncer.is_pending() {
                 10
             } else {
                 250
             };
             if event::poll(Duration::from_millis(poll_ms))? {
-                let msg = self.handle_event(event::read()?, model, now_ms, &mut resize_debouncer);
+                // Refresh timestamp after poll wait so debouncers use accurate times.
+                let event_ms = start.elapsed().as_millis() as u64;
+                let msg = self.handle_event(event::read()?, model, event_ms, &mut resize_debouncer);
                 if let Some(msg) = msg {
-                    crate::perf::log_event("event.message", format!("frame={} msg={msg:?}", frame_idx));
+                    crate::perf::log_event(
+                        "event.message",
+                        format!("frame={} msg={msg:?}", frame_idx),
+                    );
                     let side_msg = msg.clone();
                     *model = update(std::mem::take(model), msg);
                     self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
+                    self.update_browse_debouncer(model, &side_msg, event_ms, &mut browse_debouncer);
                     needs_render = true;
                 }
 
                 // Coalesce key repeat bursts into a single render.
                 let mut drained = 0_u32;
                 while event::poll(Duration::from_millis(0))? {
-                    let msg = self.handle_event(event::read()?, model, now_ms, &mut resize_debouncer);
+                    let drain_ms = start.elapsed().as_millis() as u64;
+                    let msg =
+                        self.handle_event(event::read()?, model, drain_ms, &mut resize_debouncer);
                     if let Some(msg) = msg {
                         drained += 1;
                         let side_msg = msg.clone();
                         *model = update(std::mem::take(model), msg);
                         self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
+                        self.update_browse_debouncer(
+                            model,
+                            &side_msg,
+                            drain_ms,
+                            &mut browse_debouncer,
+                        );
                         needs_render = true;
                     }
                 }

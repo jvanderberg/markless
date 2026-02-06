@@ -3,12 +3,13 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
-static DEBUG_LOGGER: LazyLock<Mutex<DebugLogger>> = LazyLock::new(|| Mutex::new(DebugLogger::new()));
+static DEBUG_LOGGER: LazyLock<Mutex<DebugLogger>> =
+    LazyLock::new(|| Mutex::new(DebugLogger::new()));
 
 #[derive(Debug)]
 pub struct Scope {

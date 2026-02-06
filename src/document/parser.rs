@@ -182,11 +182,7 @@ fn process_node<'a>(
 
             if !child_images.is_empty() {
                 for (alt, src) in child_images {
-                    let height_lines = image_heights
-                        .get(&src)
-                        .copied()
-                        .unwrap_or(1)
-                        .max(1);
+                    let height_lines = image_heights.get(&src).copied().unwrap_or(1).max(1);
                     let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
                     let start_line = lines.len();
                     let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
@@ -254,7 +250,10 @@ fn process_node<'a>(
             let top = format!(
                 "┌{}{}┐",
                 visible_label,
-                "─".repeat(frame_inner_width.saturating_sub(UnicodeWidthStr::width(visible_label.as_str())))
+                "─".repeat(
+                    frame_inner_width
+                        .saturating_sub(UnicodeWidthStr::width(visible_label.as_str()))
+                )
             );
             lines.push(RenderedLine::new(top, LineType::CodeBlock));
 
@@ -529,11 +528,7 @@ fn process_node<'a>(
             let src = image.url.clone();
             let line_num = lines.len();
             let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
-            let height_lines = image_heights
-                .get(&src)
-                .copied()
-                .unwrap_or(1)
-                .max(1);
+            let height_lines = image_heights.get(&src).copied().unwrap_or(1).max(1);
             let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
 
             images.push(ImageRef {
@@ -619,7 +614,10 @@ fn render_blockquote<'a>(
             _ => {
                 let text = extract_text(child);
                 for raw_line in text.lines() {
-                    let spans = vec![InlineSpan::new(raw_line.to_string(), InlineStyle::default())];
+                    let spans = vec![InlineSpan::new(
+                        raw_line.to_string(),
+                        InlineStyle::default(),
+                    )];
                     let wrapped = wrap_spans(&spans, wrap_width, &prefix, &prefix);
                     for line_spans in wrapped {
                         let content = spans_to_string(&line_spans);
@@ -1172,7 +1170,10 @@ fn wrap_spans(
     }
 
     if current.is_empty() && !prefix_first.is_empty() {
-        current.push(InlineSpan::new(prefix_first.to_string(), InlineStyle::default()));
+        current.push(InlineSpan::new(
+            prefix_first.to_string(),
+            InlineStyle::default(),
+        ));
     }
 
     lines.push(current);
@@ -1279,7 +1280,10 @@ fn collect_paragraph_images<'a>(node: &'a AstNode<'a>) -> Vec<(String, String)> 
     images
 }
 
-fn collect_paragraph_images_recursive<'a>(node: &'a AstNode<'a>, images: &mut Vec<(String, String)>) {
+fn collect_paragraph_images_recursive<'a>(
+    node: &'a AstNode<'a>,
+    images: &mut Vec<(String, String)>,
+) {
     match &node.data.borrow().value {
         NodeValue::Image(image) => {
             let alt = extract_text(node);
@@ -1464,8 +1468,16 @@ mod tests {
             .filter(|l| *l.line_type() == LineType::Table)
             .collect();
         assert!(!table_lines.is_empty());
-        assert!(table_lines.iter().any(|l| l.content().contains("A") && l.content().contains("B")));
-        assert!(table_lines.iter().any(|l| l.content().contains("1") && l.content().contains("2")));
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("A") && l.content().contains("B"))
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("1") && l.content().contains("2"))
+        );
         assert!(table_lines.iter().any(|l| l.content().contains('│')));
         assert!(table_lines.iter().any(|l| l.content().contains("───┼───")));
     }
@@ -1486,7 +1498,8 @@ mod tests {
 
     #[test]
     fn test_gfm_table_with_emoji_respects_layout_width() {
-        let md = "| Feature | Status |\n|---|---|\n| Bold | ✅ Supported |\n| Italic | ✅ Supported |";
+        let md =
+            "| Feature | Status |\n|---|---|\n| Bold | ✅ Supported |\n| Italic | ✅ Supported |";
         let doc = Document::parse_with_layout(md, 28).unwrap();
         let lines = doc.visible_lines(0, 20);
         for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
@@ -1650,7 +1663,11 @@ mod tests {
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 20);
         assert!(lines.iter().any(|l| l.content().contains("[^q]")));
-        assert!(lines.iter().any(|l| l.content().contains("[^q] Footnote text")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.content().contains("[^q] Footnote text"))
+        );
     }
 
     #[test]
@@ -1659,7 +1676,11 @@ mod tests {
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 20);
         assert!(lines.iter().any(|l| l.content().contains("[^n]")));
-        assert!(lines.iter().any(|l| l.content().contains("[^n] Footnote text")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.content().contains("[^n] Footnote text"))
+        );
     }
 
     #[test]
@@ -1764,7 +1785,8 @@ mod tests {
         assert!(code_lines.last().unwrap().content().starts_with('└'));
         assert!(code_lines.last().unwrap().content().ends_with('┘'));
         assert!(code_lines.iter().any(|l| l.content().starts_with("│ ")));
-        let top_width = unicode_width::UnicodeWidthStr::width(code_lines.first().unwrap().content());
+        let top_width =
+            unicode_width::UnicodeWidthStr::width(code_lines.first().unwrap().content());
         for line in &code_lines {
             assert_eq!(
                 unicode_width::UnicodeWidthStr::width(line.content()),

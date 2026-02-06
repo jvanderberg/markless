@@ -4,7 +4,9 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use crate::app::Model;
 use crate::document::LineType;
 
-use super::{images, overlays, status, DOCUMENT_LEFT_PADDING, DOC_WIDTH_PERCENT, TOC_WIDTH_PERCENT};
+use super::{
+    DOC_WIDTH_PERCENT, DOCUMENT_LEFT_PADDING, TOC_WIDTH_PERCENT, images, overlays, status,
+};
 
 pub fn split_main_columns(area: Rect) -> std::rc::Rc<[Rect]> {
     Layout::default()
@@ -47,6 +49,14 @@ pub fn render(model: &mut Model, frame: &mut Frame) {
 }
 
 fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
+    if model.browse_mode {
+        render_browse_toc(model, frame, area);
+    } else {
+        render_heading_toc(model, frame, area);
+    }
+}
+
+fn render_heading_toc(model: &Model, frame: &mut Frame, area: Rect) {
     let headings = model.document.headings();
     let visible_rows = area.height.saturating_sub(2) as usize;
     let max_start = headings.len().saturating_sub(visible_rows);
@@ -60,7 +70,11 @@ fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
         .take(end.saturating_sub(start))
         .map(|(i, h)| {
             let indent = "  ".repeat(h.level.saturating_sub(1) as usize);
-            let marker = if model.toc_selected == Some(i) { ">" } else { " " };
+            let marker = if model.toc_selected == Some(i) {
+                ">"
+            } else {
+                " "
+            };
             let base_style = super::style::style_for_line_type(&LineType::Heading(h.level));
             let style = if model.toc_selected == Some(i) {
                 base_style.reversed()
@@ -84,6 +98,64 @@ fn render_toc(model: &Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(toc, area);
 }
 
+fn render_browse_toc(model: &Model, frame: &mut Frame, area: Rect) {
+    let entries = &model.browse_entries;
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let max_start = entries.len().saturating_sub(visible_rows);
+    let start = model.toc_scroll_offset.min(max_start);
+    let end = (start + visible_rows).min(entries.len());
+
+    let items: Vec<Line> = entries
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .map(|(i, entry)| {
+            let marker = if model.toc_selected == Some(i) {
+                ">"
+            } else {
+                " "
+            };
+            let display_name = if entry.is_dir && entry.name != ".." {
+                format!("{}/", entry.name)
+            } else {
+                entry.name.clone()
+            };
+            let style = if entry.is_dir {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let style = if model.toc_selected == Some(i) {
+                style.reversed()
+            } else {
+                style
+            };
+            Line::styled(format!("{} {}", marker, display_name), style)
+        })
+        .collect();
+
+    let title = model
+        .browse_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| model.browse_dir.display().to_string());
+
+    let toc_block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(if model.toc_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        });
+
+    let toc = Paragraph::new(items).block(toc_block);
+    frame.render_widget(toc, area);
+}
+
 fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     let search_active = model.search_query.is_some();
     let toast_active = model.active_toast().is_some();
@@ -96,17 +168,12 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
         ..area
     };
     let search_area = Rect {
-        y: area
-            .y
-            + area
-                .height
-                .saturating_sub(1 + u16::from(search_active)),
+        y: area.y + area.height.saturating_sub(1 + u16::from(search_active)),
         height: 1,
         ..area
     };
     let toast_area = Rect {
-        y: area
-            .y
+        y: area.y
             + area
                 .height
                 .saturating_sub(1 + u16::from(search_active) + u16::from(toast_active)),
@@ -151,7 +218,11 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
                     )
                 })
                 .collect::<Vec<_>>();
-            if let Some(query) = model.search_query.as_deref().filter(|q| q.chars().count() >= 3) {
+            if let Some(query) = model
+                .search_query
+                .as_deref()
+                .filter(|q| q.chars().count() >= 3)
+            {
                 styled_spans = highlight_spans(&styled_spans, query);
             }
             if selected {
@@ -160,7 +231,11 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
             content.push(Line::from(styled_spans));
         } else {
             let mut styled_spans = vec![Span::styled(line.content().to_string(), line_style)];
-            if let Some(query) = model.search_query.as_deref().filter(|q| q.chars().count() >= 3) {
+            if let Some(query) = model
+                .search_query
+                .as_deref()
+                .filter(|q| q.chars().count() >= 3)
+            {
                 styled_spans = highlight_spans(&styled_spans, query);
             }
             if selected {
