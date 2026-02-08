@@ -14,8 +14,12 @@ pub fn render_hover_link_bar(model: &Model, frame: &mut Frame, area: Rect) {
 
 pub fn render_search_bar(model: &Model, frame: &mut Frame, area: Rect) {
     let query = model.search_query.as_deref().unwrap_or_default();
+    let large_file = model.document.line_count() > 10_000;
+    let deferred = large_file && model.search_match_count() == 0 && !query.trim().is_empty();
     let match_info = if query.trim().is_empty() {
         String::new()
+    } else if deferred {
+        "  [Enter to search]".to_string()
     } else if let Some((current, total)) = model.current_search_match() {
         format!("  [{current}/{total}]")
     } else {

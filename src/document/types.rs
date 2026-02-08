@@ -3,6 +3,17 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// Backing store for lazy hex dump rendering.
+#[derive(Debug, Clone)]
+pub struct HexData {
+    /// Raw file bytes
+    bytes: Vec<u8>,
+    /// Number of header lines (heading, blank, size, blank)
+    header_line_count: usize,
+    /// Cached rendered hex lines: (start_index, lines)
+    cached_range: Option<(usize, Vec<RenderedLine>)>,
+}
+
 /// A parsed and rendered markdown document.
 #[derive(Debug, Clone)]
 pub struct Document {
@@ -20,6 +31,8 @@ pub struct Document {
     footnotes: HashMap<String, usize>,
     /// Code blocks for lazy syntax highlighting
     code_blocks: Vec<CodeBlockRef>,
+    /// Optional hex data for lazy binary file rendering
+    hex_data: Option<HexData>,
 }
 
 impl Document {
@@ -33,6 +46,7 @@ impl Document {
             links: Vec::new(),
             footnotes: HashMap::new(),
             code_blocks: Vec::new(),
+            hex_data: None,
         }
     }
 
@@ -54,12 +68,71 @@ impl Document {
             links,
             footnotes,
             code_blocks,
+            hex_data: None,
+        }
+    }
+
+    /// Create a hex document from raw bytes.
+    ///
+    /// Stores header lines (heading + size info) in `self.lines` and raw bytes
+    /// in `hex_data` for lazy hex line generation on demand.
+    pub fn from_hex(file_name: &str, bytes: Vec<u8>) -> Self {
+        let size = bytes.len();
+        let mut lines = Vec::new();
+        let mut headings = Vec::new();
+
+        // Line 0: Heading
+        headings.push(HeadingRef {
+            level: 1,
+            text: file_name.to_string(),
+            line: 0,
+            id: None,
+        });
+        lines.push(RenderedLine::new(
+            file_name.to_string(),
+            LineType::Heading(1),
+        ));
+        // Line 1: blank
+        lines.push(RenderedLine::new(String::new(), LineType::Empty));
+        // Line 2: size info
+        lines.push(RenderedLine::new(
+            format!("Binary file — {size} bytes"),
+            LineType::Paragraph,
+        ));
+        // Line 3: blank
+        lines.push(RenderedLine::new(String::new(), LineType::Empty));
+
+        let header_line_count = lines.len();
+
+        Self {
+            source: String::new(),
+            lines,
+            headings,
+            images: Vec::new(),
+            links: Vec::new(),
+            footnotes: HashMap::new(),
+            code_blocks: Vec::new(),
+            hex_data: Some(HexData {
+                bytes,
+                header_line_count,
+                cached_range: None,
+            }),
         }
     }
 
     /// Get the total number of rendered lines.
     pub fn line_count(&self) -> usize {
-        self.lines.len()
+        if let Some(hex) = &self.hex_data {
+            let hex_lines = (hex.bytes.len() + 15) / 16;
+            hex.header_line_count + hex_lines
+        } else {
+            self.lines.len()
+        }
+    }
+
+    /// Returns true if this document uses lazy hex rendering.
+    pub fn is_hex_mode(&self) -> bool {
+        self.hex_data.is_some()
     }
 
     /// Get all headings for TOC.
@@ -104,17 +177,103 @@ impl Document {
     ///
     /// Returns lines from `offset` to `offset + count`.
     pub fn visible_lines(&self, offset: usize, count: usize) -> Vec<&RenderedLine> {
-        self.lines.iter().skip(offset).take(count).collect()
+        if self.hex_data.is_some() {
+            let total = self.line_count();
+            (offset..total)
+                .take(count)
+                .filter_map(|i| self.line_at(i))
+                .collect()
+        } else {
+            self.lines.iter().skip(offset).take(count).collect()
+        }
     }
 
     /// Get a specific rendered line by index.
     pub fn line_at(&self, index: usize) -> Option<&RenderedLine> {
-        self.lines.get(index)
+        if let Some(hex) = &self.hex_data {
+            if index < hex.header_line_count {
+                return self.lines.get(index);
+            }
+            let hex_idx = index - hex.header_line_count;
+            if let Some((cache_start, ref cached)) = hex.cached_range {
+                if hex_idx >= cache_start && hex_idx < cache_start + cached.len() {
+                    return cached.get(hex_idx - cache_start);
+                }
+            }
+            None
+        } else {
+            self.lines.get(index)
+        }
     }
 
     /// Get the source text.
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// Generate the text content for a hex line at the given document index.
+    ///
+    /// Returns the header line content for header indices, or generates the
+    /// hex dump line on the fly for hex indices. Returns `None` if out of range.
+    /// Unlike `line_at`, this does not require the cache to be populated.
+    pub fn hex_line_content(&self, index: usize) -> Option<String> {
+        let hex = self.hex_data.as_ref()?;
+        if index < hex.header_line_count {
+            return self.lines.get(index).map(|l| l.content().to_string());
+        }
+        let hex_idx = index - hex.header_line_count;
+        let byte_offset = hex_idx * 16;
+        if byte_offset >= hex.bytes.len() {
+            return None;
+        }
+        let byte_end = (byte_offset + 16).min(hex.bytes.len());
+        let chunk = &hex.bytes[byte_offset..byte_end];
+        Some(super::format_single_hex_line(chunk, byte_offset))
+    }
+
+    /// Ensure hex lines are cached for the given document line range.
+    ///
+    /// Generates hex dump lines for the viewport plus a buffer on each side.
+    /// The range is in terms of overall document line indices (including headers).
+    pub fn ensure_hex_lines_for_range(&mut self, range: Range<usize>) {
+        let Some(hex) = &self.hex_data else { return };
+        let header = hex.header_line_count;
+        let total_hex_lines = (hex.bytes.len() + 15) / 16;
+        if total_hex_lines == 0 {
+            return;
+        }
+
+        // Convert document line range to hex line indices
+        let hex_start = range.start.saturating_sub(header);
+        let hex_end = range.end.saturating_sub(header).min(total_hex_lines);
+        if hex_start >= hex_end {
+            return;
+        }
+
+        // Add a 200-line buffer on each side
+        let buffer = 200;
+        let cache_start = hex_start.saturating_sub(buffer);
+        let cache_end = (hex_end + buffer).min(total_hex_lines);
+
+        // Check if current cache already covers the requested range
+        if let Some((cs, ref cached)) = hex.cached_range {
+            if cs <= hex_start && cs + cached.len() >= hex_end {
+                return;
+            }
+        }
+
+        // Generate the cached lines
+        let mut cached = Vec::with_capacity(cache_end - cache_start);
+        let bytes = &self.hex_data.as_ref().unwrap().bytes;
+        for hex_idx in cache_start..cache_end {
+            let byte_offset = hex_idx * 16;
+            let byte_end = (byte_offset + 16).min(bytes.len());
+            let chunk = &bytes[byte_offset..byte_end];
+            let text = super::format_single_hex_line(chunk, byte_offset);
+            cached.push(RenderedLine::new(text, LineType::CodeBlock));
+        }
+
+        self.hex_data.as_mut().unwrap().cached_range = Some((cache_start, cached));
     }
 
     /// Lazily apply syntax highlighting to code blocks intersecting `range`.
@@ -447,5 +606,100 @@ mod tests {
 
         let visible = doc.visible_lines(0, 10);
         assert_eq!(visible.len(), 2);
+    }
+
+    #[test]
+    fn test_hex_document_line_count() {
+        // 48 bytes = 3 hex lines, plus header lines (heading + blank + size + blank)
+        let bytes = vec![0xAB; 48];
+        let doc = Document::from_hex("test.bin", bytes);
+        // Header: heading, blank, size info, blank = 4 lines
+        // Hex: ceil(48/16) = 3 lines
+        assert_eq!(doc.line_count(), 4 + 3);
+        assert!(doc.is_hex_mode());
+    }
+
+    #[test]
+    fn test_hex_document_line_count_partial() {
+        // 17 bytes = 2 hex lines (16 + 1)
+        let bytes = vec![0xAB; 17];
+        let doc = Document::from_hex("test.bin", bytes);
+        assert_eq!(doc.line_count(), 4 + 2);
+    }
+
+    #[test]
+    fn test_hex_document_line_at_header() {
+        let bytes = vec![0xAB; 16];
+        let doc = Document::from_hex("test.bin", bytes);
+        // Header line 0 should be the heading
+        let line = doc.line_at(0).unwrap();
+        assert_eq!(*line.line_type(), LineType::Heading(1));
+        assert!(line.content().contains("test.bin"));
+    }
+
+    #[test]
+    fn test_hex_document_line_at_hex_after_ensure() {
+        let bytes = vec![0x41; 32]; // 'A' * 32 = 2 hex lines
+        let mut doc = Document::from_hex("test.bin", bytes);
+        doc.ensure_hex_lines_for_range(0..10);
+        // Hex line at index 4 (first after header)
+        let line = doc.line_at(4).unwrap();
+        assert!(line.content().contains("41 41 41 41"));
+        assert_eq!(*line.line_type(), LineType::CodeBlock);
+    }
+
+    #[test]
+    fn test_hex_document_visible_lines() {
+        let bytes = vec![0x42; 48]; // 3 hex lines
+        let mut doc = Document::from_hex("test.bin", bytes);
+        doc.ensure_hex_lines_for_range(0..10);
+        let visible = doc.visible_lines(0, 7);
+        assert_eq!(visible.len(), 7); // 4 header + 3 hex
+    }
+
+    #[test]
+    fn test_hex_document_is_not_hex_mode_for_normal() {
+        let doc = Document::empty();
+        assert!(!doc.is_hex_mode());
+    }
+
+    #[test]
+    fn test_hex_document_empty_bytes() {
+        let doc = Document::from_hex("empty.bin", vec![]);
+        assert_eq!(doc.line_count(), 4); // header only, 0 hex lines
+        assert!(doc.is_hex_mode());
+    }
+
+    #[test]
+    fn test_hex_document_paging_with_ensure() {
+        // Simulate paging: 1600 bytes = 100 hex lines + 4 header = 104 total
+        let bytes = vec![0xAB; 1600];
+        let mut doc = Document::from_hex("test.bin", bytes);
+        assert_eq!(doc.line_count(), 104);
+
+        // Page 1: offset 0, height 24
+        doc.ensure_hex_lines_for_range(0..72);
+        let v = doc.visible_lines(0, 24);
+        assert_eq!(v.len(), 24, "first page should have 24 visible lines");
+
+        // Page down: offset 24
+        doc.ensure_hex_lines_for_range(0..96);
+        let v = doc.visible_lines(24, 24);
+        assert_eq!(v.len(), 24, "second page should have 24 visible lines");
+
+        // Page far down: offset 80
+        doc.ensure_hex_lines_for_range(32..152);
+        let v = doc.visible_lines(80, 24);
+        assert_eq!(v.len(), 24, "later page should have 24 visible lines");
+    }
+
+    #[test]
+    fn test_hex_reflow_is_noop() {
+        // Reflow (re-parsing source) should not crash for hex documents.
+        // Hex documents have no meaningful source markdown.
+        let doc = Document::from_hex("test.bin", vec![0x42; 16]);
+        assert!(doc.is_hex_mode());
+        // line_count should be stable
+        assert_eq!(doc.line_count(), 5); // 4 header + 1 hex
     }
 }

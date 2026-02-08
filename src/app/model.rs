@@ -328,6 +328,15 @@ impl Model {
         }
     }
 
+    /// Ensure hex lines are cached for the current viewport with overscan.
+    pub fn ensure_hex_overscan(&mut self) {
+        let height = self.viewport.height() as usize;
+        let extra = height * 2;
+        let start = self.viewport.offset().saturating_sub(extra);
+        let end = (self.viewport.offset() + height + extra).min(self.document.line_count());
+        self.document.ensure_hex_lines_for_range(start..end);
+    }
+
     pub fn ensure_highlight_overscan(&mut self) {
         let height = self.viewport.height() as usize;
         let extra = height * 2;
@@ -397,6 +406,10 @@ impl Model {
     }
 
     pub(super) fn reflow_layout(&mut self) {
+        // Hex mode documents have fixed-width layout — no reflow needed.
+        if self.document.is_hex_mode() {
+            return;
+        }
         if let Ok(document) = Document::parse_with_layout_and_image_heights(
             self.document.source(),
             self.layout_width(),
@@ -459,17 +472,9 @@ impl Model {
 
     /// Load a file into the document area.
     pub fn load_file(&mut self, path: &Path) -> Result<()> {
-        let content = if crate::document::is_image_file(path) {
-            crate::document::image_markdown(path)
-        } else {
-            let raw = std::fs::read_to_string(path)?;
-            crate::document::prepare_content(path, raw)
-        };
-        let document = Document::parse_with_layout_and_image_heights(
-            &content,
-            self.layout_width(),
-            &self.image_layout_heights,
-        )?;
+        let raw_bytes = std::fs::read(path)?;
+        let document =
+            crate::document::prepare_document_from_bytes(path, raw_bytes, self.layout_width());
         self.file_path = path.to_path_buf();
         self.base_dir = path
             .parent()
@@ -542,17 +547,12 @@ impl Model {
     }
 
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
-        let content = if crate::document::is_image_file(&self.file_path) {
-            crate::document::image_markdown(&self.file_path)
-        } else {
-            let raw = std::fs::read_to_string(&self.file_path)?;
-            crate::document::prepare_content(&self.file_path, raw)
-        };
-        let document = Document::parse_with_layout_and_image_heights(
-            &content,
+        let raw_bytes = std::fs::read(&self.file_path)?;
+        let document = crate::document::prepare_document_from_bytes(
+            &self.file_path,
+            raw_bytes,
             self.layout_width(),
-            &self.image_layout_heights,
-        )?;
+        );
         self.document = document;
 
         // Drop cached image entries that are no longer present in the document.
