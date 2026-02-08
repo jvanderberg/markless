@@ -54,7 +54,8 @@ When given a directory, markless opens in browse mode: the sidebar shows the fil
 - `--no-toc`  Hide the table of contents sidebar
 - `--toc`  Start with TOC visible
 - `--no-images`  Disable inline image rendering (show placeholders only)
-- `--force-half-cell`  Force half-cell image rendering (debug)
+- `--image-mode <kitty|sixel|iterm2|halfblock>`  Force a specific image rendering protocol
+- `--force-half-cell`  Force half-cell image rendering (shortcut for `--image-mode halfblock`)
 - `--theme <auto|light|dark>`  Force highlight theme background
 - `--perf`  Enable startup performance logging
 - `--render-debug-log <PATH>`  Write render/image debug events to a file
