@@ -6,8 +6,10 @@ use crate::app::Model;
 
 pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
     // Render images to temp buffer, copy visible portion to frame
+    // Terminal scroll offsets fit in i32
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     let vp_top = model.viewport.offset() as i32;
-    let vp_bottom = vp_top + doc_area.height as i32;
+    let vp_bottom = vp_top + i32::from(doc_area.height);
     let image_scroll_settling = model.is_image_scroll_settling();
     crate::perf::log_event(
         "render.document",
@@ -33,8 +35,10 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
         let img_width = *img_width;
         let img_height = *img_height;
 
+        // Terminal line indices fit in i32
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let img_top = img_ref.line_range.start as i32;
-        let img_bottom = img_top + img_height as i32;
+        let img_bottom = img_top + i32::from(img_height);
 
         // Skip if no overlap with viewport
         if img_bottom <= vp_top || img_top >= vp_bottom {
@@ -50,8 +54,12 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
 
         // Calculate which rows of temp buffer are visible
         let rel_y = img_top - vp_top;
+        // Values are clamped non-negative and bounded by terminal dimensions
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let src_start = (-rel_y).max(0) as u16;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let dst_y = doc_area.y + rel_y.max(0) as u16;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let visible_rows = (img_bottom.min(vp_bottom) - img_top.max(vp_top)) as u16;
         let visible_cols = img_width.min(doc_area.width);
         if visible_rows == 0 || visible_cols == 0 {
@@ -172,7 +180,9 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
 }
 
 fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
-    let to_cube = |v: u8| ((v as u16 * 5) / 255) as u8;
+    // Result is always 0-5, fits in u8
+    #[allow(clippy::cast_possible_truncation)]
+    let to_cube = |v: u8| ((u16::from(v) * 5) / 255) as u8;
     let ri = to_cube(r);
     let gi = to_cube(g);
     let bi = to_cube(b);

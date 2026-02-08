@@ -33,7 +33,7 @@ pub struct App {
 
 impl App {
     /// Create a new application for the given file.
-    pub fn new(file_path: PathBuf) -> Self {
+    pub const fn new(file_path: PathBuf) -> Self {
         Self {
             file_path,
             watch_enabled: false,
@@ -47,36 +47,42 @@ impl App {
     }
 
     /// Enable or disable file watching.
-    pub fn with_watch(mut self, enabled: bool) -> Self {
+    #[must_use]
+    pub const fn with_watch(mut self, enabled: bool) -> Self {
         self.watch_enabled = enabled;
         self
     }
 
     /// Set initial TOC visibility.
-    pub fn with_toc_visible(mut self, visible: bool) -> Self {
+    #[must_use]
+    pub const fn with_toc_visible(mut self, visible: bool) -> Self {
         self.toc_visible = visible;
         self
     }
 
     /// Force a specific image rendering mode, bypassing auto-detection.
-    pub fn with_image_mode(mut self, mode: Option<ImageMode>) -> Self {
+    #[must_use]
+    pub const fn with_image_mode(mut self, mode: Option<ImageMode>) -> Self {
         self.image_mode = mode;
         self
     }
 
     /// Enable or disable inline image rendering.
-    pub fn with_images_enabled(mut self, enabled: bool) -> Self {
+    #[must_use]
+    pub const fn with_images_enabled(mut self, enabled: bool) -> Self {
         self.images_enabled = enabled;
         self
     }
 
     /// Enable directory browse mode.
-    pub fn with_browse_mode(mut self, enabled: bool) -> Self {
+    #[must_use]
+    pub const fn with_browse_mode(mut self, enabled: bool) -> Self {
         self.browse_mode = enabled;
         self
     }
 
     /// Set config paths to show in help.
+    #[must_use]
     pub fn with_config_paths(
         mut self,
         global_path: Option<PathBuf>,

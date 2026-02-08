@@ -75,12 +75,6 @@ pub fn style_for_line_type(line_type: &LineType) -> Style {
             })
             .add_modifier(Modifier::ITALIC),
 
-        // List items - slightly dimmed bullet, normal text
-        LineType::ListItem(_) => Style::default(),
-
-        // Tables - normal style
-        LineType::Table => Style::default(),
-
         // Horizontal rule - dim
         LineType::HorizontalRule => Style::default()
             .fg(if light_bg {
@@ -99,8 +93,10 @@ pub fn style_for_line_type(line_type: &LineType) -> Style {
             })
             .add_modifier(Modifier::ITALIC),
 
-        // Normal text
-        LineType::Paragraph | LineType::Empty => Style::default(),
+        // List items, tables, paragraphs, empty lines - normal style
+        LineType::ListItem(_) | LineType::Table | LineType::Paragraph | LineType::Empty => {
+            Style::default()
+        }
     }
 }
 
@@ -187,7 +183,9 @@ fn supports_truecolor_from_env(colorterm: Option<&str>, term: Option<&str>) -> b
 }
 
 fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
-    let to_cube = |v: u8| ((v as u16 * 5) / 255) as u8;
+    // Result is always 0-5, fits in u8
+    #[allow(clippy::cast_possible_truncation)]
+    let to_cube = |v: u8| ((u16::from(v) * 5) / 255) as u8;
     let ri = to_cube(r);
     let gi = to_cube(g);
     let bi = to_cube(b);

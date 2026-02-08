@@ -49,6 +49,7 @@ pub struct ConfigFlags {
 }
 
 impl ConfigFlags {
+    #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         Self {
             watch: self.watch || other.watch,
@@ -106,6 +107,10 @@ pub fn local_override_path() -> PathBuf {
     PathBuf::from(".marklessrc")
 }
 
+/// Load configuration flags from a file at the given path.
+///
+/// # Errors
+/// Returns an error if the config file exists but cannot be read.
 pub fn load_config_flags(path: &Path) -> Result<ConfigFlags> {
     if !path.exists() {
         return Ok(ConfigFlags::default());
@@ -121,6 +126,10 @@ pub fn load_config_flags(path: &Path) -> Result<ConfigFlags> {
     Ok(parse_flag_tokens(&tokens))
 }
 
+/// Save configuration flags to a file at the given path.
+///
+/// # Errors
+/// Returns an error if the config directory cannot be created or the file cannot be written.
 pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     let mut lines = Vec::new();
     lines.push("# markless defaults (saved with --save)".to_string());
@@ -142,7 +151,7 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
             ThemeMode::Light => "light",
             ThemeMode::Dark => "dark",
         };
-        lines.push(format!("--theme {}", theme_str));
+        lines.push(format!("--theme {theme_str}"));
     }
     if flags.perf {
         lines.push("--perf".to_string());
@@ -169,6 +178,10 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
         .with_context(|| format!("Failed to write config {}", path.display()))
 }
 
+/// Remove the config file at the given path if it exists.
+///
+/// # Errors
+/// Returns an error if the file exists but cannot be removed.
 pub fn clear_config_flags(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_file(path).with_context(|| format!("Failed to remove {}", path.display()))?;

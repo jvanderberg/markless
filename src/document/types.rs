@@ -37,12 +37,12 @@ impl Document {
     }
 
     /// Create a new document with the given content.
-    pub(crate) fn new(
+    pub(crate) const fn new(
         source: String,
         lines: Vec<RenderedLine>,
         headings: Vec<HeadingRef>,
         images: Vec<ImageRef>,
-        links: Vec<LinkRef>,
+        link_refs: Vec<LinkRef>,
         footnotes: HashMap<String, usize>,
         code_blocks: Vec<CodeBlockRef>,
     ) -> Self {
@@ -51,14 +51,14 @@ impl Document {
             lines,
             headings,
             images,
-            links,
+            links: link_refs,
             footnotes,
             code_blocks,
         }
     }
 
     /// Get the total number of rendered lines.
-    pub fn line_count(&self) -> usize {
+    pub const fn line_count(&self) -> usize {
         self.lines.len()
     }
 
@@ -144,7 +144,7 @@ impl Document {
                 line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
                 line_spans.extend(trimmed_spans);
                 line_spans.push(InlineSpan::new(
-                    format!("{} │", padding),
+                    format!("{padding} │"),
                     InlineStyle::default(),
                 ));
                 let content = spans_to_string(&line_spans);
@@ -183,7 +183,7 @@ pub struct RenderedLine {
 
 impl RenderedLine {
     /// Create a new rendered line.
-    pub fn new(content: String, line_type: LineType) -> Self {
+    pub const fn new(content: String, line_type: LineType) -> Self {
         Self {
             content,
             line_type,
@@ -193,7 +193,7 @@ impl RenderedLine {
     }
 
     /// Create a new rendered line with inline spans.
-    pub fn with_spans(content: String, line_type: LineType, spans: Vec<InlineSpan>) -> Self {
+    pub const fn with_spans(content: String, line_type: LineType, spans: Vec<InlineSpan>) -> Self {
         Self {
             content,
             line_type,
@@ -203,7 +203,8 @@ impl RenderedLine {
     }
 
     /// Create with source range.
-    pub fn with_source_range(mut self, range: Range<usize>) -> Self {
+    #[must_use]
+    pub const fn with_source_range(mut self, range: Range<usize>) -> Self {
         self.source_range = Some(range);
         self
     }
@@ -214,7 +215,7 @@ impl RenderedLine {
     }
 
     /// Get the line type.
-    pub fn line_type(&self) -> &LineType {
+    pub const fn line_type(&self) -> &LineType {
         &self.line_type
     }
 
@@ -261,7 +262,7 @@ pub struct InlineSpan {
 }
 
 impl InlineSpan {
-    pub fn new(text: String, style: InlineStyle) -> Self {
+    pub const fn new(text: String, style: InlineStyle) -> Self {
         Self { text, style }
     }
 
@@ -269,7 +270,7 @@ impl InlineSpan {
         &self.text
     }
 
-    pub fn style(&self) -> InlineStyle {
+    pub const fn style(&self) -> InlineStyle {
         self.style
     }
 }

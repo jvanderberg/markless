@@ -21,9 +21,12 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     /// Create a watcher for `path`.
+    ///
+    /// # Errors
+    /// Returns an error if the file watcher cannot be created or the path cannot be watched.
     pub fn new(path: impl AsRef<Path>, debounce: Duration) -> notify::Result<Self> {
         let target_path = path.as_ref().to_path_buf();
-        let target_name = target_path.file_name().map(|s| s.to_os_string());
+        let target_name = target_path.file_name().map(std::ffi::OsStr::to_os_string);
         let watch_root = watch_root_for(&target_path);
 
         let (tx, rx) = mpsc::channel();
@@ -84,8 +87,7 @@ impl FileWatcher {
 fn watch_root_for(path: &Path) -> PathBuf {
     path.parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 #[cfg(test)]

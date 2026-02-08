@@ -24,17 +24,17 @@ pub fn detect_protocol() -> ImageMode {
     }
 
     // Check for Ghostty (uses Kitty protocol)
-    if let Ok(term) = env::var("TERM") {
-        if term.contains("ghostty") {
-            return ImageMode::Kitty;
-        }
+    if let Ok(term) = env::var("TERM")
+        && term.contains("ghostty")
+    {
+        return ImageMode::Kitty;
     }
 
     // Check for sixel support via TERM
-    if let Ok(term) = env::var("TERM") {
-        if term.contains("sixel") || term == "xterm-256color" || term.contains("foot") {
-            return ImageMode::Sixel;
-        }
+    if let Ok(term) = env::var("TERM")
+        && (term.contains("sixel") || term == "xterm-256color" || term.contains("foot"))
+    {
+        return ImageMode::Sixel;
     }
 
     // Fall back to half-blocks

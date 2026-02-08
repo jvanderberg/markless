@@ -58,6 +58,7 @@ impl ImageCache {
                 break;
             }
         }
+        drop(guard);
     }
 
     /// Check if an image is in the cache.

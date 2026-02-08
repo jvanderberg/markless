@@ -45,7 +45,7 @@ pub fn is_image_file(path: &std::path::Path) -> bool {
 /// Generate markdown content that displays an image file inline.
 ///
 /// Uses angle brackets around the URL so filenames with spaces or
-/// parentheses are parsed correctly by CommonMark.
+/// parentheses are parsed correctly by `CommonMark`.
 pub fn image_markdown(path: &std::path::Path) -> String {
     let name = path
         .file_name()

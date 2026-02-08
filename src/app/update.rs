@@ -215,21 +215,20 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             }
         }
         Message::TocSelect => {
-            if !model.browse_mode {
-                if let Some(sel) = model.toc_selected {
-                    if let Some(heading) = model.document.headings().get(sel) {
-                        model.viewport.go_to_line(heading.line);
-                    }
-                }
+            if !model.browse_mode
+                && let Some(sel) = model.toc_selected
+                && let Some(heading) = model.document.headings().get(sel)
+            {
+                model.viewport.go_to_line(heading.line);
             }
             // Browse mode selection handled in effects
         }
         Message::TocClick(idx) => {
             model.toc_selected = Some(idx);
-            if !model.browse_mode {
-                if let Some(heading) = model.document.headings().get(idx) {
-                    model.viewport.go_to_line(heading.line);
-                }
+            if !model.browse_mode
+                && let Some(heading) = model.document.headings().get(idx)
+            {
+                model.viewport.go_to_line(heading.line);
             }
             // Browse mode click handled in effects
         }
@@ -239,14 +238,6 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         Message::TocScrollDown => {
             model.toc_scroll_offset =
                 (model.toc_scroll_offset + 1).min(model.max_toc_scroll_offset());
-        }
-        Message::TocCollapse => {
-            // In browse mode, handled in effects (navigate to parent dir)
-            // In file mode: TODO collapse/expand
-        }
-        Message::TocExpand => {
-            // In browse mode, handled in effects (open item)
-            // In file mode: TODO collapse/expand
         }
         Message::SwitchFocus => {
             if model.toc_visible {
@@ -264,10 +255,14 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         Message::HideHelp => {
             model.help_visible = false;
         }
-        Message::FileChanged | Message::ForceReload => {
-            // Reload is handled in the event loop (side effect)
-            // The model update happens after reload
-        }
+        // TocCollapse/TocExpand: handled in effects (browse mode navigation)
+        // FileChanged/ForceReload: handled in event loop (side effect)
+        // Redraw: no state change needed
+        Message::TocCollapse
+        | Message::TocExpand
+        | Message::FileChanged
+        | Message::ForceReload
+        | Message::Redraw => {}
 
         // Search
         Message::StartSearch => {
@@ -276,13 +271,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.search_match_index = None;
             model.search_allow_short = false;
         }
-        Message::StartSearchWith(query) => {
-            model.search_query = Some(query);
-            model.search_allow_short = false;
-            let allow_short = model.search_allow_short;
-            refresh_search_matches(&mut model, true, allow_short);
-        }
-        Message::SearchInput(query) => {
+        Message::StartSearchWith(query) | Message::SearchInput(query) => {
             model.search_query = Some(query);
             model.search_allow_short = false;
             let allow_short = model.search_allow_short;
@@ -386,10 +375,6 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.viewport.resize(width, height.saturating_sub(1));
             model.reflow_layout();
         }
-        Message::Redraw => {
-            // No state change needed
-        }
-
         // Application
         Message::Quit => {
             model.should_quit = true;

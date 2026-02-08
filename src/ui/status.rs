@@ -21,17 +21,16 @@ pub fn render_search_bar(model: &Model, frame: &mut Frame, area: Rect) {
     } else {
         String::new()
     };
-    let text = format!("/{}{}  Enter: next  Esc: clear", query, match_info);
+    let text = format!("/{query}{match_info}  Enter: next  Esc: clear");
     let bar = Paragraph::new(text).style(Style::default().bg(Color::Blue).fg(Color::White));
     frame.render_widget(bar, area);
 }
 
 pub fn render_status_bar(model: &Model, frame: &mut Frame, area: Rect) {
-    let filename = model
-        .file_path
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "untitled".to_string());
+    let filename = model.file_path.file_name().map_or_else(
+        || "untitled".to_string(),
+        |s| s.to_string_lossy().to_string(),
+    );
 
     let percent = model.viewport.scroll_percent();
     let line_info = format!(
@@ -47,10 +46,8 @@ pub fn render_status_bar(model: &Model, frame: &mut Frame, area: Rect) {
     };
     let toc_indicator = if model.toc_visible { " [TOC]" } else { "" };
 
-    let status = format!(
-        " {}  [{}%]  {}{}{}  ?:help",
-        filename, percent, line_info, watch_indicator, toc_indicator
-    );
+    let status =
+        format!(" {filename}  [{percent}%]  {line_info}{watch_indicator}{toc_indicator}  ?:help");
 
     let status_bar =
         Paragraph::new(status).style(Style::default().bg(Color::DarkGray).fg(Color::White));
@@ -75,6 +72,6 @@ pub fn render_toast_bar(model: &Model, frame: &mut Frame, area: Rect) {
             ("[error]", Style::default().bg(Color::Red).fg(Color::White))
         }
     };
-    let toast = Paragraph::new(format!("{} {}", prefix, message)).style(style);
+    let toast = Paragraph::new(format!("{prefix} {message}")).style(style);
     frame.render_widget(toast, area);
 }
