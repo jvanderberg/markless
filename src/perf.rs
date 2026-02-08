@@ -59,6 +59,13 @@ pub fn is_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+/// Set (or clear) the debug log output path.
+///
+/// # Errors
+/// Returns an error if the log file cannot be created or written to.
+///
+/// # Panics
+/// Panics if the debug logger mutex is poisoned.
 pub fn set_debug_log_path(path: Option<&Path>) -> std::io::Result<()> {
     let mut logger = DEBUG_LOGGER.lock().expect("debug logger lock poisoned");
     if let Some(path) = path {
@@ -74,9 +81,14 @@ pub fn set_debug_log_path(path: Option<&Path>) -> std::io::Result<()> {
         logger.enabled = false;
         logger.writer = None;
     }
+    drop(logger);
     Ok(())
 }
 
+/// Check whether debug logging is currently enabled.
+///
+/// # Panics
+/// Panics if the debug logger mutex is poisoned.
 pub fn is_debug_log_enabled() -> bool {
     DEBUG_LOGGER
         .lock()
@@ -84,6 +96,10 @@ pub fn is_debug_log_enabled() -> bool {
         .enabled
 }
 
+/// Write a timestamped event to the debug log.
+///
+/// # Panics
+/// Panics if the debug logger mutex is poisoned.
 pub fn log_event(name: &str, detail: impl AsRef<str>) {
     let mut logger = DEBUG_LOGGER.lock().expect("debug logger lock poisoned");
     if !logger.enabled {

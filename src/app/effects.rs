@@ -55,31 +55,30 @@ impl App {
                 }
             }
             Message::OpenVisibleLinks => {
-                self.open_visible_links(model);
+                Self::open_visible_links(model);
             }
             Message::FollowLinkAtLine(line, col) => {
-                self.follow_link_on_line(model, *line, *col);
+                Self::follow_link_on_line(model, *line, *col);
             }
             Message::SelectVisibleLink(index) => {
-                self.follow_link_picker_index(model, *index);
+                Self::follow_link_picker_index(model, *index);
             }
             Message::EndSelection(_) => {
-                self.copy_selection(model);
+                Self::copy_selection(model);
                 model.clear_selection();
             }
             Message::TocSelect | Message::TocClick(_) | Message::TocExpand if model.browse_mode => {
-                self.browse_activate_selected(model);
+                Self::browse_activate_selected(model);
             }
             Message::TocCollapse if model.browse_mode => {
-                self.browse_navigate_parent(model);
+                Self::browse_navigate_parent(model);
             }
             Message::EnterBrowseMode => {
                 let dir = model
                     .file_path
                     .parent()
                     .filter(|p| !p.as_os_str().is_empty())
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from("."));
+                    .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
                 if let Err(err) = model.load_directory(&dir) {
                     model.show_toast(ToastLevel::Error, format!("Browse failed: {err}"));
                 } else {
@@ -98,7 +97,7 @@ impl App {
         }
     }
 
-    fn open_visible_links(&self, model: &mut Model) {
+    fn open_visible_links(model: &mut Model) {
         let start = model.viewport.offset();
         let end = start + model.viewport.height() as usize;
         let mut visible: Vec<_> = model
@@ -112,7 +111,7 @@ impl App {
 
         match visible.len() {
             0 => model.show_toast(ToastLevel::Info, "No visible links"),
-            1 => self.follow_resolved_link(model, &visible[0].url),
+            1 => Self::follow_resolved_link(model, &visible[0].url),
             _ => {
                 model.link_picker_items = visible;
                 model.show_toast(ToastLevel::Info, "Select link: 1-9 (Esc to cancel)");
@@ -120,7 +119,7 @@ impl App {
         }
     }
 
-    fn follow_link_picker_index(&self, model: &mut Model, index: u8) {
+    fn follow_link_picker_index(model: &mut Model, index: u8) {
         if index == 0 {
             return;
         }
@@ -130,22 +129,22 @@ impl App {
         };
         let url = link.url.clone();
         model.link_picker_items.clear();
-        self.follow_resolved_link(model, &url);
+        Self::follow_resolved_link(model, &url);
     }
 
-    fn follow_link_on_line(&self, model: &mut Model, line: usize, col: Option<usize>) {
-        if let Some(col) = col {
-            if let Some(link) = self.link_at_column(model, line, col) {
-                let url = link.url.clone();
-                model.link_picker_items.clear();
-                self.follow_resolved_link(model, &url);
-                return;
-            }
+    fn follow_link_on_line(model: &mut Model, line: usize, col: Option<usize>) {
+        if let Some(col) = col
+            && let Some(link) = Self::link_at_column(model, line, col)
+        {
+            let url = link.url;
+            model.link_picker_items.clear();
+            Self::follow_resolved_link(model, &url);
+            return;
         }
         if let Some(link) = model.document.links().iter().find(|link| link.line == line) {
             let url = link.url.clone();
             model.link_picker_items.clear();
-            self.follow_resolved_link(model, &url);
+            Self::follow_resolved_link(model, &url);
             return;
         }
 
@@ -159,10 +158,10 @@ impl App {
         };
         let url = image.src.clone();
         model.link_picker_items.clear();
-        self.follow_resolved_link(model, &url);
+        Self::follow_resolved_link(model, &url);
     }
 
-    fn follow_resolved_link(&self, model: &mut Model, url: &str) {
+    fn follow_resolved_link(model: &mut Model, url: &str) {
         if let Some(name) = url.strip_prefix("footnote:") {
             if let Some(target) = model.document.footnote_line(name) {
                 model.viewport.go_to_line(target);
@@ -184,7 +183,7 @@ impl App {
         }
 
         if url.starts_with("mermaid://") {
-            self.open_mermaid_svg(model, url);
+            Self::open_mermaid_svg(model, url);
             return;
         }
 
@@ -194,7 +193,9 @@ impl App {
         }
     }
 
-    fn open_mermaid_svg(&self, model: &mut Model, mermaid_url: &str) {
+    fn open_mermaid_svg(model: &mut Model, mermaid_url: &str) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
         let Some(source) = model.document.mermaid_sources().get(mermaid_url).cloned() else {
             model.show_toast(ToastLevel::Warning, "Mermaid source not found");
             return;
@@ -206,8 +207,12 @@ impl App {
                 return;
             }
         };
-        let index = mermaid_url.strip_prefix("mermaid://").unwrap_or("0");
-        let path = std::env::temp_dir().join(format!("markless-mermaid-{index}.svg"));
+        // Use a content hash so different diagrams get distinct files and
+        // different documents don't silently overwrite each other's SVGs.
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        let hash = hasher.finish();
+        let path = std::env::temp_dir().join(format!("markless-mermaid-{hash:016x}.svg"));
         if let Err(err) = std::fs::write(&path, &svg) {
             model.show_toast(ToastLevel::Error, format!("Write SVG failed: {err}"));
             return;
@@ -219,7 +224,7 @@ impl App {
         }
     }
 
-    fn browse_activate_selected(&self, model: &mut Model) {
+    fn browse_activate_selected(model: &mut Model) {
         let Some(sel) = model.toc_selected else {
             return;
         };
@@ -239,7 +244,7 @@ impl App {
         }
     }
 
-    fn browse_navigate_parent(&self, model: &mut Model) {
+    fn browse_navigate_parent(model: &mut Model) {
         let parent = model
             .browse_dir
             .parent()
@@ -280,7 +285,7 @@ impl App {
         }
     }
 
-    fn copy_selection(&self, model: &mut Model) {
+    fn copy_selection(model: &mut Model) {
         let Some((text, lines)) = model.selected_text() else {
             return;
         };
@@ -301,7 +306,7 @@ fn open_external_link(url: &str) -> std::io::Result<()> {
             .arg(url)
             .spawn()?
             .wait()?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "windows")]
     {
@@ -346,10 +351,7 @@ fn copy_to_pbcopy(text: &str) -> std::io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "pbcopy failed",
-        ))
+        Err(std::io::Error::other("pbcopy failed"))
     }
 }
 
@@ -362,7 +364,7 @@ fn copy_to_clipboard_osc52(text: &str) -> std::io::Result<()> {
 
 fn osc52_sequence(text: &str) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    format!("\x1b]52;c;{}\x07", encoded)
+    format!("\x1b]52;c;{encoded}\x07")
 }
 
 #[cfg(test)]

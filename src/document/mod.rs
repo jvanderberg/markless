@@ -19,6 +19,8 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "ico", "svg", "avif",
 ];
 
+/// Prepare file content for rendering based on its extension.
+///
 /// If the file has a recognized code extension, wrap content in a fenced code
 /// block so it renders with syntax highlighting. Image files are wrapped as
 /// markdown image references for inline rendering. Markdown and unrecognized
@@ -27,10 +29,20 @@ pub fn prepare_content(file_path: &std::path::Path, content: String) -> String {
     if is_image_file(file_path) {
         return image_markdown(file_path);
     }
+    if is_csv_file(file_path) {
+        return format!("```csv\n{content}\n```");
+    }
     let Some(language) = crate::highlight::language_for_file(file_path) else {
         return content;
     };
     format!("```{language}\n{content}\n```")
+}
+
+/// Returns true if the file extension is `.csv`.
+fn is_csv_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
 }
 
 /// Returns true if the file extension is a recognized image format.
@@ -43,7 +55,7 @@ pub fn is_image_file(path: &std::path::Path) -> bool {
 /// Generate markdown content that displays an image file inline.
 ///
 /// Uses angle brackets around the URL so filenames with spaces or
-/// parentheses are parsed correctly by CommonMark.
+/// parentheses are parsed correctly by `CommonMark`.
 pub fn image_markdown(path: &std::path::Path) -> String {
     let name = path
         .file_name()
@@ -213,6 +225,30 @@ mod tests {
             result, content,
             "Markdown content should pass through unchanged"
         );
+    }
+
+    #[test]
+    fn test_prepare_content_wraps_csv_file() {
+        let content = "Name,Age,City\nAlice,30,NYC\nBob,25,LA".to_string();
+        let result = prepare_content(Path::new("data.csv"), content);
+        assert!(
+            result.starts_with("```csv\n"),
+            "CSV file should be wrapped in csv fence, got: {result}"
+        );
+        assert!(result.ends_with("\n```"), "should end with closing fence");
+    }
+
+    #[test]
+    fn test_prepare_document_from_bytes_csv_renders_as_table() {
+        let bytes = b"Name,Age,City\nAlice,30,NYC\nBob,25,LA".to_vec();
+        let doc = prepare_document_from_bytes(Path::new("data.csv"), bytes, 80);
+        assert!(!doc.is_hex_mode());
+        // Should contain table lines, not paragraph text
+        let has_table = (0..doc.line_count()).any(|i| {
+            doc.line_at(i)
+                .is_some_and(|l| *l.line_type() == LineType::Table)
+        });
+        assert!(has_table, "CSV file should render with Table line types");
     }
 
     #[test]

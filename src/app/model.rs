@@ -13,6 +13,14 @@ use crate::document::Document;
 use crate::image::ImageLoader;
 use crate::ui::viewport::Viewport;
 
+/// Mermaid diagram display width as a percentage of the image target width.
+///
+/// Mermaid SVGs contain their own internal layout and render best at a
+/// narrower width than regular images (which scale to fill available space).
+/// 100 would match regular image width; 60 was chosen empirically as a
+/// good balance between readability and not overwhelming the terminal.
+const MERMAID_WIDTH_PERCENT: u32 = 60;
+
 use super::update::{closest_heading_to_line, refresh_search_matches};
 
 /// The complete application state.
@@ -98,7 +106,7 @@ pub struct Model {
     /// Focus: true = TOC, false = document
     pub toc_focused: bool,
     /// Image protocols for rendering (keyed by image src)
-    /// Stores (protocol, width_cols, height_rows)
+    /// Stores (protocol, `width_cols`, `height_rows`)
     pub image_protocols: HashMap<String, (StatefulProtocol, u16, u16)>,
     /// Cache of original images (before scaling) for fast resize
     original_images: HashMap<String, DynamicImage>,
@@ -142,8 +150,7 @@ impl Model {
         let total_lines = document.line_count();
         let base_dir = file_path
             .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
 
         Self {
             document,
@@ -181,12 +188,13 @@ impl Model {
             selection: None,
             images_enabled: true,
             browse_mode: false,
-            browse_dir: base_dir.clone(),
+            browse_dir: base_dir,
             browse_entries: Vec::new(),
         }
     }
 
     /// Set the image picker.
+    #[must_use]
     pub fn with_picker(mut self, picker: Option<Picker>) -> Self {
         self.picker = picker;
         self
@@ -224,15 +232,13 @@ impl Model {
         let quantize_halfblocks = use_halfblocks && !crate::image::supports_truecolor_terminal();
         if width_changed {
             self.last_image_scale_width = current_width;
-            // Evict cached mermaid rasters so they are re-rendered at the new
-            // width instead of being lossily upscaled from the old raster.
-            self.original_images
-                .retain(|src, _| !src.starts_with("mermaid://"));
         }
 
         let font_size = picker.font_size();
-        let target_width_cols = (current_width as f32 * 0.65) as u16;
-        let target_width_px = target_width_cols as u32 * font_size.0 as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // target_width_cols is always positive and within u16 range (65% of a u16).
+        let target_width_cols = (f32::from(current_width) * 0.65) as u16;
+        let target_width_px = u32::from(target_width_cols) * u32::from(font_size.0);
 
         // Load images within 2 viewport heights of current position
         let lookahead = self.viewport.height() as usize * 2;
@@ -281,8 +287,7 @@ impl Model {
                     if let Some(img) = self.original_images.get(&src) {
                         Some(img.clone())
                     } else if src.starts_with("mermaid://") {
-                        // Render mermaid diagram to image at 60% of terminal width
-                        let mermaid_width_px = (target_width_px as f32 * 0.6) as u32;
+                        let mermaid_width_px = target_width_px * MERMAID_WIDTH_PERCENT / 100;
                         self.document
                             .mermaid_sources()
                             .get(&src)
@@ -296,9 +301,8 @@ impl Model {
                                     })
                                     .ok()
                             })
-                            .map(|img| {
+                            .inspect(|img| {
                                 self.original_images.insert(src.clone(), img.clone());
-                                img
                             })
                     } else if let Some(img) = loader.load_sync(&src) {
                         self.original_images.insert(src.clone(), img.clone());
@@ -308,9 +312,11 @@ impl Model {
                     };
 
                 if let Some(img) = original {
-                    // Scale to fit target width, preserving aspect ratio
-                    let scale = target_width_px as f32 / img.width() as f32;
-                    let scaled_height_px = (img.height() as f32 * scale) as u32;
+                    // Scale to fit target width, preserving aspect ratio.
+                    let scale = f64::from(target_width_px) / f64::from(img.width());
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    // Scaled image height is always positive and well within u32 range.
+                    let scaled_height_px = (f64::from(img.height()) * scale) as u32;
 
                     let mut scaled = img.resize(
                         target_width_px,
@@ -333,13 +339,7 @@ impl Model {
                     crate::perf::log_event(
                         "image.load_nearby.protocol",
                         format!(
-                            "src={} width_cols={} height_rows={} width_changed={} halfblocks={} ansi256={}",
-                            src,
-                            width_cols,
-                            height_rows,
-                            width_changed,
-                            use_halfblocks,
-                            quantize_halfblocks
+                            "src={src} width_cols={width_cols} height_rows={height_rows} width_changed={width_changed} halfblocks={use_halfblocks} ansi256={quantize_halfblocks}"
                         ),
                     );
                 }
@@ -383,23 +383,23 @@ impl Model {
         self.document.ensure_highlight_for_range(start..end);
     }
 
-    pub fn tick_image_scroll_cooldown(&mut self) {
+    pub const fn tick_image_scroll_cooldown(&mut self) {
         self.image_scroll_cooldown_ticks = self.image_scroll_cooldown_ticks.saturating_sub(1);
     }
 
-    pub fn is_image_scroll_settling(&self) -> bool {
+    pub const fn is_image_scroll_settling(&self) -> bool {
         self.image_scroll_cooldown_ticks > 0
     }
 
-    pub(super) fn bump_image_scroll_cooldown(&mut self) {
+    pub(super) const fn bump_image_scroll_cooldown(&mut self) {
         self.image_scroll_cooldown_ticks = 3;
     }
 
-    pub(super) fn set_resize_pending(&mut self, pending: bool) {
+    pub(super) const fn set_resize_pending(&mut self, pending: bool) {
         self.resize_pending = pending;
     }
 
-    pub fn search_match_count(&self) -> usize {
+    pub const fn search_match_count(&self) -> usize {
         self.search_matches.len()
     }
 
@@ -412,7 +412,7 @@ impl Model {
         crate::ui::document_content_width(self.viewport.width(), self.toc_visible)
     }
 
-    pub(super) fn toc_visible_rows(&self) -> usize {
+    pub(super) const fn toc_visible_rows(&self) -> usize {
         // TOC uses full frame height with a 1-cell border at top/bottom.
         self.viewport.height().saturating_sub(1) as usize
     }
@@ -464,10 +464,15 @@ impl Model {
         }
     }
 
-    /// Scan a directory and populate browse_entries.
+    /// Scan a directory and populate `browse_entries`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be read or an entry's
+    /// file type cannot be determined.
     pub fn load_directory(&mut self, dir: &Path) -> Result<()> {
         let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        self.browse_dir = dir.clone();
+        self.browse_dir.clone_from(&dir);
         self.browse_entries.clear();
 
         // Add parent directory entry
@@ -510,30 +515,41 @@ impl Model {
         Ok(())
     }
 
+    /// Build a `Document` from raw file bytes, respecting current mermaid and
+    /// image-layout settings.
+    fn document_from_bytes(&self, path: &Path, raw_bytes: Vec<u8>) -> Result<Document> {
+        if crate::document::is_binary(&raw_bytes) || crate::document::is_image_file(path) {
+            return Ok(crate::document::prepare_document_from_bytes(
+                path,
+                raw_bytes,
+                self.layout_width(),
+            ));
+        }
+        let content = match String::from_utf8(raw_bytes) {
+            Ok(s) => crate::document::prepare_content(path, s),
+            Err(e) => crate::document::prepare_content(path, e.to_string()),
+        };
+        Document::parse_with_all_options(
+            &content,
+            self.layout_width(),
+            &self.image_layout_heights,
+            self.should_render_mermaid_as_images(),
+        )
+    }
+
     /// Load a file into the document area.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or the document
+    /// fails to parse.
     pub fn load_file(&mut self, path: &Path) -> Result<()> {
         let raw_bytes = std::fs::read(path)?;
-        let document =
-            if crate::document::is_binary(&raw_bytes) || crate::document::is_image_file(path) {
-                crate::document::prepare_document_from_bytes(path, raw_bytes, self.layout_width())
-            } else {
-                let content = match String::from_utf8(raw_bytes) {
-                    Ok(s) => crate::document::prepare_content(path, s),
-                    Err(e) => crate::document::prepare_content(path, e.to_string()),
-                };
-                let mermaid = self.should_render_mermaid_as_images();
-                Document::parse_with_all_options(
-                    &content,
-                    self.layout_width(),
-                    &self.image_layout_heights,
-                    mermaid,
-                )?
-            };
+        let document = self.document_from_bytes(path, raw_bytes)?;
         self.file_path = path.to_path_buf();
         self.base_dir = path
             .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
         self.document = document;
 
         // Clear image caches for old file
@@ -550,7 +566,7 @@ impl Model {
         Ok(())
     }
 
-    /// Return the index and path of the first viewable file in browse_entries,
+    /// Return the index and path of the first viewable file in `browse_entries`,
     /// preferring markdown files over other types.
     pub fn first_viewable_file_index(&self) -> Option<(usize, PathBuf)> {
         // Prefer markdown files
@@ -596,33 +612,14 @@ impl Model {
             .map(|toast| (toast.message.as_str(), toast.level))
     }
 
-    pub fn link_picker_active(&self) -> bool {
+    pub const fn link_picker_active(&self) -> bool {
         !self.link_picker_items.is_empty()
     }
 
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
         let raw_bytes = std::fs::read(&self.file_path)?;
-        let document = if crate::document::is_binary(&raw_bytes)
-            || crate::document::is_image_file(&self.file_path)
-        {
-            crate::document::prepare_document_from_bytes(
-                &self.file_path,
-                raw_bytes,
-                self.layout_width(),
-            )
-        } else {
-            let content = match String::from_utf8(raw_bytes) {
-                Ok(s) => crate::document::prepare_content(&self.file_path, s),
-                Err(e) => crate::document::prepare_content(&self.file_path, e.to_string()),
-            };
-            let mermaid = self.should_render_mermaid_as_images();
-            Document::parse_with_all_options(
-                &content,
-                self.layout_width(),
-                &self.image_layout_heights,
-                mermaid,
-            )?
-        };
+        let path = self.file_path.clone();
+        let document = self.document_from_bytes(&path, raw_bytes)?;
         self.document = document;
 
         // Drop cached image entries that are no longer present in the document.
@@ -667,13 +664,13 @@ impl Model {
         let mut lines = Vec::new();
         for idx in range {
             if let Some(line) = self.document.line_at(idx) {
-                let links: Vec<_> = self
+                let link_refs: Vec<_> = self
                     .document
                     .links()
                     .iter()
                     .filter(|link| link.line == idx && !link.url.starts_with("footnote:"))
                     .collect();
-                if let Some(text) = clean_selected_line(line, &links) {
+                if let Some(text) = clean_selected_line(line, &link_refs) {
                     lines.push(text);
                 }
             }
@@ -691,7 +688,7 @@ impl Model {
             .is_some_and(|sel| sel.state == SelectionState::Dragging)
     }
 
-    pub fn clear_selection(&mut self) {
+    pub const fn clear_selection(&mut self) {
         self.selection = None;
     }
 
@@ -776,8 +773,9 @@ fn clean_selected_line(
 }
 
 fn is_markdown_ext(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".markdown")
+    name.rsplit_once('.').is_some_and(|(_, ext)| {
+        ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+    })
 }
 
 // Implement Default for Model to allow std::mem::take

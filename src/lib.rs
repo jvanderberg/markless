@@ -1,3 +1,12 @@
+// Only allow lints that are either transitive-dependency noise or
+// genuinely opinionated style choices that don't indicate real issues.
+#![allow(
+    // Transitive dependency version mismatches we can't control
+    clippy::multiple_crate_versions,
+    // module_name_repetitions is pure style preference (e.g. image::ImageRef)
+    clippy::module_name_repetitions
+)]
+
 //! # Markless
 //!
 //! A terminal markdown viewer with image support.

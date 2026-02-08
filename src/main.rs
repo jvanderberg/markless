@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_crate_versions)]
+
 //! Markless - A terminal markdown viewer with image support.
 //!
 //! # Usage
@@ -110,7 +112,7 @@ fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
         let mut collected: Vec<u8> = Vec::new();
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => continue,
+                Ok(0) => {}
                 Ok(n) => {
                     collected.extend_from_slice(&buf[..n]);
                     if collected.contains(&b'\x07') || collected.windows(2).any(|w| w == b"\x1b\\")
@@ -124,10 +126,9 @@ fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
         }
     });
 
-    let mut collected = Vec::new();
-    if let Ok(bytes) = rx.recv_timeout(Duration::from_millis(75)) {
-        collected = bytes;
-    }
+    let collected: Vec<u8> = rx
+        .recv_timeout(Duration::from_millis(75))
+        .unwrap_or_default();
 
     let mut found: Option<(u8, u8, u8)> = None;
     if !collected.is_empty() {
@@ -141,7 +142,10 @@ fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
 }
 
 fn theme_from_rgb(r: u8, g: u8, b: u8) -> HighlightBackground {
-    let luma = (0.2126 * r as f32) + (0.7152 * g as f32) + (0.0722 * b as f32);
+    let luma = 0.2126f32.mul_add(
+        f32::from(r),
+        0.7152f32.mul_add(f32::from(g), 0.0722 * f32::from(b)),
+    );
     if luma >= 140.0 {
         HighlightBackground::Light
     } else {
@@ -219,7 +223,7 @@ fn parse_osc11_reply(reply: &str) -> Option<(u8, u8, u8)> {
     // Expect: ESC ] 11 ; rgb:RRRR/GGGG/BBBB BEL or ST
     let start = reply.find("rgb:")?;
     let data = &reply[start + 4..];
-    let mut parts = data.split(|c| c == '/' || c == '\x07' || c == '\x1b');
+    let mut parts = data.split(['/', '\x07', '\x1b']);
     let r = parts.next()?;
     let g = parts.next()?;
     let b = parts.next()?;
@@ -314,9 +318,9 @@ fn main() -> Result<()> {
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
         .with_config_paths(
-            Some(global_path.clone()),
+            Some(global_path),
             if local_path.exists() {
-                Some(local_path.clone())
+                Some(local_path)
             } else {
                 None
             },

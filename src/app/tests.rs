@@ -223,9 +223,8 @@ fn test_help_toggle_works_when_toc_focused() {
     assert!(model.toc_visible);
     assert!(model.toc_focused);
 
-    let app = App::new(PathBuf::from("test.md"));
     let key = event::KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
-    let msg = app.handle_key(key, &model);
+    let msg = App::handle_key(key, &model);
     assert_eq!(msg, Some(Message::ToggleHelp));
 }
 
@@ -490,12 +489,11 @@ fn test_short_query_does_not_auto_search_until_enter() {
 
 #[test]
 fn test_search_mode_char_input_appends_query() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model = update(model, Message::StartSearch);
     model = update(model, Message::SearchInput("a".to_string()));
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
         &model,
     );
@@ -504,12 +502,11 @@ fn test_search_mode_char_input_appends_query() {
 
 #[test]
 fn test_search_mode_enter_moves_to_next_match() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model = update(model, Message::StartSearch);
     model = update(model, Message::SearchInput("test".to_string()));
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         &model,
     );
@@ -518,13 +515,12 @@ fn test_search_mode_enter_moves_to_next_match() {
 
 #[test]
 fn test_toc_focus_space_pages_document() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_long_test_model();
     model.toc_visible = true;
     model.toc_focused = true;
     model.toc_selected = Some(0);
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
         &model,
     );
@@ -534,10 +530,9 @@ fn test_toc_focus_space_pages_document() {
 
 #[test]
 fn test_question_mark_opens_help_when_not_searching() {
-    let app = App::new(PathBuf::from("test.md"));
     let model = create_test_model();
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
         &model,
     );
@@ -546,11 +541,10 @@ fn test_question_mark_opens_help_when_not_searching() {
 
 #[test]
 fn test_help_mode_esc_closes_help() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model.help_visible = true;
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         &model,
     );
@@ -559,11 +553,10 @@ fn test_help_mode_esc_closes_help() {
 
 #[test]
 fn test_help_mode_any_key_closes_help() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model.help_visible = true;
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         &model,
     );
@@ -572,7 +565,6 @@ fn test_help_mode_any_key_closes_help() {
 
 #[test]
 fn test_mouse_click_on_doc_link_emits_follow_message() {
-    let app = App::new(PathBuf::from("test.md"));
     let doc = Document::parse_with_layout("[Link](https://example.com)", 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model.toc_visible = true; // mouse capture path
@@ -585,13 +577,12 @@ fn test_mouse_click_on_doc_link_emits_follow_message() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::FollowLinkAtLine(0, Some(0))));
 }
 
 #[test]
 fn test_mouse_click_on_image_emits_follow_message() {
-    let app = App::new(PathBuf::from("test.md"));
     let doc = Document::parse_with_layout("![Alt text](image.png)", 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model.toc_visible = true;
@@ -604,13 +595,12 @@ fn test_mouse_click_on_image_emits_follow_message() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::FollowLinkAtLine(0, Some(0))));
 }
 
 #[test]
 fn test_mouse_click_on_image_body_emits_follow_message() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut heights = std::collections::HashMap::new();
     heights.insert("image.png".to_string(), 3);
     let doc = Document::parse_with_layout_and_image_heights("![Alt text](image.png)", 80, &heights)
@@ -626,13 +616,12 @@ fn test_mouse_click_on_image_body_emits_follow_message() {
         row: 1,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::FollowLinkAtLine(1, Some(0))));
 }
 
 #[test]
 fn test_mouse_click_on_image_body_after_press_emits_follow_message() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut heights = std::collections::HashMap::new();
     heights.insert("image.png".to_string(), 3);
     let doc = Document::parse_with_layout_and_image_heights("![Alt text](image.png)", 80, &heights)
@@ -654,15 +643,14 @@ fn test_mouse_click_on_image_body_after_press_emits_follow_message() {
         row: 1,
         modifiers: KeyModifiers::NONE,
     };
-    let _ = app.handle_mouse(down, &model);
+    let _ = App::handle_mouse(down, &model);
     let model = update(model, Message::StartSelection(1));
-    let msg = app.handle_mouse(up, &model);
+    let msg = App::handle_mouse(up, &model);
     assert_eq!(msg, Some(Message::FollowLinkAtLine(1, Some(0))));
 }
 
 #[test]
 fn test_mouse_hover_on_doc_link_emits_hover_message() {
-    let app = App::new(PathBuf::from("test.md"));
     let doc = Document::parse_with_layout("[Link](https://example.com)", 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model.toc_visible = true;
@@ -675,7 +663,7 @@ fn test_mouse_hover_on_doc_link_emits_hover_message() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(
         msg,
         Some(Message::HoverLink(Some("https://example.com".to_string())))
@@ -684,7 +672,6 @@ fn test_mouse_hover_on_doc_link_emits_hover_message() {
 
 #[test]
 fn test_mouse_hover_on_image_body_emits_hover_message() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut heights = std::collections::HashMap::new();
     heights.insert("image.png".to_string(), 3);
     let doc = Document::parse_with_layout_and_image_heights("![Alt text](image.png)", 80, &heights)
@@ -700,13 +687,12 @@ fn test_mouse_hover_on_image_body_emits_hover_message() {
         row: 1,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::HoverLink(Some("image.png".to_string()))));
 }
 
 #[test]
 fn test_hover_prefers_link_at_column_when_multiple() {
-    let app = App::new(PathBuf::from("test.md"));
     let md = "[Rust](https://rust-lang.org) and [GitHub](https://github.com)";
     let doc = Document::parse_with_layout(md, 120).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (120, 24));
@@ -724,7 +710,7 @@ fn test_hover_prefers_link_at_column_when_multiple() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(
         msg,
         Some(Message::HoverLink(Some("https://github.com".to_string())))
@@ -733,9 +719,8 @@ fn test_hover_prefers_link_at_column_when_multiple() {
 
 #[test]
 fn test_o_key_triggers_open_visible_links_message() {
-    let app = App::new(PathBuf::from("test.md"));
     let model = create_test_model();
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
         &model,
     );
@@ -846,7 +831,6 @@ fn test_open_visible_links_shows_picker_when_multiple() {
 
 #[test]
 fn test_mouse_click_in_link_picker_selects_item() {
-    let app = App::new(PathBuf::from("test.md"));
     let md = "[A](#one)\n\n[B](#two)\n\n## One\n\n## Two";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
@@ -861,13 +845,12 @@ fn test_mouse_click_in_link_picker_selects_item() {
         row: content_top,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::SelectVisibleLink(1)));
 }
 
 #[test]
 fn test_link_picker_key_other_than_number_cancels() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model.link_picker_items = vec![crate::document::LinkRef {
         text: "Link".to_string(),
@@ -875,7 +858,7 @@ fn test_link_picker_key_other_than_number_cancels() {
         line: 0,
     }];
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         &model,
     );
@@ -884,7 +867,6 @@ fn test_link_picker_key_other_than_number_cancels() {
 
 #[test]
 fn test_link_picker_click_outside_cancels() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model.link_picker_items = vec![crate::document::LinkRef {
         text: "Link".to_string(),
@@ -898,7 +880,7 @@ fn test_link_picker_click_outside_cancels() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     };
-    let msg = app.handle_mouse(mouse, &model);
+    let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::CancelVisibleLinkPicker));
 }
 
@@ -1191,9 +1173,8 @@ fn test_sync_toc_skipped_in_browse_mode() {
 
 #[test]
 fn test_b_key_sends_enter_browse_mode() {
-    let app = App::new(PathBuf::from("test.md"));
     let model = create_test_model();
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT),
         &model,
     );
@@ -1202,9 +1183,8 @@ fn test_b_key_sends_enter_browse_mode() {
 
 #[test]
 fn test_f_key_sends_enter_file_mode() {
-    let app = App::new(PathBuf::from("test.md"));
     let model = create_test_model();
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT),
         &model,
     );
@@ -1301,14 +1281,13 @@ fn test_browse_auto_load_prefers_markdown() {
 
 #[test]
 fn test_browse_toc_backspace_sends_toc_collapse() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model.browse_mode = true;
     model.toc_visible = true;
     model.toc_focused = true;
     model.toc_selected = Some(0);
 
-    let msg = app.handle_key(
+    let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
         &model,
     );

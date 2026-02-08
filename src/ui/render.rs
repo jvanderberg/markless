@@ -133,15 +133,14 @@ fn render_browse_toc(model: &Model, frame: &mut Frame, area: Rect) {
             } else {
                 style
             };
-            Line::styled(format!("{} {}", marker, display_name), style)
+            Line::styled(format!("{marker} {display_name}"), style)
         })
         .collect();
 
-    let title = model
-        .browse_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| model.browse_dir.display().to_string());
+    let title = model.browse_dir.file_name().map_or_else(
+        || model.browse_dir.display().to_string(),
+        |n| n.to_string_lossy().to_string(),
+    );
 
     let toc_block = Block::default()
         .title(title)

@@ -1,6 +1,7 @@
 //! Markdown parsing with comrak.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use anyhow::Result;
 use comrak::nodes::{AstNode, NodeValue, TableAlignment};
@@ -9,7 +10,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::types::{
     CodeBlockRef, Document, HeadingRef, ImageRef, InlineSpan, InlineStyle, LineType, LinkRef,
-    RenderedLine,
+    ParsedDocument, RenderedLine,
 };
 
 /// Parse markdown source into a Document.
@@ -23,14 +24,20 @@ use super::types::{
 /// assert!(doc.line_count() >= 3); // heading + empty + paragraph + trailing empty
 /// ```
 impl Document {
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse(source: &str) -> Result<Self> {
         parse(source)
     }
 
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_layout(source: &str, width: u16) -> Result<Self> {
         parse_with_layout(source, width, &HashMap::new())
     }
 
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_image_heights(
         source: &str,
         image_heights: &HashMap<String, usize>,
@@ -38,6 +45,8 @@ impl Document {
         parse_with_image_heights(source, image_heights)
     }
 
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_layout_and_image_heights(
         source: &str,
         width: u16,
@@ -49,95 +58,99 @@ impl Document {
     /// Parse markdown, rendering mermaid code blocks as image placeholders.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the markdown source cannot be parsed.
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_mermaid_images(source: &str, width: u16) -> Result<Self> {
-        parse_with_options(source, width, &HashMap::new(), true)
+        Ok(parse_with_all_options(source, width, &HashMap::new(), true))
     }
 
     /// Parse with all options: layout width, image heights, and mermaid-as-images flag.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the markdown source cannot be parsed.
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_all_options(
         source: &str,
         width: u16,
         image_heights: &HashMap<String, usize>,
         mermaid_as_images: bool,
     ) -> Result<Self> {
-        parse_with_options(source, width, image_heights, mermaid_as_images)
+        Ok(parse_with_all_options(
+            source,
+            width,
+            image_heights,
+            mermaid_as_images,
+        ))
     }
 }
 
-/// Parse markdown source into a Document.
+/// Parse markdown source into a `Document`.
+///
+/// # Errors
+/// Returns an error if markdown parsing fails.
 pub fn parse(source: &str) -> Result<Document> {
     parse_with_layout(source, 80, &HashMap::new())
 }
 
-/// Parse markdown source into a Document with known image heights (in terminal rows).
-pub fn parse_with_image_heights(
+/// Parse markdown with known image heights (in terminal rows).
+///
+/// # Errors
+/// Returns an error if markdown parsing fails.
+pub fn parse_with_image_heights<S: BuildHasher>(
     source: &str,
-    image_heights: &HashMap<String, usize>,
+    image_heights: &HashMap<String, usize, S>,
 ) -> Result<Document> {
     parse_with_layout(source, 80, image_heights)
 }
 
-/// Parse markdown source into a Document with layout and wrapping.
-pub fn parse_with_layout(
+/// Parse markdown with layout width and image heights.
+///
+/// # Errors
+/// Returns an error if markdown parsing fails.
+pub fn parse_with_layout<S: BuildHasher>(
     source: &str,
     width: u16,
-    image_heights: &HashMap<String, usize>,
+    image_heights: &HashMap<String, usize, S>,
 ) -> Result<Document> {
-    parse_with_options(source, width, image_heights, false)
+    Ok(parse_with_all_options(source, width, image_heights, false))
 }
 
-/// Parse markdown source into a Document with all options.
-fn parse_with_options(
+/// Parse markdown with all options including mermaid-as-images flag.
+fn parse_with_all_options<S: BuildHasher>(
     source: &str,
     width: u16,
-    image_heights: &HashMap<String, usize>,
+    image_heights: &HashMap<String, usize, S>,
     mermaid_as_images: bool,
-) -> Result<Document> {
+) -> Document {
     let arena = Arena::new();
     let options = create_options();
     let root = parse_document(&arena, source, &options);
 
-    let mut lines = Vec::new();
-    let mut headings = Vec::new();
-    let mut images = Vec::new();
-    let mut links = Vec::new();
-    let mut footnotes = HashMap::new();
-    let mut code_blocks = Vec::new();
-    let mut mermaid_sources = HashMap::new();
-
     let wrap_width = width.max(1) as usize;
-    process_node(
-        root,
-        &mut lines,
-        &mut headings,
-        &mut images,
-        &mut links,
-        &mut footnotes,
-        &mut code_blocks,
-        &mut mermaid_sources,
-        0,
+    let mut ctx = ParseContext {
+        lines: Vec::new(),
+        headings: Vec::new(),
+        images: Vec::new(),
+        link_refs: Vec::new(),
+        footnotes: HashMap::new(),
+        code_blocks: Vec::new(),
+        mermaid_sources: HashMap::new(),
         image_heights,
         wrap_width,
-        None,
         mermaid_as_images,
-    );
+    };
+    process_node(root, &mut ctx, 0, None);
 
-    Ok(Document::new(
+    Document::from_parsed(
         source.to_string(),
-        lines,
-        headings,
-        images,
-        links,
-        footnotes,
-        code_blocks,
-        mermaid_sources,
-    ))
+        ParsedDocument {
+            lines: ctx.lines,
+            headings: ctx.headings,
+            images: ctx.images,
+            links: ctx.link_refs,
+            footnotes: ctx.footnotes,
+            code_blocks: ctx.code_blocks,
+            mermaid_sources: ctx.mermaid_sources,
+        },
+    )
 }
 
 fn create_options() -> Options {
@@ -153,45 +166,36 @@ fn create_options() -> Options {
     options.extension.subscript = true;
 
     // Enable other useful extensions
-    options.extension.header_ids = Some("".to_string());
+    options.extension.header_ids = Some(String::new());
     options.extension.description_lists = true;
 
     options
 }
 
-fn process_node<'a>(
-    node: &'a AstNode<'a>,
-    lines: &mut Vec<RenderedLine>,
-    headings: &mut Vec<HeadingRef>,
-    images: &mut Vec<ImageRef>,
-    links: &mut Vec<LinkRef>,
-    footnotes: &mut HashMap<String, usize>,
-    code_blocks: &mut Vec<CodeBlockRef>,
-    mermaid_sources: &mut HashMap<String, String>,
-    depth: usize,
-    image_heights: &HashMap<String, usize>,
+/// Mutable context threaded through recursive node processing.
+struct ParseContext<'h, S: BuildHasher = std::collections::hash_map::RandomState> {
+    lines: Vec<RenderedLine>,
+    headings: Vec<HeadingRef>,
+    images: Vec<ImageRef>,
+    link_refs: Vec<LinkRef>,
+    footnotes: HashMap<String, usize>,
+    code_blocks: Vec<CodeBlockRef>,
+    mermaid_sources: HashMap<String, String>,
+    image_heights: &'h HashMap<String, usize, S>,
     wrap_width: usize,
-    list_marker: Option<String>,
     mermaid_as_images: bool,
+}
+
+fn process_node<'a, S: BuildHasher>(
+    node: &'a AstNode<'a>,
+    ctx: &mut ParseContext<'_, S>,
+    depth: usize,
+    list_marker: Option<String>,
 ) {
     match &node.data.borrow().value {
         NodeValue::Document => {
             for child in node.children() {
-                process_node(
-                    child,
-                    lines,
-                    headings,
-                    images,
-                    links,
-                    footnotes,
-                    code_blocks,
-                    mermaid_sources,
-                    depth,
-                    image_heights,
-                    wrap_width,
-                    list_marker.clone(),
-                    mermaid_as_images,
-                );
+                process_node(child, ctx, depth, list_marker.clone());
             }
         }
 
@@ -199,10 +203,10 @@ fn process_node<'a>(
             let text = extract_text(node);
 
             // Keep headings visually separated with two rows above.
-            ensure_trailing_empty_lines(lines, 2);
-            let line_num = lines.len();
+            ensure_trailing_empty_lines(&mut ctx.lines, 2);
+            let line_num = ctx.lines.len();
 
-            headings.push(HeadingRef {
+            ctx.headings.push(HeadingRef {
                 level: heading.level,
                 text: text.clone(),
                 line: line_num,
@@ -210,31 +214,49 @@ fn process_node<'a>(
             });
 
             let prefix = "#".repeat(heading.level as usize);
-            lines.push(RenderedLine::new(
-                format!("{} {}", prefix, text),
+            ctx.lines.push(RenderedLine::new(
+                format!("{prefix} {text}"),
                 LineType::Heading(heading.level),
             ));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::Paragraph => {
             // Check if paragraph contains only an image (common case)
             let child_images = collect_paragraph_images(node);
 
-            if !child_images.is_empty() {
+            if child_images.is_empty() {
+                // Regular paragraph text with inline styling and wrapping
+                let spans = collect_inline_spans(node);
+                // Collect links from paragraph
+                collect_inline_elements(node, ctx.lines.len(), &mut ctx.images, &mut ctx.link_refs);
+
+                let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
+                for line_spans in wrapped {
+                    let content = spans_to_string(&line_spans);
+                    ctx.lines.push(RenderedLine::with_spans(
+                        content,
+                        LineType::Paragraph,
+                        line_spans,
+                    ));
+                }
+            } else {
                 for (alt, src) in child_images {
-                    let height_lines = image_heights.get(&src).copied().unwrap_or(1).max(1);
-                    let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
-                    let start_line = lines.len();
+                    let height_lines = ctx.image_heights.get(&src).copied().unwrap_or(1).max(1);
+                    let has_caption = ctx.image_heights.contains_key(&src) && !alt.is_empty();
+                    let start_line = ctx.lines.len();
                     let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
 
                     if has_caption {
-                        lines.push(RenderedLine::new(format!("    {alt}"), LineType::Image));
+                        ctx.lines
+                            .push(RenderedLine::new(format!("    {alt}"), LineType::Image));
                     }
 
                     // First line shows the image placeholder/alt text
-                    lines.push(RenderedLine::new(label.clone(), LineType::Image));
-                    links.push(LinkRef {
+                    ctx.lines
+                        .push(RenderedLine::new(label.clone(), LineType::Image));
+                    ctx.link_refs.push(LinkRef {
                         text: label,
                         url: src.clone(),
                         line: start_line + usize::from(has_caption),
@@ -242,34 +264,20 @@ fn process_node<'a>(
 
                     // Reserve additional lines for image content (empty Image lines)
                     for _ in 1..height_lines {
-                        lines.push(RenderedLine::new(String::new(), LineType::Image));
+                        ctx.lines
+                            .push(RenderedLine::new(String::new(), LineType::Image));
                     }
 
-                    let end_line = lines.len();
-                    images.push(ImageRef {
+                    let end_line = ctx.lines.len();
+                    ctx.images.push(ImageRef {
                         alt: alt.clone(),
                         src: src.clone(),
                         line_range: start_line + usize::from(has_caption)..end_line,
                     });
                 }
-                lines.push(RenderedLine::new(String::new(), LineType::Empty));
-            } else {
-                // Regular paragraph text with inline styling and wrapping
-                let spans = collect_inline_spans(node);
-                // Collect links from paragraph
-                collect_inline_elements(node, lines.len(), images, links);
-
-                let wrapped = wrap_spans(&spans, wrap_width, "", "");
-                for line_spans in wrapped {
-                    let content = spans_to_string(&line_spans);
-                    lines.push(RenderedLine::with_spans(
-                        content,
-                        LineType::Paragraph,
-                        line_spans,
-                    ));
-                }
-                lines.push(RenderedLine::new(String::new(), LineType::Empty));
             }
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::CodeBlock(code_block) => {
@@ -280,54 +288,69 @@ fn process_node<'a>(
 
             // Store mermaid diagram sources for optional image rendering.
             if language == Some("mermaid") {
-                let key = format!("mermaid://{}", mermaid_sources.len());
-                mermaid_sources.insert(key.clone(), literal.trim_end().to_string());
+                let key = format!("mermaid://{}", ctx.mermaid_sources.len());
+                ctx.mermaid_sources
+                    .insert(key.clone(), literal.trim_end().to_string());
 
-                if mermaid_as_images {
+                if ctx.mermaid_as_images {
                     // Emit as an image placeholder instead of a code block.
-                    let height_lines = image_heights.get(&key).copied().unwrap_or(1).max(1);
-                    let has_caption = image_heights.contains_key(&key);
-                    let start_line = lines.len();
+                    let height_lines = ctx.image_heights.get(&key).copied().unwrap_or(1).max(1);
+                    let has_caption = ctx.image_heights.contains_key(&key);
+                    let start_line = ctx.lines.len();
                     let label = "[Image: mermaid diagram]".to_string();
 
                     if has_caption {
-                        lines.push(RenderedLine::new(
+                        ctx.lines.push(RenderedLine::new(
                             "    mermaid diagram".to_string(),
                             LineType::Image,
                         ));
                     }
 
-                    lines.push(RenderedLine::new(label.clone(), LineType::Image));
-                    links.push(LinkRef {
+                    ctx.lines
+                        .push(RenderedLine::new(label.clone(), LineType::Image));
+                    ctx.link_refs.push(LinkRef {
                         text: label,
                         url: key.clone(),
                         line: start_line + usize::from(has_caption),
                     });
 
                     for _ in 1..height_lines {
-                        lines.push(RenderedLine::new(String::new(), LineType::Image));
+                        ctx.lines
+                            .push(RenderedLine::new(String::new(), LineType::Image));
                     }
 
-                    let end_line = lines.len();
-                    images.push(ImageRef {
+                    let end_line = ctx.lines.len();
+                    ctx.images.push(ImageRef {
                         alt: "mermaid diagram".to_string(),
                         src: key,
                         line_range: start_line + usize::from(has_caption)..end_line,
                     });
-                    lines.push(RenderedLine::new(String::new(), LineType::Empty));
+                    ctx.lines
+                        .push(RenderedLine::new(String::new(), LineType::Empty));
                     // Skip the normal code block rendering below.
                     return;
                 }
             }
 
+            // Render CSV code blocks as tables instead of code blocks
+            if language == Some("csv") {
+                let csv_lines = render_csv_as_table(&literal);
+                if !csv_lines.is_empty() {
+                    ctx.lines.extend(csv_lines);
+                    ctx.lines
+                        .push(RenderedLine::new(String::new(), LineType::Empty));
+                    return;
+                }
+                // Fall through to normal code block rendering if CSV parsing fails
+            }
             let content_width = literal
                 .lines()
                 .map(UnicodeWidthStr::width)
                 .max()
                 .unwrap_or(0)
-                .min(wrap_width.saturating_sub(4).max(1));
+                .min(ctx.wrap_width.saturating_sub(4).max(1));
             let title = language.unwrap_or("code");
-            let label = format!(" {} ", title);
+            let label = format!(" {title} ");
             let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
             let top_label_width = frame_inner_width.min(UnicodeWidthStr::width(label.as_str()));
             let visible_label: String = label.chars().take(top_label_width).collect();
@@ -339,13 +362,15 @@ fn process_node<'a>(
                         .saturating_sub(UnicodeWidthStr::width(visible_label.as_str()))
                 )
             );
-            lines.push(RenderedLine::new(top, LineType::CodeBlock));
+            ctx.lines.push(RenderedLine::new(top, LineType::CodeBlock));
 
-            let body_start = lines.len();
+            let body_start = ctx.lines.len();
             let raw_lines: Vec<String> = literal.lines().map(ToString::to_string).collect();
             for raw_line in &raw_lines {
-                let mut plain_style = InlineStyle::default();
-                plain_style.code = true;
+                let plain_style = InlineStyle {
+                    code: true,
+                    ..InlineStyle::default()
+                };
                 let spans = vec![InlineSpan::new(raw_line.clone(), plain_style)];
                 let trimmed_spans = truncate_spans(&spans, content_width);
                 let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
@@ -356,19 +381,19 @@ fn process_node<'a>(
                 line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
                 line_spans.extend(trimmed_spans);
                 line_spans.push(InlineSpan::new(
-                    format!("{} │", padding),
+                    format!("{padding} │"),
                     InlineStyle::default(),
                 ));
                 let content = spans_to_string(&line_spans);
-                lines.push(RenderedLine::with_spans(
+                ctx.lines.push(RenderedLine::with_spans(
                     content,
                     LineType::CodeBlock,
                     line_spans,
                 ));
             }
-            let body_end = lines.len();
+            let body_end = ctx.lines.len();
 
-            code_blocks.push(CodeBlockRef {
+            ctx.code_blocks.push(CodeBlockRef {
                 line_range: body_start..body_end,
                 language: language.map(ToString::to_string),
                 raw_lines,
@@ -377,11 +402,12 @@ fn process_node<'a>(
                 right_padding: CODE_RIGHT_PADDING,
             });
 
-            lines.push(RenderedLine::new(
+            ctx.lines.push(RenderedLine::new(
                 format!("└{}┘", "─".repeat(frame_inner_width)),
                 LineType::CodeBlock,
             ));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::List(list) => {
@@ -400,41 +426,28 @@ fn process_node<'a>(
                     comrak::nodes::ListType::Bullet => "•".to_string(),
                     comrak::nodes::ListType::Ordered => {
                         let number = start + index;
-                        format!("{:>width$}{}", number, delimiter, width = number_width)
+                        format!("{number:>number_width$}{delimiter}")
                     }
                 };
-                let marker = format!("{} ", base_marker);
-                process_node(
-                    child,
-                    lines,
-                    headings,
-                    images,
-                    links,
-                    footnotes,
-                    code_blocks,
-                    mermaid_sources,
-                    list_depth,
-                    image_heights,
-                    wrap_width,
-                    Some(marker),
-                    mermaid_as_images,
-                );
+                let marker = format!("{base_marker} ");
+                process_node(child, ctx, list_depth, Some(marker));
             }
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::TaskItem(symbol) => {
             let indent = "  ".repeat(depth.saturating_sub(1));
             let task_marker = if symbol.is_some() { "✓" } else { "□" };
-            let marker = format!("{} ", task_marker);
-            let prefix_first = format!("{}{}", indent, marker);
+            let marker = format!("{task_marker} ");
+            let prefix_first = format!("{indent}{marker}");
             let prefix_next = format!("{}{}", indent, " ".repeat(marker.len()));
 
             let spans = collect_inline_spans(node);
-            let wrapped = wrap_spans(&spans, wrap_width, &prefix_first, &prefix_next);
+            let wrapped = wrap_spans(&spans, ctx.wrap_width, &prefix_first, &prefix_next);
             for line_spans in wrapped {
                 let content = spans_to_string(&line_spans);
-                lines.push(RenderedLine::with_spans(
+                ctx.lines.push(RenderedLine::with_spans(
                     content,
                     LineType::ListItem(depth),
                     line_spans,
@@ -443,44 +456,27 @@ fn process_node<'a>(
 
             for child in node.children() {
                 if matches!(child.data.borrow().value, NodeValue::List(_)) {
-                    process_node(
-                        child,
-                        lines,
-                        headings,
-                        images,
-                        links,
-                        footnotes,
-                        code_blocks,
-                        mermaid_sources,
-                        depth,
-                        image_heights,
-                        wrap_width,
-                        None,
-                        mermaid_as_images,
-                    );
+                    process_node(child, ctx, depth, None);
                 }
             }
         }
 
         NodeValue::Item(_) => {
             let indent = "  ".repeat(depth.saturating_sub(1));
-            let base_marker = list_marker.clone().unwrap_or_else(|| "- ".to_string());
+            let base_marker = list_marker.unwrap_or_else(|| "- ".to_string());
             let task_marker = find_task_marker(node);
-            let marker = if let Some(task_marker) = task_marker {
-                format!("{} ", task_marker)
-            } else {
-                base_marker
-            };
-            let prefix_first = format!("{}{}", indent, marker);
+            let marker = task_marker.map_or(base_marker, |tm| format!("{tm} "));
+            let prefix_first = format!("{indent}{marker}");
             let prefix_next = format!("{}{}", indent, " ".repeat(marker.len()));
             let mut rendered_any = false;
             let mut rendered_paragraphs = 0usize;
 
             for child in node.children() {
                 match &child.data.borrow().value {
-                    NodeValue::Paragraph => {
+                    NodeValue::Paragraph | NodeValue::TaskItem(_) => {
                         if rendered_paragraphs > 0 {
-                            lines.push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
+                            ctx.lines
+                                .push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
                         }
                         let spans = collect_inline_spans(child);
                         let prefix = if rendered_any {
@@ -488,11 +484,11 @@ fn process_node<'a>(
                         } else {
                             &prefix_first
                         };
-                        let wrapped = wrap_spans(&spans, wrap_width, prefix, &prefix_next);
+                        let wrapped = wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
 
                         for line_spans in wrapped {
                             let content = spans_to_string(&line_spans);
-                            lines.push(RenderedLine::with_spans(
+                            ctx.lines.push(RenderedLine::with_spans(
                                 content,
                                 LineType::ListItem(depth),
                                 line_spans,
@@ -500,73 +496,19 @@ fn process_node<'a>(
                         }
                         rendered_any = true;
                         rendered_paragraphs += 1;
-                    }
-                    NodeValue::TaskItem(_) => {
-                        if rendered_paragraphs > 0 {
-                            lines.push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
-                        }
-                        let spans = collect_inline_spans(child);
-                        let prefix = if rendered_any {
-                            &prefix_next
-                        } else {
-                            &prefix_first
-                        };
-                        let wrapped = wrap_spans(&spans, wrap_width, prefix, &prefix_next);
-
-                        for line_spans in wrapped {
-                            let content = spans_to_string(&line_spans);
-                            lines.push(RenderedLine::with_spans(
-                                content,
-                                LineType::ListItem(depth),
-                                line_spans,
-                            ));
-                        }
-                        rendered_any = true;
-                        rendered_paragraphs += 1;
-                    }
-                    NodeValue::List(_) => {
-                        process_node(
-                            child,
-                            lines,
-                            headings,
-                            images,
-                            links,
-                            footnotes,
-                            code_blocks,
-                            mermaid_sources,
-                            depth,
-                            image_heights,
-                            wrap_width,
-                            None,
-                            mermaid_as_images,
-                        );
                     }
                     _ => {
-                        process_node(
-                            child,
-                            lines,
-                            headings,
-                            images,
-                            links,
-                            footnotes,
-                            code_blocks,
-                            mermaid_sources,
-                            depth,
-                            image_heights,
-                            wrap_width,
-                            None,
-                            mermaid_as_images,
-                        );
+                        process_node(child, ctx, depth, None);
                     }
                 }
             }
 
             if !rendered_any {
                 let spans = collect_inline_spans(node);
-                let wrapped = wrap_spans(&spans, wrap_width, &prefix_first, &prefix_next);
+                let wrapped = wrap_spans(&spans, ctx.wrap_width, &prefix_first, &prefix_next);
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
-                    lines.push(RenderedLine::with_spans(
+                    ctx.lines.push(RenderedLine::with_spans(
                         content,
                         LineType::ListItem(depth),
                         line_spans,
@@ -576,94 +518,87 @@ fn process_node<'a>(
         }
 
         NodeValue::BlockQuote => {
-            render_blockquote(node, lines, wrap_width, 1);
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            render_blockquote(node, &mut ctx.lines, ctx.wrap_width, 1);
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::ThematicBreak => {
-            lines.push(RenderedLine::new(
+            ctx.lines.push(RenderedLine::new(
                 "─────".to_string(),
                 LineType::HorizontalRule,
             ));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::Table(_) => {
-            lines.extend(render_table(node, wrap_width));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines.extend(render_table(node));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::FootnoteDefinition(def) => {
-            let line_num = lines.len();
-            footnotes.insert(def.name.clone(), line_num);
+            let line_num = ctx.lines.len();
+            ctx.footnotes.insert(def.name.clone(), line_num);
             let label = format!("{} ", render_footnote_reference(&def.name));
             let continuation = " ".repeat(label.len());
             let spans = collect_inline_spans(node);
-            let wrapped = wrap_spans(&spans, wrap_width, &label, &continuation);
+            let wrapped = wrap_spans(&spans, ctx.wrap_width, &label, &continuation);
             if wrapped.is_empty() {
-                lines.push(RenderedLine::new(label, LineType::Paragraph));
+                ctx.lines
+                    .push(RenderedLine::new(label, LineType::Paragraph));
             } else {
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
-                    lines.push(RenderedLine::with_spans(
+                    ctx.lines.push(RenderedLine::with_spans(
                         content,
                         LineType::Paragraph,
                         line_spans,
                     ));
                 }
             }
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::Image(image) => {
             let alt = extract_text(node);
             let src = image.url.clone();
-            let line_num = lines.len();
+            let line_num = ctx.lines.len();
             let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
-            let height_lines = image_heights.get(&src).copied().unwrap_or(1).max(1);
-            let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
+            let height_lines = ctx.image_heights.get(&src).copied().unwrap_or(1).max(1);
+            let has_caption = ctx.image_heights.contains_key(&src) && !alt.is_empty();
 
-            images.push(ImageRef {
+            ctx.images.push(ImageRef {
                 alt: alt.clone(),
                 src: src.clone(),
                 line_range: line_num + usize::from(has_caption)
                     ..line_num + usize::from(has_caption) + height_lines,
             });
 
-            links.push(LinkRef {
+            ctx.link_refs.push(LinkRef {
                 text: label.clone(),
-                url: src.clone(),
+                url: src,
                 line: line_num + usize::from(has_caption),
             });
 
             if has_caption {
-                lines.push(RenderedLine::new(format!("    {alt}"), LineType::Image));
+                ctx.lines
+                    .push(RenderedLine::new(format!("    {alt}"), LineType::Image));
             }
-            lines.push(RenderedLine::new(label, LineType::Image));
+            ctx.lines.push(RenderedLine::new(label, LineType::Image));
 
             for _ in 1..height_lines {
-                lines.push(RenderedLine::new(String::new(), LineType::Image));
+                ctx.lines
+                    .push(RenderedLine::new(String::new(), LineType::Image));
             }
         }
 
         _ => {
             // Process children for unhandled nodes
             for child in node.children() {
-                process_node(
-                    child,
-                    lines,
-                    headings,
-                    images,
-                    links,
-                    footnotes,
-                    code_blocks,
-                    mermaid_sources,
-                    depth,
-                    image_heights,
-                    wrap_width,
-                    list_marker.clone(),
-                    mermaid_as_images,
-                );
+                process_node(child, ctx, depth, list_marker.clone());
             }
         }
     }
@@ -742,7 +677,7 @@ struct TableCellRender {
     spans: Vec<InlineSpan>,
 }
 
-fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<RenderedLine> {
+fn render_table<'a>(table_node: &'a AstNode<'a>) -> Vec<RenderedLine> {
     let (alignments, mut rows, has_header) = collect_table_rows(table_node);
     if rows.is_empty() {
         return Vec::new();
@@ -766,19 +701,6 @@ fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<Rende
     for row in &rows {
         for (idx, cell) in row.iter().enumerate() {
             col_widths[idx] = col_widths[idx].max(display_width(&cell.text));
-        }
-    }
-
-    // Keep the table inside available width.
-    // Table row width is: 1 + sum(col_width + 3) for all columns.
-    let max_table_width = wrap_width.max(4);
-    while 1 + col_widths.iter().sum::<usize>() + (3 * num_cols) > max_table_width {
-        if let Some((widest_idx, _)) = col_widths.iter().enumerate().max_by_key(|(_, w)| *w) {
-            if col_widths[widest_idx] > 1 {
-                col_widths[widest_idx] -= 1;
-            } else {
-                break;
-            }
         }
     }
 
@@ -818,7 +740,7 @@ fn collect_table_rows<'a>(
             if !matches!(cell_node.data.borrow().value, NodeValue::TableCell) {
                 continue;
             }
-            let spans = normalize_inline_whitespace(collect_inline_spans(cell_node));
+            let spans = normalize_inline_whitespace(&collect_inline_spans(cell_node));
             let text = spans_to_string(&spans);
             row_cells.push(TableCellRender { text, spans });
         }
@@ -880,12 +802,79 @@ fn render_table_row(
     RenderedLine::with_spans(content, LineType::Table, spans)
 }
 
+/// Render CSV content as table lines, reusing the existing table rendering infrastructure.
+/// All rows are rendered; the TUI viewport handles paging/scrolling.
+fn render_csv_as_table(csv_content: &str) -> Vec<RenderedLine> {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(csv_content.as_bytes());
+
+    let mut rows: Vec<Vec<TableCellRender>> = Vec::new();
+    for result in reader.records() {
+        let Ok(record) = result else { continue };
+        let cells: Vec<TableCellRender> = record
+            .iter()
+            .map(|field| {
+                let text = field.trim().to_string();
+                let spans = vec![InlineSpan::new(text.clone(), InlineStyle::default())];
+                TableCellRender { text, spans }
+            })
+            .collect();
+        if !cells.is_empty() {
+            rows.push(cells);
+        }
+    }
+
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let num_cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if num_cols == 0 {
+        return Vec::new();
+    }
+
+    // Pad rows to have equal column counts
+    for row in &mut rows {
+        while row.len() < num_cols {
+            row.push(TableCellRender {
+                text: String::new(),
+                spans: Vec::new(),
+            });
+        }
+    }
+
+    // Calculate column widths
+    let mut col_widths = vec![1_usize; num_cols];
+    for row in &rows {
+        for (idx, cell) in row.iter().enumerate() {
+            col_widths[idx] = col_widths[idx].max(display_width(&cell.text));
+        }
+    }
+
+    // All columns left-aligned (CSV has no alignment info)
+    let alignments = vec![comrak::nodes::TableAlignment::None; num_cols];
+    let mid = render_table_inner_divider(&col_widths);
+
+    let mut lines = Vec::new();
+    for (idx, row) in rows.iter().enumerate() {
+        lines.push(render_table_row(row, &col_widths, &alignments));
+        // First row is treated as header
+        if idx == 0 {
+            lines.push(RenderedLine::new(mid.clone(), LineType::Table));
+        }
+    }
+
+    lines
+}
+
 fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
-fn normalize_inline_whitespace(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
-    let text = spans_to_string(&spans);
+fn normalize_inline_whitespace(spans: &[InlineSpan]) -> Vec<InlineSpan> {
+    let text = spans_to_string(spans);
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return Vec::new();
@@ -893,7 +882,7 @@ fn normalize_inline_whitespace(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
 
     let mut result = Vec::new();
     let mut first_word = true;
-    for token in split_tokens_preserve_whitespace(&spans) {
+    for token in split_tokens_preserve_whitespace(spans) {
         let is_ws = token.text().chars().all(char::is_whitespace);
         if is_ws {
             continue;
@@ -980,7 +969,7 @@ fn map_script_chars(text: &str, superscript: bool) -> Option<String> {
     Some(mapped)
 }
 
-fn superscript_char(ch: char) -> Option<char> {
+const fn superscript_char(ch: char) -> Option<char> {
     match ch {
         'a' => Some('ᵃ'),
         'b' => Some('ᵇ'),
@@ -1026,7 +1015,7 @@ fn superscript_char(ch: char) -> Option<char> {
     }
 }
 
-fn subscript_char(ch: char) -> Option<char> {
+const fn subscript_char(ch: char) -> Option<char> {
     match ch {
         '0' => Some('₀'),
         '1' => Some('₁'),
@@ -1082,9 +1071,8 @@ fn collect_inline_spans_recursive<'a>(
     spans: &mut Vec<InlineSpan>,
 ) {
     match &node.data.borrow().value {
-        NodeValue::List(_) | NodeValue::Item(_) => {
-            return;
-        }
+        NodeValue::List(_) | NodeValue::Item(_) => {}
+
         NodeValue::Text(t) => {
             push_text_with_footnote_fallback(spans, t, style);
         }
@@ -1230,11 +1218,11 @@ fn wrap_spans(
                           current_len: &mut usize,
                           has_word: &mut bool| {
         current.clear();
-        if !prefix.is_empty() {
+        if prefix.is_empty() {
+            *current_len = 0;
+        } else {
             current.push(InlineSpan::new(prefix.to_string(), InlineStyle::default()));
             *current_len = UnicodeWidthStr::width(prefix);
-        } else {
-            *current_len = 0;
         }
         *has_word = false;
     };
@@ -1577,32 +1565,41 @@ mod tests {
     }
 
     #[test]
-    fn test_gfm_table_respects_layout_width() {
+    fn test_gfm_table_preserves_cell_content() {
         let md = "| Very long heading | Value |\n|---|---:|\n| some really long content | 12345 |";
         let doc = Document::parse_with_layout(md, 24).unwrap();
         let lines = doc.visible_lines(0, 20);
-        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
-            assert!(
-                unicode_width::UnicodeWidthStr::width(line.content()) <= 24,
-                "table line exceeds width: {}",
-                line.content()
-            );
-        }
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Very long heading"))
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("some really long content"))
+        );
     }
 
     #[test]
-    fn test_gfm_table_with_emoji_respects_layout_width() {
+    fn test_gfm_table_with_emoji_preserves_cell_content() {
         let md =
             "| Feature | Status |\n|---|---|\n| Bold | ✅ Supported |\n| Italic | ✅ Supported |";
         let doc = Document::parse_with_layout(md, 28).unwrap();
         let lines = doc.visible_lines(0, 20);
-        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
-            assert!(
-                unicode_width::UnicodeWidthStr::width(line.content()) <= 28,
-                "emoji table line exceeds width: {}",
-                line.content()
-            );
-        }
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("✅ Supported"))
+        );
     }
 
     #[test]
@@ -2041,6 +2038,189 @@ mod tests {
 
         assert!(list_lines[0].content().contains("Main task completed"));
         assert!(!list_lines[0].content().contains("Subtask"));
+    }
+
+    #[test]
+    fn test_csv_code_block_renders_as_table() {
+        let md = "```csv\nName,Age,City\nAlice,30,NYC\nBob,25,LA\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            !table_lines.is_empty(),
+            "CSV block should render as Table lines"
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Name") && l.content().contains("Age")),
+            "Header row should contain column names"
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Alice") && l.content().contains("30")),
+            "Data rows should be present"
+        );
+    }
+
+    #[test]
+    fn test_csv_code_block_has_header_divider() {
+        let md = "```csv\nA,B\n1,2\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines.iter().any(|l| l.content().contains("┼")),
+            "CSV table should have a header divider with ┼"
+        );
+    }
+
+    #[test]
+    fn test_csv_code_block_not_rendered_as_code_block() {
+        let md = "```csv\nX,Y\n1,2\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let code_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::CodeBlock)
+            .collect();
+        assert!(
+            code_lines.is_empty(),
+            "CSV block should not render as CodeBlock lines"
+        );
+    }
+
+    #[test]
+    fn test_csv_code_block_preserves_cell_content() {
+        let md =
+            "```csv\nVery Long Column Name,Another Long Name\nsome really long content,12345\n```";
+        let doc = Document::parse_with_layout(md, 30).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Very Long Column Name"))
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("some really long content"))
+        );
+    }
+
+    #[test]
+    fn test_csv_with_quoted_fields() {
+        let md = "```csv\nName,Description\nAlice,\"Has a, comma\"\nBob,\"Simple\"\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Has a, comma")),
+            "Quoted CSV fields with commas should be handled correctly"
+        );
+    }
+
+    #[test]
+    fn test_csv_empty_block_renders_nothing() {
+        let md = "```csv\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines.is_empty(),
+            "Empty CSV block should not render table lines"
+        );
+    }
+
+    #[test]
+    fn test_csv_single_column() {
+        let md = "```csv\nName\nAlice\nBob\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            !table_lines.is_empty(),
+            "Single-column CSV should render as table"
+        );
+        assert!(
+            table_lines.iter().any(|l| l.content().contains("Name")),
+            "Header should be present"
+        );
+        assert!(
+            table_lines.iter().any(|l| l.content().contains("Alice")),
+            "Data rows should be present"
+        );
+    }
+
+    #[test]
+    fn test_csv_large_file_renders_all_rows() {
+        let mut md = String::from("```csv\nID,Value\n");
+        for i in 0..200 {
+            md.push_str(&format!("{},{}\n", i, i * 10));
+        }
+        md.push_str("```");
+        let doc = parse(&md).unwrap();
+        let lines = doc.visible_lines(0, 500);
+        let data_rows: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table && !l.content().contains('┼'))
+            .collect();
+        // 1 header + 200 data rows = 201 total non-divider table lines
+        assert_eq!(data_rows.len(), 201, "All CSV rows should be rendered");
+    }
+
+    #[test]
+    fn test_csv_large_file_pages_via_viewport() {
+        let mut md = String::from("```csv\nID,Value\n");
+        for i in 0..200 {
+            md.push_str(&format!("{},{}\n", i, i * 10));
+        }
+        md.push_str("```");
+        let doc = parse(&md).unwrap();
+        // Simulate viewport paging: first page
+        let page1 = doc.visible_lines(0, 10);
+        assert_eq!(page1.len(), 10);
+        // Later page
+        let page2 = doc.visible_lines(100, 10);
+        assert_eq!(page2.len(), 10);
+        assert_ne!(page1[0].content(), page2[0].content());
+    }
+
+    #[test]
+    fn test_non_csv_code_block_unchanged() {
+        let md = "```rust\nfn main() {}\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let code_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::CodeBlock)
+            .collect();
+        assert!(
+            !code_lines.is_empty(),
+            "Non-CSV code blocks should still render as CodeBlock"
+        );
     }
 
     #[test]

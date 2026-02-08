@@ -100,19 +100,22 @@ fn rasterize_svg(svg: &str, target_width_px: u32) -> Result<DynamicImage> {
     let tree = resvg::usvg::Tree::from_str(svg, &opts)?;
     let size = tree.size();
 
-    let scale = target_width_px as f32 / size.width();
+    let scale = f64::from(target_width_px) / f64::from(size.width());
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let width = (size.width() * scale).ceil() as u32;
+    let width = (f64::from(size.width()) * scale).ceil() as u32;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let height = (size.height() * scale).ceil() as u32;
+    let height = (f64::from(size.height()) * scale).ceil() as u32;
 
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| anyhow::anyhow!("failed to create pixmap {width}x{height}"))?;
 
+    #[allow(clippy::cast_possible_truncation)]
+    let scale_f32 = scale as f32;
+
     resvg::render(
         &tree,
-        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        resvg::tiny_skia::Transform::from_scale(scale_f32, scale_f32),
         &mut pixmap.as_mut(),
     );
 

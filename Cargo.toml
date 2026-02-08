@@ -1,6 +1,6 @@
 [package]
 name = "markless"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 authors = ["Josh V"]
 description = "A terminal markdown viewer with image support"
@@ -18,12 +18,15 @@ crossterm = "0.29"
 # Markdown parsing
 comrak = { version = "0.31", default-features = false, features = ["shortcodes"] }
 
+# CSV parsing (for rendering CSV code blocks as tables)
+csv = "1"
+
 # Image rendering
 ratatui-image = { version = "10", default-features = false, features = ["image-defaults", "crossterm"] }
 image = "0.25"
 
 # Mermaid diagram rendering
-mermaid-rs-renderer = { git = "https://github.com/1jehuang/mermaid-rs-renderer", tag = "v0.2.0", default-features = false }
+mermaid-rs-renderer = { git = "https://github.com/1jehuang/mermaid-rs-renderer", rev = "b0ffff03", default-features = false }
 resvg = "0.44"
 
 # Syntax highlighting

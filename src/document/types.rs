@@ -3,6 +3,25 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// Result of parsing markdown, ready to be assembled into a `Document`.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedDocument {
+    /// Rendered lines for display
+    pub lines: Vec<RenderedLine>,
+    /// Heading references for TOC
+    pub headings: Vec<HeadingRef>,
+    /// Image references
+    pub images: Vec<ImageRef>,
+    /// Link references
+    pub links: Vec<LinkRef>,
+    /// Footnote definition lines by label
+    pub footnotes: HashMap<String, usize>,
+    /// Code blocks for lazy syntax highlighting
+    pub code_blocks: Vec<CodeBlockRef>,
+    /// Mermaid diagram sources keyed by synthetic image src
+    pub mermaid_sources: HashMap<String, String>,
+}
+
 /// Backing store for lazy hex dump rendering.
 #[derive(Debug, Clone)]
 pub struct HexData {
@@ -10,7 +29,7 @@ pub struct HexData {
     bytes: Vec<u8>,
     /// Number of header lines (heading, blank, size, blank)
     header_line_count: usize,
-    /// Cached rendered hex lines: (start_index, lines)
+    /// Cached rendered hex lines: (`start_index`, lines)
     cached_range: Option<(usize, Vec<RenderedLine>)>,
 }
 
@@ -53,26 +72,17 @@ impl Document {
         }
     }
 
-    /// Create a new document with the given content.
-    pub(crate) fn new(
-        source: String,
-        lines: Vec<RenderedLine>,
-        headings: Vec<HeadingRef>,
-        images: Vec<ImageRef>,
-        links: Vec<LinkRef>,
-        footnotes: HashMap<String, usize>,
-        code_blocks: Vec<CodeBlockRef>,
-        mermaid_sources: HashMap<String, String>,
-    ) -> Self {
+    /// Create a new document from parsed results.
+    pub(crate) fn from_parsed(source: String, result: ParsedDocument) -> Self {
         Self {
             source,
-            lines,
-            headings,
-            images,
-            links,
-            footnotes,
-            code_blocks,
-            mermaid_sources,
+            lines: result.lines,
+            headings: result.headings,
+            images: result.images,
+            links: result.links,
+            footnotes: result.footnotes,
+            code_blocks: result.code_blocks,
+            mermaid_sources: result.mermaid_sources,
             hex_data: None,
         }
     }
@@ -84,15 +94,12 @@ impl Document {
     pub fn from_hex(file_name: &str, bytes: Vec<u8>) -> Self {
         let size = bytes.len();
         let mut lines = Vec::new();
-        let mut headings = Vec::new();
-
-        // Line 0: Heading
-        headings.push(HeadingRef {
+        let headings = vec![HeadingRef {
             level: 1,
             text: file_name.to_string(),
             line: 0,
             id: None,
-        });
+        }];
         lines.push(RenderedLine::new(
             file_name.to_string(),
             LineType::Heading(1),
@@ -128,16 +135,13 @@ impl Document {
 
     /// Get the total number of rendered lines.
     pub fn line_count(&self) -> usize {
-        if let Some(hex) = &self.hex_data {
-            let hex_lines = (hex.bytes.len() + 15) / 16;
-            hex.header_line_count + hex_lines
-        } else {
-            self.lines.len()
-        }
+        self.hex_data.as_ref().map_or(self.lines.len(), |hex| {
+            hex.header_line_count + hex.bytes.len().div_ceil(16)
+        })
     }
 
     /// Returns true if this document uses lazy hex rendering.
-    pub fn is_hex_mode(&self) -> bool {
+    pub const fn is_hex_mode(&self) -> bool {
         self.hex_data.is_some()
     }
 
@@ -206,10 +210,11 @@ impl Document {
                 return self.lines.get(index);
             }
             let hex_idx = index - hex.header_line_count;
-            if let Some((cache_start, ref cached)) = hex.cached_range {
-                if hex_idx >= cache_start && hex_idx < cache_start + cached.len() {
-                    return cached.get(hex_idx - cache_start);
-                }
+            if let Some((cache_start, ref cached)) = hex.cached_range
+                && hex_idx >= cache_start
+                && hex_idx < cache_start + cached.len()
+            {
+                return cached.get(hex_idx - cache_start);
             }
             None
         } else {
@@ -246,10 +251,15 @@ impl Document {
     ///
     /// Generates hex dump lines for the viewport plus a buffer on each side.
     /// The range is in terms of overall document line indices (including headers).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-hex document (should only be called when
+    /// `is_hex_mode()` returns true).
     pub fn ensure_hex_lines_for_range(&mut self, range: Range<usize>) {
         let Some(hex) = &self.hex_data else { return };
         let header = hex.header_line_count;
-        let total_hex_lines = (hex.bytes.len() + 15) / 16;
+        let total_hex_lines = hex.bytes.len().div_ceil(16);
         if total_hex_lines == 0 {
             return;
         }
@@ -267,10 +277,11 @@ impl Document {
         let cache_end = (hex_end + buffer).min(total_hex_lines);
 
         // Check if current cache already covers the requested range
-        if let Some((cs, ref cached)) = hex.cached_range {
-            if cs <= hex_start && cs + cached.len() >= hex_end {
-                return;
-            }
+        if let Some((cs, ref cached)) = hex.cached_range
+            && cs <= hex_start
+            && cs + cached.len() >= hex_end
+        {
+            return;
         }
 
         // Generate the cached lines
@@ -289,7 +300,7 @@ impl Document {
 
     /// Lazily apply syntax highlighting to code blocks intersecting `range`.
     pub fn ensure_highlight_for_range(&mut self, range: Range<usize>) {
-        for block in self.code_blocks.iter_mut() {
+        for block in &mut self.code_blocks {
             if block.highlighted
                 || block.line_range.end <= range.start
                 || block.line_range.start >= range.end
@@ -314,7 +325,7 @@ impl Document {
                 line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
                 line_spans.extend(trimmed_spans);
                 line_spans.push(InlineSpan::new(
-                    format!("{} │", padding),
+                    format!("{padding} │"),
                     InlineStyle::default(),
                 ));
                 let content = spans_to_string(&line_spans);
@@ -328,7 +339,7 @@ impl Document {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CodeBlockRef {
+pub struct CodeBlockRef {
     pub line_range: Range<usize>,
     pub language: Option<String>,
     pub raw_lines: Vec<String>,
@@ -352,7 +363,7 @@ pub struct RenderedLine {
 
 impl RenderedLine {
     /// Create a new rendered line.
-    pub fn new(content: String, line_type: LineType) -> Self {
+    pub const fn new(content: String, line_type: LineType) -> Self {
         Self {
             content,
             line_type,
@@ -362,7 +373,7 @@ impl RenderedLine {
     }
 
     /// Create a new rendered line with inline spans.
-    pub fn with_spans(content: String, line_type: LineType, spans: Vec<InlineSpan>) -> Self {
+    pub const fn with_spans(content: String, line_type: LineType, spans: Vec<InlineSpan>) -> Self {
         Self {
             content,
             line_type,
@@ -372,7 +383,8 @@ impl RenderedLine {
     }
 
     /// Create with source range.
-    pub fn with_source_range(mut self, range: Range<usize>) -> Self {
+    #[must_use]
+    pub const fn with_source_range(mut self, range: Range<usize>) -> Self {
         self.source_range = Some(range);
         self
     }
@@ -383,7 +395,7 @@ impl RenderedLine {
     }
 
     /// Get the line type.
-    pub fn line_type(&self) -> &LineType {
+    pub const fn line_type(&self) -> &LineType {
         &self.line_type
     }
 
@@ -430,7 +442,7 @@ pub struct InlineSpan {
 }
 
 impl InlineSpan {
-    pub fn new(text: String, style: InlineStyle) -> Self {
+    pub const fn new(text: String, style: InlineStyle) -> Self {
         Self { text, style }
     }
 
@@ -438,7 +450,7 @@ impl InlineSpan {
         &self.text
     }
 
-    pub fn style(&self) -> InlineStyle {
+    pub const fn style(&self) -> InlineStyle {
         self.style
     }
 }
@@ -582,15 +594,12 @@ mod tests {
             RenderedLine::new("Line 4".to_string(), LineType::Paragraph),
             RenderedLine::new("Line 5".to_string(), LineType::Paragraph),
         ];
-        let doc = Document::new(
+        let doc = Document::from_parsed(
             "source".to_string(),
-            lines,
-            vec![],
-            vec![],
-            vec![],
-            HashMap::new(),
-            vec![],
-            HashMap::new(),
+            ParsedDocument {
+                lines,
+                ..ParsedDocument::default()
+            },
         );
 
         let visible = doc.visible_lines(1, 2);
@@ -605,15 +614,12 @@ mod tests {
             RenderedLine::new("Line 1".to_string(), LineType::Paragraph),
             RenderedLine::new("Line 2".to_string(), LineType::Paragraph),
         ];
-        let doc = Document::new(
+        let doc = Document::from_parsed(
             "source".to_string(),
-            lines,
-            vec![],
-            vec![],
-            vec![],
-            HashMap::new(),
-            vec![],
-            HashMap::new(),
+            ParsedDocument {
+                lines,
+                ..ParsedDocument::default()
+            },
         );
 
         let visible = doc.visible_lines(0, 10);
