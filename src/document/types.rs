@@ -20,6 +20,8 @@ pub struct Document {
     footnotes: HashMap<String, usize>,
     /// Code blocks for lazy syntax highlighting
     code_blocks: Vec<CodeBlockRef>,
+    /// Mermaid diagram sources keyed by synthetic image src (e.g. `mermaid://0`)
+    mermaid_sources: HashMap<String, String>,
 }
 
 impl Document {
@@ -33,6 +35,7 @@ impl Document {
             links: Vec::new(),
             footnotes: HashMap::new(),
             code_blocks: Vec::new(),
+            mermaid_sources: HashMap::new(),
         }
     }
 
@@ -45,6 +48,7 @@ impl Document {
         links: Vec<LinkRef>,
         footnotes: HashMap<String, usize>,
         code_blocks: Vec<CodeBlockRef>,
+        mermaid_sources: HashMap<String, String>,
     ) -> Self {
         Self {
             source,
@@ -54,6 +58,7 @@ impl Document {
             links,
             footnotes,
             code_blocks,
+            mermaid_sources,
         }
     }
 
@@ -75,6 +80,11 @@ impl Document {
     /// Get all link references.
     pub fn links(&self) -> &[LinkRef] {
         &self.links
+    }
+
+    /// Get mermaid diagram sources keyed by synthetic image src.
+    pub const fn mermaid_sources(&self) -> &HashMap<String, String> {
+        &self.mermaid_sources
     }
 
     pub fn footnote_line(&self, name: &str) -> Option<usize> {
@@ -420,6 +430,7 @@ mod tests {
             vec![],
             HashMap::new(),
             vec![],
+            HashMap::new(),
         );
 
         let visible = doc.visible_lines(1, 2);
@@ -442,6 +453,7 @@ mod tests {
             vec![],
             HashMap::new(),
             vec![],
+            HashMap::new(),
         );
 
         let visible = doc.visible_lines(0, 10);

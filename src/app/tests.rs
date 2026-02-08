@@ -1339,3 +1339,26 @@ fn test_browse_navigate_parent_at_root_is_noop() {
         "Should not show error toast"
     );
 }
+
+#[test]
+fn test_mermaid_as_images_false_without_picker() {
+    let model = create_test_model();
+    // No picker set — should not render mermaid as images
+    assert!(!model.should_render_mermaid_as_images());
+}
+
+#[test]
+fn test_mermaid_as_images_false_with_halfblock_picker() {
+    let picker = ratatui_image::picker::Picker::halfblocks();
+    let model = create_test_model().with_picker(Some(picker));
+    // Halfblock picker — should NOT render mermaid as images
+    assert!(!model.should_render_mermaid_as_images());
+}
+
+#[test]
+fn test_mermaid_as_images_false_when_images_disabled() {
+    let picker = ratatui_image::picker::Picker::halfblocks();
+    let mut model = create_test_model().with_picker(Some(picker));
+    model.images_enabled = false;
+    assert!(!model.should_render_mermaid_as_images());
+}

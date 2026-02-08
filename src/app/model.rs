@@ -190,6 +190,20 @@ impl Model {
         self
     }
 
+    /// Whether mermaid diagrams should be rendered as images.
+    ///
+    /// True only when images are enabled and the terminal supports a real
+    /// graphics protocol (Kitty, Sixel, iTerm2) — not half-block fallback.
+    pub fn should_render_mermaid_as_images(&self) -> bool {
+        if !self.images_enabled {
+            return false;
+        }
+        let Some(picker) = &self.picker else {
+            return false;
+        };
+        !matches!(picker.protocol_type(), ProtocolType::Halfblocks)
+    }
+
     /// Load images that are near the viewport (lazy loading with lookahead).
     pub fn load_nearby_images(&mut self) {
         if self.resize_pending {
@@ -256,10 +270,29 @@ impl Model {
             };
 
             if needs_protocol {
-                // Try to get original image from cache, or load from disk
+                // Try to get original image from cache, or load/render
                 let original: Option<DynamicImage> =
                     if let Some(img) = self.original_images.get(&src) {
                         Some(img.clone())
+                    } else if src.starts_with("mermaid://") {
+                        // Render mermaid diagram to image
+                        self.document
+                            .mermaid_sources()
+                            .get(&src)
+                            .and_then(|mermaid_text| {
+                                crate::mermaid::render_to_image(mermaid_text)
+                                    .inspect_err(|e| {
+                                        crate::perf::log_event(
+                                            "mermaid.render.error",
+                                            format!("src={src} err={e}"),
+                                        );
+                                    })
+                                    .ok()
+                            })
+                            .map(|img| {
+                                self.original_images.insert(src.clone(), img.clone());
+                                img
+                            })
                     } else if let Some(img) = loader.load_sync(&src) {
                         self.original_images.insert(src.clone(), img.clone());
                         Some(img)
@@ -395,10 +428,12 @@ impl Model {
     }
 
     pub(super) fn reflow_layout(&mut self) {
-        if let Ok(document) = Document::parse_with_layout_and_image_heights(
+        let mermaid = self.should_render_mermaid_as_images();
+        if let Ok(document) = Document::parse_with_all_options(
             self.document.source(),
             self.layout_width(),
             &self.image_layout_heights,
+            mermaid,
         ) {
             self.document = document;
             self.viewport.set_total_lines(self.document.line_count());
@@ -463,10 +498,12 @@ impl Model {
             let raw = std::fs::read_to_string(path)?;
             crate::document::prepare_content(path, raw)
         };
-        let document = Document::parse_with_layout_and_image_heights(
+        let mermaid = self.should_render_mermaid_as_images();
+        let document = Document::parse_with_all_options(
             &content,
             self.layout_width(),
             &self.image_layout_heights,
+            mermaid,
         )?;
         self.file_path = path.to_path_buf();
         self.base_dir = path
@@ -546,10 +583,12 @@ impl Model {
             let raw = std::fs::read_to_string(&self.file_path)?;
             crate::document::prepare_content(&self.file_path, raw)
         };
-        let document = Document::parse_with_layout_and_image_heights(
+        let mermaid = self.should_render_mermaid_as_images();
+        let document = Document::parse_with_all_options(
             &content,
             self.layout_width(),
             &self.image_layout_heights,
+            mermaid,
         )?;
         self.document = document;
 

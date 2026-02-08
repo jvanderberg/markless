@@ -33,6 +33,7 @@ pub mod document;
 pub mod highlight;
 pub mod image;
 pub mod input;
+pub mod mermaid;
 pub mod perf;
 pub mod search;
 pub mod ui;

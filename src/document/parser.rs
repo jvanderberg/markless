@@ -45,6 +45,29 @@ impl Document {
     ) -> Result<Self> {
         parse_with_layout(source, width, image_heights)
     }
+
+    /// Parse markdown, rendering mermaid code blocks as image placeholders.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the markdown source cannot be parsed.
+    pub fn parse_with_mermaid_images(source: &str, width: u16) -> Result<Self> {
+        parse_with_options(source, width, &HashMap::new(), true)
+    }
+
+    /// Parse with all options: layout width, image heights, and mermaid-as-images flag.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the markdown source cannot be parsed.
+    pub fn parse_with_all_options(
+        source: &str,
+        width: u16,
+        image_heights: &HashMap<String, usize>,
+        mermaid_as_images: bool,
+    ) -> Result<Self> {
+        parse_with_options(source, width, image_heights, mermaid_as_images)
+    }
 }
 
 /// Parse markdown source into a Document.
@@ -66,6 +89,16 @@ pub fn parse_with_layout(
     width: u16,
     image_heights: &HashMap<String, usize>,
 ) -> Result<Document> {
+    parse_with_options(source, width, image_heights, false)
+}
+
+/// Parse markdown source into a Document with all options.
+fn parse_with_options(
+    source: &str,
+    width: u16,
+    image_heights: &HashMap<String, usize>,
+    mermaid_as_images: bool,
+) -> Result<Document> {
     let arena = Arena::new();
     let options = create_options();
     let root = parse_document(&arena, source, &options);
@@ -76,6 +109,7 @@ pub fn parse_with_layout(
     let mut links = Vec::new();
     let mut footnotes = HashMap::new();
     let mut code_blocks = Vec::new();
+    let mut mermaid_sources = HashMap::new();
 
     let wrap_width = width.max(1) as usize;
     process_node(
@@ -86,10 +120,12 @@ pub fn parse_with_layout(
         &mut links,
         &mut footnotes,
         &mut code_blocks,
+        &mut mermaid_sources,
         0,
         image_heights,
         wrap_width,
         None,
+        mermaid_as_images,
     );
 
     Ok(Document::new(
@@ -100,6 +136,7 @@ pub fn parse_with_layout(
         links,
         footnotes,
         code_blocks,
+        mermaid_sources,
     ))
 }
 
@@ -130,10 +167,12 @@ fn process_node<'a>(
     links: &mut Vec<LinkRef>,
     footnotes: &mut HashMap<String, usize>,
     code_blocks: &mut Vec<CodeBlockRef>,
+    mermaid_sources: &mut HashMap<String, String>,
     depth: usize,
     image_heights: &HashMap<String, usize>,
     wrap_width: usize,
     list_marker: Option<String>,
+    mermaid_as_images: bool,
 ) {
     match &node.data.borrow().value {
         NodeValue::Document => {
@@ -146,10 +185,12 @@ fn process_node<'a>(
                     links,
                     footnotes,
                     code_blocks,
+                    mermaid_sources,
                     depth,
                     image_heights,
                     wrap_width,
                     list_marker.clone(),
+                    mermaid_as_images,
                 );
             }
         }
@@ -236,6 +277,49 @@ fn process_node<'a>(
             let info = code_block.info.clone();
             let literal = code_block.literal.clone();
             let language = info.split_whitespace().next().filter(|s| !s.is_empty());
+
+            // Store mermaid diagram sources for optional image rendering.
+            if language == Some("mermaid") {
+                let key = format!("mermaid://{}", mermaid_sources.len());
+                mermaid_sources.insert(key.clone(), literal.trim_end().to_string());
+
+                if mermaid_as_images {
+                    // Emit as an image placeholder instead of a code block.
+                    let height_lines = image_heights.get(&key).copied().unwrap_or(1).max(1);
+                    let has_caption = image_heights.contains_key(&key);
+                    let start_line = lines.len();
+                    let label = "[Image: mermaid diagram]".to_string();
+
+                    if has_caption {
+                        lines.push(RenderedLine::new(
+                            "    mermaid diagram".to_string(),
+                            LineType::Image,
+                        ));
+                    }
+
+                    lines.push(RenderedLine::new(label.clone(), LineType::Image));
+                    links.push(LinkRef {
+                        text: label,
+                        url: key.clone(),
+                        line: start_line + usize::from(has_caption),
+                    });
+
+                    for _ in 1..height_lines {
+                        lines.push(RenderedLine::new(String::new(), LineType::Image));
+                    }
+
+                    let end_line = lines.len();
+                    images.push(ImageRef {
+                        alt: "mermaid diagram".to_string(),
+                        src: key,
+                        line_range: start_line + usize::from(has_caption)..end_line,
+                    });
+                    lines.push(RenderedLine::new(String::new(), LineType::Empty));
+                    // Skip the normal code block rendering below.
+                    return;
+                }
+            }
+
             let content_width = literal
                 .lines()
                 .map(UnicodeWidthStr::width)
@@ -328,10 +412,12 @@ fn process_node<'a>(
                     links,
                     footnotes,
                     code_blocks,
+                    mermaid_sources,
                     list_depth,
                     image_heights,
                     wrap_width,
                     Some(marker),
+                    mermaid_as_images,
                 );
             }
             lines.push(RenderedLine::new(String::new(), LineType::Empty));
@@ -365,10 +451,12 @@ fn process_node<'a>(
                         links,
                         footnotes,
                         code_blocks,
+                        mermaid_sources,
                         depth,
                         image_heights,
                         wrap_width,
                         None,
+                        mermaid_as_images,
                     );
                 }
             }
@@ -445,10 +533,12 @@ fn process_node<'a>(
                             links,
                             footnotes,
                             code_blocks,
+                            mermaid_sources,
                             depth,
                             image_heights,
                             wrap_width,
                             None,
+                            mermaid_as_images,
                         );
                     }
                     _ => {
@@ -460,10 +550,12 @@ fn process_node<'a>(
                             links,
                             footnotes,
                             code_blocks,
+                            mermaid_sources,
                             depth,
                             image_heights,
                             wrap_width,
                             None,
+                            mermaid_as_images,
                         );
                     }
                 }
@@ -565,10 +657,12 @@ fn process_node<'a>(
                     links,
                     footnotes,
                     code_blocks,
+                    mermaid_sources,
                     depth,
                     image_heights,
                     wrap_width,
                     list_marker.clone(),
+                    mermaid_as_images,
                 );
             }
         }
@@ -1947,5 +2041,57 @@ mod tests {
 
         assert!(list_lines[0].content().contains("Main task completed"));
         assert!(!list_lines[0].content().contains("Subtask"));
+    }
+
+    #[test]
+    fn test_mermaid_code_block_stored_as_mermaid_source() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = parse(md).unwrap();
+        assert_eq!(doc.mermaid_sources().len(), 1);
+        let source = doc.mermaid_sources().values().next().unwrap();
+        assert!(source.contains("graph TD"));
+        assert!(source.contains("A --> B"));
+    }
+
+    #[test]
+    fn test_non_mermaid_code_block_not_in_mermaid_sources() {
+        let md = "```rust\nfn main() {}\n```";
+        let doc = parse(md).unwrap();
+        assert!(doc.mermaid_sources().is_empty());
+    }
+
+    #[test]
+    fn test_mermaid_block_renders_as_image_when_flag_set() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = Document::parse_with_mermaid_images(md, 80).unwrap();
+        assert_eq!(doc.images().len(), 1);
+        assert!(doc.images()[0].src.starts_with("mermaid://"));
+        // Should still have the source stored
+        assert_eq!(doc.mermaid_sources().len(), 1);
+    }
+
+    #[test]
+    fn test_mermaid_block_stays_as_code_without_flag() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        // No image entries for mermaid without the flag
+        assert!(doc.images().is_empty());
+        // Still stored as mermaid source
+        assert_eq!(doc.mermaid_sources().len(), 1);
+        // Rendered as code block lines
+        let lines = doc.visible_lines(0, 20);
+        assert!(lines.iter().any(|l| *l.line_type() == LineType::CodeBlock));
+    }
+
+    #[test]
+    fn test_mermaid_image_placeholder_text() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = Document::parse_with_mermaid_images(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.content().contains("[Image: mermaid diagram]"))
+        );
     }
 }
