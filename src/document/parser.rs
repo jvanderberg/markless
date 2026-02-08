@@ -245,7 +245,7 @@ fn process_node<'a, S: BuildHasher>(
 
             // Render CSV code blocks as tables instead of code blocks
             if language == Some("csv") {
-                let csv_lines = render_csv_as_table(&literal, ctx.wrap_width);
+                let csv_lines = render_csv_as_table(&literal);
                 if !csv_lines.is_empty() {
                     ctx.lines.extend(csv_lines);
                     ctx.lines
@@ -444,7 +444,7 @@ fn process_node<'a, S: BuildHasher>(
         }
 
         NodeValue::Table(_) => {
-            ctx.lines.extend(render_table(node, ctx.wrap_width));
+            ctx.lines.extend(render_table(node));
             ctx.lines
                 .push(RenderedLine::new(String::new(), LineType::Empty));
         }
@@ -588,7 +588,7 @@ struct TableCellRender {
     spans: Vec<InlineSpan>,
 }
 
-fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<RenderedLine> {
+fn render_table<'a>(table_node: &'a AstNode<'a>) -> Vec<RenderedLine> {
     let (alignments, mut rows, has_header) = collect_table_rows(table_node);
     if rows.is_empty() {
         return Vec::new();
@@ -612,19 +612,6 @@ fn render_table<'a>(table_node: &'a AstNode<'a>, wrap_width: usize) -> Vec<Rende
     for row in &rows {
         for (idx, cell) in row.iter().enumerate() {
             col_widths[idx] = col_widths[idx].max(display_width(&cell.text));
-        }
-    }
-
-    // Keep the table inside available width.
-    // Table row width is: 1 + sum(col_width + 3) for all columns.
-    let max_table_width = wrap_width.max(4);
-    while 1 + col_widths.iter().sum::<usize>() + (3 * num_cols) > max_table_width {
-        if let Some((widest_idx, _)) = col_widths.iter().enumerate().max_by_key(|(_, w)| *w) {
-            if col_widths[widest_idx] > 1 {
-                col_widths[widest_idx] -= 1;
-            } else {
-                break;
-            }
         }
     }
 
@@ -728,7 +715,7 @@ fn render_table_row(
 
 /// Render CSV content as table lines, reusing the existing table rendering infrastructure.
 /// All rows are rendered; the TUI viewport handles paging/scrolling.
-fn render_csv_as_table(csv_content: &str, wrap_width: usize) -> Vec<RenderedLine> {
+fn render_csv_as_table(csv_content: &str) -> Vec<RenderedLine> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -774,18 +761,6 @@ fn render_csv_as_table(csv_content: &str, wrap_width: usize) -> Vec<RenderedLine
     for row in &rows {
         for (idx, cell) in row.iter().enumerate() {
             col_widths[idx] = col_widths[idx].max(display_width(&cell.text));
-        }
-    }
-
-    // Shrink to fit within wrap_width
-    let max_table_width = wrap_width.max(4);
-    while 1 + col_widths.iter().sum::<usize>() + (3 * num_cols) > max_table_width {
-        if let Some((widest_idx, _)) = col_widths.iter().enumerate().max_by_key(|(_, w)| *w) {
-            if col_widths[widest_idx] > 1 {
-                col_widths[widest_idx] -= 1;
-            } else {
-                break;
-            }
         }
     }
 
@@ -1501,32 +1476,41 @@ mod tests {
     }
 
     #[test]
-    fn test_gfm_table_respects_layout_width() {
+    fn test_gfm_table_preserves_cell_content() {
         let md = "| Very long heading | Value |\n|---|---:|\n| some really long content | 12345 |";
         let doc = Document::parse_with_layout(md, 24).unwrap();
         let lines = doc.visible_lines(0, 20);
-        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
-            assert!(
-                unicode_width::UnicodeWidthStr::width(line.content()) <= 24,
-                "table line exceeds width: {}",
-                line.content()
-            );
-        }
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Very long heading"))
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("some really long content"))
+        );
     }
 
     #[test]
-    fn test_gfm_table_with_emoji_respects_layout_width() {
+    fn test_gfm_table_with_emoji_preserves_cell_content() {
         let md =
             "| Feature | Status |\n|---|---|\n| Bold | ✅ Supported |\n| Italic | ✅ Supported |";
         let doc = Document::parse_with_layout(md, 28).unwrap();
         let lines = doc.visible_lines(0, 20);
-        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
-            assert!(
-                unicode_width::UnicodeWidthStr::width(line.content()) <= 28,
-                "emoji table line exceeds width: {}",
-                line.content()
-            );
-        }
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("✅ Supported"))
+        );
     }
 
     #[test]
@@ -2025,18 +2009,25 @@ mod tests {
     }
 
     #[test]
-    fn test_csv_code_block_respects_layout_width() {
+    fn test_csv_code_block_preserves_cell_content() {
         let md =
             "```csv\nVery Long Column Name,Another Long Name\nsome really long content,12345\n```";
         let doc = Document::parse_with_layout(md, 30).unwrap();
         let lines = doc.visible_lines(0, 20);
-        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
-            assert!(
-                unicode_width::UnicodeWidthStr::width(line.content()) <= 30,
-                "CSV table line exceeds width: {}",
-                line.content()
-            );
-        }
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Very Long Column Name"))
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("some really long content"))
+        );
     }
 
     #[test]

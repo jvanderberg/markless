@@ -271,7 +271,7 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => return Some(Message::GoToBottom),
             KeyCode::Char('/') => return Some(Message::StartSearch),
             KeyCode::Char('w') => return Some(Message::ToggleWatch),
-            KeyCode::Char('R') | KeyCode::Char('r') => return Some(Message::ForceReload),
+            KeyCode::Char('R' | 'r') => return Some(Message::ForceReload),
             KeyCode::Char('o') => return Some(Message::OpenVisibleLinks),
             _ => {}
         }
@@ -312,23 +312,6 @@ impl App {
                     None
                 }
             }
-            // Global keys handled in early block above
-            KeyCode::Char('b')
-            | KeyCode::Char(' ')
-            | KeyCode::Char('g')
-            | KeyCode::Char('G')
-            | KeyCode::Char('/')
-            | KeyCode::Char('w')
-            | KeyCode::Char('R')
-            | KeyCode::Char('r')
-            | KeyCode::Char('o')
-            | KeyCode::PageDown
-            | KeyCode::PageUp
-            | KeyCode::Home
-            | KeyCode::End => None,
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
-
             // TOC
             KeyCode::Char('t') => Some(Message::ToggleToc),
             KeyCode::Char('T') => Some(Message::ToggleTocFocus),

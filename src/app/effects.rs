@@ -274,7 +274,7 @@ fn open_external_link(url: &str) -> std::io::Result<()> {
             .arg(url)
             .spawn()?
             .wait()?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "windows")]
     {
@@ -319,10 +319,7 @@ fn copy_to_pbcopy(text: &str) -> std::io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "pbcopy failed",
-        ))
+        Err(std::io::Error::other("pbcopy failed"))
     }
 }
 
