@@ -103,12 +103,8 @@ impl App {
         // Load the document
         let _read_scope = crate::perf::scope("app.read_file");
         let (content, effective_file) = if let Some(ref file) = initial_file {
-            let c = if crate::document::is_image_file(file) {
-                crate::document::image_markdown(file)
-            } else {
-                let raw = std::fs::read_to_string(file)?;
-                crate::document::prepare_content(file, raw)
-            };
+            let raw_bytes = std::fs::read(file)?;
+            let c = crate::document::prepare_content_from_bytes(file, raw_bytes);
             (c, file.clone())
         } else {
             // No viewable file found; show empty document

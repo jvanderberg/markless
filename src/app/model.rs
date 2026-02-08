@@ -457,12 +457,8 @@ impl Model {
 
     /// Load a file into the document area.
     pub fn load_file(&mut self, path: &Path) -> Result<()> {
-        let content = if crate::document::is_image_file(path) {
-            crate::document::image_markdown(path)
-        } else {
-            let raw = std::fs::read_to_string(path)?;
-            crate::document::prepare_content(path, raw)
-        };
+        let raw_bytes = std::fs::read(path)?;
+        let content = crate::document::prepare_content_from_bytes(path, raw_bytes);
         let document = Document::parse_with_layout_and_image_heights(
             &content,
             self.layout_width(),
@@ -540,12 +536,8 @@ impl Model {
     }
 
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
-        let content = if crate::document::is_image_file(&self.file_path) {
-            crate::document::image_markdown(&self.file_path)
-        } else {
-            let raw = std::fs::read_to_string(&self.file_path)?;
-            crate::document::prepare_content(&self.file_path, raw)
-        };
+        let raw_bytes = std::fs::read(&self.file_path)?;
+        let content = crate::document::prepare_content_from_bytes(&self.file_path, raw_bytes);
         let document = Document::parse_with_layout_and_image_heights(
             &content,
             self.layout_width(),
