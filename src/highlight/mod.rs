@@ -165,8 +165,10 @@ pub fn highlight_code(language: Option<&str>, code: &str) -> Vec<Vec<InlineSpan>
 
     let Some(syntax) = syntax else {
         for line in code.lines() {
-            let mut style = InlineStyle::default();
-            style.code = true;
+            let style = InlineStyle {
+                code: true,
+                ..InlineStyle::default()
+            };
             lines.push(vec![InlineSpan::new(line.to_string(), style)]);
         }
         return lines;
@@ -179,8 +181,10 @@ pub fn highlight_code(language: Option<&str>, code: &str) -> Vec<Vec<InlineSpan>
             .unwrap_or_default();
         let mut spans = Vec::new();
         for (style, text) in ranges {
-            let mut inline_style = InlineStyle::default();
-            inline_style.code = true;
+            let mut inline_style = InlineStyle {
+                code: true,
+                ..InlineStyle::default()
+            };
             let fg = InlineColor {
                 r: style.foreground.r,
                 g: style.foreground.g,
@@ -252,6 +256,11 @@ pub enum HighlightBackground {
 
 static BACKGROUND_OVERRIDE: OnceLock<Mutex<Option<HighlightBackground>>> = OnceLock::new();
 
+/// Sets the background mode override for syntax highlighting.
+///
+/// # Panics
+///
+/// Panics if the internal background-mode mutex is poisoned.
 pub fn set_background_mode(mode: Option<HighlightBackground>) {
     let lock = BACKGROUND_OVERRIDE.get_or_init(|| Mutex::new(None));
     let mut guard = lock.lock().expect("highlight background lock");
@@ -259,7 +268,10 @@ pub fn set_background_mode(mode: Option<HighlightBackground>) {
 }
 
 pub fn set_background_mode_from_rgb(r: u8, g: u8, b: u8) {
-    let luma = (0.2126 * r as f32) + (0.7152 * g as f32) + (0.0722 * b as f32);
+    let luma = 0.2126f32.mul_add(
+        f32::from(r),
+        0.7152f32.mul_add(f32::from(g), 0.0722 * f32::from(b)),
+    );
     let mode = if luma >= 140.0 {
         HighlightBackground::Light
     } else {
@@ -270,13 +282,13 @@ pub fn set_background_mode_from_rgb(r: u8, g: u8, b: u8) {
 
 fn background_mode() -> BackgroundMode {
     let lock = BACKGROUND_OVERRIDE.get_or_init(|| Mutex::new(None));
-    if let Ok(guard) = lock.lock() {
-        if let Some(mode) = *guard {
-            return match mode {
-                HighlightBackground::Light => BackgroundMode::Light,
-                HighlightBackground::Dark => BackgroundMode::Dark,
-            };
-        }
+    if let Ok(guard) = lock.lock()
+        && let Some(mode) = *guard
+    {
+        return match mode {
+            HighlightBackground::Light => BackgroundMode::Light,
+            HighlightBackground::Dark => BackgroundMode::Dark,
+        };
     }
     background_mode_from_colorfgbg(std::env::var("COLORFGBG").ok().as_deref())
 }
@@ -305,16 +317,20 @@ fn adjust_fg_for_background(color: InlineColor, mode: BackgroundMode) -> InlineC
     match mode {
         BackgroundMode::Dark => color,
         BackgroundMode::Light => {
-            let luma =
-                (0.2126 * color.r as f32) + (0.7152 * color.g as f32) + (0.0722 * color.b as f32);
+            let luma = 0.2126f32.mul_add(
+                f32::from(color.r),
+                0.7152f32.mul_add(f32::from(color.g), 0.0722 * f32::from(color.b)),
+            );
             if luma < 155.0 {
                 return color;
             }
 
+            // Clamped to [0, 255]
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             InlineColor {
-                r: ((color.r as f32) * 0.42).round() as u8,
-                g: ((color.g as f32) * 0.42).round() as u8,
-                b: ((color.b as f32) * 0.42).round() as u8,
+                r: (f32::from(color.r) * 0.42).round().clamp(0.0, 255.0) as u8,
+                g: (f32::from(color.g) * 0.42).round().clamp(0.0, 255.0) as u8,
+                b: (f32::from(color.b) * 0.42).round().clamp(0.0, 255.0) as u8,
             }
         }
     }

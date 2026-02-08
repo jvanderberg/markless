@@ -16,14 +16,14 @@ pub(super) struct ResizeDebouncer {
 }
 
 impl ResizeDebouncer {
-    pub(super) fn new(delay_ms: u64) -> Self {
+    pub(super) const fn new(delay_ms: u64) -> Self {
         Self {
             delay_ms,
             pending: None,
         }
     }
 
-    pub(super) fn queue(&mut self, width: u16, height: u16, now_ms: u64) {
+    pub(super) const fn queue(&mut self, width: u16, height: u16, now_ms: u64) {
         self.pending = Some((width, height, now_ms));
     }
 
@@ -37,7 +37,7 @@ impl ResizeDebouncer {
         }
     }
 
-    pub(super) fn is_pending(&self) -> bool {
+    pub(super) const fn is_pending(&self) -> bool {
         self.pending.is_some()
     }
 }
@@ -48,14 +48,14 @@ pub(super) struct BrowseDebouncer {
 }
 
 impl BrowseDebouncer {
-    pub(super) fn new(delay_ms: u64) -> Self {
+    pub(super) const fn new(delay_ms: u64) -> Self {
         Self {
             delay_ms,
             pending: None,
         }
     }
 
-    pub(super) fn queue(&mut self, idx: usize, now_ms: u64) {
+    pub(super) const fn queue(&mut self, idx: usize, now_ms: u64) {
         self.pending = Some((idx, now_ms));
     }
 
@@ -69,25 +69,30 @@ impl BrowseDebouncer {
         }
     }
 
-    pub(super) fn cancel(&mut self) {
+    pub(super) const fn cancel(&mut self) {
         self.pending = None;
     }
 
-    pub(super) fn is_pending(&self) -> bool {
+    pub(super) const fn is_pending(&self) -> bool {
         self.pending.is_some()
     }
 }
 
 impl App {
     /// Run the main event loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if terminal initialization, document parsing,
+    /// or the event loop encounters an I/O or parsing failure.
     pub fn run(&mut self) -> Result<()> {
         let _run_scope = crate::perf::scope("app.run.total");
 
         // Create image picker BEFORE initializing terminal (queries stdio)
         let picker = if self.images_enabled {
-            let _picker_scope = crate::perf::scope("app.create_picker");
+            let picker_scope = crate::perf::scope("app.create_picker");
             let picker = crate::image::create_picker(self.image_mode);
-            drop(_picker_scope);
+            drop(picker_scope);
             picker
         } else {
             None
@@ -95,19 +100,19 @@ impl App {
 
         // Determine the file to load (may be overridden in browse mode)
         let initial_file = if self.browse_mode {
-            self.find_first_viewable_file(&self.file_path.clone())
+            Self::find_first_viewable_file(&self.file_path)
         } else {
             Some(self.file_path.clone())
         };
 
         // Initialize terminal
-        let _init_scope = crate::perf::scope("app.ratatui_init");
+        let init_scope = crate::perf::scope("app.ratatui_init");
         let mut terminal = ratatui::init();
         let size = terminal.size()?;
-        drop(_init_scope);
+        drop(init_scope);
 
         // Load the document
-        let _read_scope = crate::perf::scope("app.read_file");
+        let read_scope = crate::perf::scope("app.read_file");
         let toc_visible = self.toc_visible || self.browse_mode;
         let layout_width = crate::ui::document_content_width(size.width, toc_visible);
         let (document, effective_file) = if let Some(ref file) = initial_file {
@@ -118,7 +123,7 @@ impl App {
             // No viewable file found; show empty document
             (crate::document::Document::empty(), self.file_path.clone())
         };
-        drop(_read_scope);
+        drop(read_scope);
 
         // Create initial model
         let mut model =
@@ -127,8 +132,10 @@ impl App {
         model.toc_visible = toc_visible;
         model.image_mode = self.image_mode;
         model.images_enabled = self.images_enabled;
-        model.config_global_path = self.config_global_path.clone();
-        model.config_local_path = self.config_local_path.clone();
+        model
+            .config_global_path
+            .clone_from(&self.config_global_path);
+        model.config_local_path.clone_from(&self.config_local_path);
 
         // Initialize browse mode
         if self.browse_mode {
@@ -150,9 +157,9 @@ impl App {
         }
 
         // Pre-load images from the document
-        let _images_scope = crate::perf::scope("app.load_nearby_images.initial");
+        let images_scope = crate::perf::scope("app.load_nearby_images.initial");
         model.load_nearby_images();
-        drop(_images_scope);
+        drop(images_scope);
         model.ensure_hex_overscan();
         model.ensure_highlight_overscan();
 
@@ -167,12 +174,12 @@ impl App {
     }
 
     /// Find the first viewable file in a directory.
-    fn find_first_viewable_file(&self, dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    fn find_first_viewable_file(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return None;
         };
         let mut files: Vec<_> = entries
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 e.file_type().ok().is_some_and(|ft| ft.is_file())
                     && !e.file_name().to_string_lossy().starts_with('.')
@@ -190,8 +197,7 @@ impl App {
         files.into_iter().next()
     }
 
-    fn update_browse_debouncer(
-        &self,
+    const fn update_browse_debouncer(
         model: &Model,
         msg: &Message,
         now_ms: u64,
@@ -259,32 +265,30 @@ impl App {
             if was_settling && !model.is_image_scroll_settling() {
                 // Repaint once after scroll placeholders expire to restore inline images.
                 needs_render = true;
-                crate::perf::log_event("image.scroll.settled", format!("frame={}", frame_idx));
+                crate::perf::log_event("image.scroll.settled", format!("frame={frame_idx}"));
             }
 
-            let now_ms = start.elapsed().as_millis() as u64;
+            let now_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
             if let Some((width, height)) = resize_debouncer.take_ready(now_ms) {
                 crate::perf::log_event(
                     "event.resize.apply",
-                    format!("frame={} width={} height={}", frame_idx, width, height),
+                    format!("frame={frame_idx} width={width} height={height}"),
                 );
                 *model = update(std::mem::take(model), Message::Resize(width, height));
                 needs_render = true;
             }
 
             // Auto-load file in browse mode after navigation settles
-            if let Some(sel) = browse_debouncer.take_ready(now_ms) {
-                if model.browse_mode {
-                    if let Some(entry) = model.browse_entries.get(sel).cloned() {
-                        if !entry.is_dir {
-                            if let Err(err) = model.load_file(&entry.path) {
-                                model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
-                            }
-                            needs_render = true;
-                        }
-                    }
+            if let Some(sel) = browse_debouncer.take_ready(now_ms)
+                && model.browse_mode
+                && let Some(entry) = model.browse_entries.get(sel).cloned()
+                && !entry.is_dir
+            {
+                if let Err(err) = model.load_file(&entry.path) {
+                    model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
                 }
+                needs_render = true;
             }
 
             if model.watch_enabled
@@ -317,32 +321,38 @@ impl App {
             };
             if event::poll(Duration::from_millis(poll_ms))? {
                 // Refresh timestamp after poll wait so debouncers use accurate times.
-                let event_ms = start.elapsed().as_millis() as u64;
-                let msg = self.handle_event(event::read()?, model, event_ms, &mut resize_debouncer);
+                let event_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let msg =
+                    Self::handle_event(&event::read()?, model, event_ms, &mut resize_debouncer);
                 if let Some(msg) = msg {
                     crate::perf::log_event(
                         "event.message",
-                        format!("frame={} msg={msg:?}", frame_idx),
+                        format!("frame={frame_idx} msg={msg:?}"),
                     );
                     let side_msg = msg.clone();
                     *model = update(std::mem::take(model), msg);
                     self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
-                    self.update_browse_debouncer(model, &side_msg, event_ms, &mut browse_debouncer);
+                    Self::update_browse_debouncer(
+                        model,
+                        &side_msg,
+                        event_ms,
+                        &mut browse_debouncer,
+                    );
                     needs_render = true;
                 }
 
                 // Coalesce key repeat bursts into a single render.
                 let mut drained = 0_u32;
                 while event::poll(Duration::from_millis(0))? {
-                    let drain_ms = start.elapsed().as_millis() as u64;
+                    let drain_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     let msg =
-                        self.handle_event(event::read()?, model, drain_ms, &mut resize_debouncer);
+                        Self::handle_event(&event::read()?, model, drain_ms, &mut resize_debouncer);
                     if let Some(msg) = msg {
                         drained += 1;
                         let side_msg = msg.clone();
                         *model = update(std::mem::take(model), msg);
                         self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
-                        self.update_browse_debouncer(
+                        Self::update_browse_debouncer(
                             model,
                             &side_msg,
                             drain_ms,
@@ -354,7 +364,7 @@ impl App {
                 if drained > 0 {
                     crate::perf::log_event(
                         "event.drain",
-                        format!("frame={} drained={}", frame_idx, drained),
+                        format!("frame={frame_idx} drained={drained}"),
                     );
                 }
             }
@@ -381,7 +391,7 @@ impl App {
 
                 // Render
                 let draw_start = Instant::now();
-                terminal.draw(|frame| self.view(model, frame))?;
+                terminal.draw(|frame| Self::view(model, frame))?;
                 crate::perf::log_event(
                     "frame.draw",
                     format!(

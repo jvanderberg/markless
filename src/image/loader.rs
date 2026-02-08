@@ -41,13 +41,15 @@ impl ImageCache {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        if guard.entries.contains_key(&path) {
-            guard.entries.insert(path, image);
+        if let std::collections::hash_map::Entry::Occupied(mut e) =
+            guard.entries.entry(path.clone())
+        {
+            e.insert(image);
             return;
         }
 
         guard.order.push_back(path.clone());
-        guard.entries.insert(path.clone(), image);
+        guard.entries.insert(path, image);
 
         while guard.entries.len() > self.max_size {
             if let Some(oldest) = guard.order.pop_front() {
@@ -56,6 +58,7 @@ impl ImageCache {
                 break;
             }
         }
+        drop(guard);
     }
 
     /// Check if an image is in the cache.

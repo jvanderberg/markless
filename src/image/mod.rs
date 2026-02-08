@@ -57,7 +57,7 @@ pub fn create_picker(image_mode: Option<ImageMode>) -> Option<Picker> {
             picker.set_protocol_type(protocol_type);
             crate::perf::log_event(
                 "image.create_picker",
-                format!("forced protocol={:?} (queried font size)", protocol_type),
+                format!("forced protocol={protocol_type:?} (queried font size)"),
             );
             return Some(picker);
         }
@@ -174,7 +174,9 @@ fn supports_truecolor_from_env(colorterm: Option<&str>, term: Option<&str>) -> b
 }
 
 fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
-    let to_cube = |v: u8| ((v as u16 * 5) / 255) as u8;
+    // High byte of 16-bit terminal color
+    #[allow(clippy::cast_possible_truncation)]
+    let to_cube = |v: u8| ((u16::from(v) * 5) / 255) as u8;
     let ri = to_cube(r);
     let gi = to_cube(g);
     let bi = to_cube(b);

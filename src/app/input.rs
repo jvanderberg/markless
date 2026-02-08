@@ -10,25 +10,24 @@ use super::event_loop::ResizeDebouncer;
 
 impl App {
     pub(super) fn handle_event(
-        &self,
-        event: Event,
+        event: &Event,
         model: &Model,
         now_ms: u64,
         resize_debouncer: &mut ResizeDebouncer,
     ) -> Option<Message> {
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key, model),
-            Event::Mouse(mouse) => self.handle_mouse(mouse, model),
+            Event::Key(key) if key.kind == KeyEventKind::Press => Self::handle_key(*key, model),
+            Event::Mouse(mouse) => Self::handle_mouse(*mouse, model),
             Event::Resize(w, h) => {
-                crate::perf::log_event("event.resize.queue", format!("width={} height={}", w, h));
-                resize_debouncer.queue(w, h, now_ms);
+                crate::perf::log_event("event.resize.queue", format!("width={w} height={h}"));
+                resize_debouncer.queue(*w, *h, now_ms);
                 None
             }
             _ => None,
         }
     }
 
-    pub(super) fn handle_mouse(&self, mouse: MouseEvent, model: &Model) -> Option<Message> {
+    pub(super) fn handle_mouse(mouse: MouseEvent, model: &Model) -> Option<Message> {
         if model.help_visible {
             return None;
         }
@@ -51,7 +50,9 @@ impl App {
                     let rel = mouse.row - content_top;
                     let idx = (rel / 2) as usize;
                     if idx < model.link_picker_items.len() {
-                        return Some(Message::SelectVisibleLink((idx + 1) as u8));
+                        return Some(Message::SelectVisibleLink(
+                            u8::try_from(idx + 1).unwrap_or(u8::MAX),
+                        ));
                     }
                 }
                 return Some(Message::CancelVisibleLinkPicker);
@@ -69,17 +70,15 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if in_doc {
-                    if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
-                        return Some(Message::StartSelection(line));
-                    }
+                if in_doc && let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
+                    return Some(Message::StartSelection(line));
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if model.selection.is_some() {
-                    if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, true) {
-                        return Some(Message::UpdateSelection(line));
-                    }
+                if model.selection.is_some()
+                    && let Some(line) = doc_line_for_row(model, doc_area, mouse.row, true)
+                {
+                    return Some(Message::UpdateSelection(line));
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -92,7 +91,7 @@ impl App {
                             .column
                             .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
                             as usize;
-                        if self.link_at_column(model, line, content_col).is_some() {
+                        if Self::link_at_column(model, line, content_col).is_some() {
                             return Some(Message::FollowLinkAtLine(line, Some(content_col)));
                         }
                         if image_at_line(model, line) {
@@ -115,12 +114,12 @@ impl App {
             );
             let chunks = crate::ui::split_main_columns(total_area);
             let toc_area = chunks[0];
-            let in_toc = mouse.column >= toc_area.x
+            let toc_hit = mouse.column >= toc_area.x
                 && mouse.column < toc_area.x + toc_area.width
                 && mouse.row >= toc_area.y
                 && mouse.row < toc_area.y + toc_area.height;
 
-            if in_toc {
+            if toc_hit {
                 match mouse.kind {
                     MouseEventKind::Up(MouseButton::Left) => {
                         let entry_count = model.toc_entry_count();
@@ -152,19 +151,19 @@ impl App {
                 }
             }
 
-            if !model.selection_dragging() && in_doc && matches!(mouse.kind, MouseEventKind::Moved)
+            if !model.selection_dragging()
+                && in_doc
+                && matches!(mouse.kind, MouseEventKind::Moved)
+                && let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false)
             {
-                if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
-                    let content_col = mouse
-                        .column
-                        .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
-                        as usize;
-                    let hovered = self
-                        .link_at_column(model, line, content_col)
-                        .map(|link| link.url)
-                        .or_else(|| image_url_at_line(model, line));
-                    return Some(Message::HoverLink(hovered));
-                }
+                let content_col = mouse
+                    .column
+                    .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
+                    as usize;
+                let hovered = Self::link_at_column(model, line, content_col)
+                    .map(|link| link.url)
+                    .or_else(|| image_url_at_line(model, line));
+                return Some(Message::HoverLink(hovered));
             }
             if !model.selection_dragging() && matches!(mouse.kind, MouseEventKind::Moved) {
                 return Some(Message::HoverLink(None));
@@ -174,18 +173,17 @@ impl App {
         if in_doc
             && model.selection.is_none()
             && matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left))
+            && let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false)
         {
-            if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, false) {
-                let content_col = mouse
-                    .column
-                    .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
-                    as usize;
-                if self.link_at_column(model, line, content_col).is_some() {
-                    return Some(Message::FollowLinkAtLine(line, Some(content_col)));
-                }
-                if image_at_line(model, line) {
-                    return Some(Message::FollowLinkAtLine(line, None));
-                }
+            let content_col = mouse
+                .column
+                .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
+                as usize;
+            if Self::link_at_column(model, line, content_col).is_some() {
+                return Some(Message::FollowLinkAtLine(line, Some(content_col)));
+            }
+            if image_at_line(model, line) {
+                return Some(Message::FollowLinkAtLine(line, None));
             }
         }
 
@@ -208,7 +206,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_key(&self, key: event::KeyEvent, model: &Model) -> Option<Message> {
+    pub(super) fn handle_key(key: event::KeyEvent, model: &Model) -> Option<Message> {
         if model.help_visible {
             let _ = key;
             return Some(Message::HideHelp);
@@ -270,7 +268,7 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => return Some(Message::GoToBottom),
             KeyCode::Char('/') => return Some(Message::StartSearch),
             KeyCode::Char('w') => return Some(Message::ToggleWatch),
-            KeyCode::Char('R') | KeyCode::Char('r') => return Some(Message::ForceReload),
+            KeyCode::Char('R' | 'r') => return Some(Message::ForceReload),
             KeyCode::Char('o') => return Some(Message::OpenVisibleLinks),
             _ => {}
         }
@@ -284,13 +282,12 @@ impl App {
                 KeyCode::Char('h') | KeyCode::Left => Some(Message::TocCollapse),
                 KeyCode::Backspace if model.browse_mode => Some(Message::TocCollapse),
                 KeyCode::Char('l') | KeyCode::Right => Some(Message::TocExpand),
-                KeyCode::Tab => Some(Message::SwitchFocus),
+                KeyCode::Tab | KeyCode::Esc => Some(Message::SwitchFocus),
                 KeyCode::Char('?') | KeyCode::F(1) => Some(Message::ToggleHelp),
                 KeyCode::Char('t') => Some(Message::ToggleToc),
                 KeyCode::Char('B') => Some(Message::EnterBrowseMode),
                 KeyCode::Char('F') => Some(Message::EnterFileMode),
                 KeyCode::Char('q') => Some(Message::Quit),
-                KeyCode::Esc => Some(Message::SwitchFocus),
                 _ => None,
             };
         }
@@ -312,23 +309,6 @@ impl App {
                     None
                 }
             }
-            // Global keys handled in early block above
-            KeyCode::Char('b')
-            | KeyCode::Char(' ')
-            | KeyCode::Char('g')
-            | KeyCode::Char('G')
-            | KeyCode::Char('/')
-            | KeyCode::Char('w')
-            | KeyCode::Char('R')
-            | KeyCode::Char('r')
-            | KeyCode::Char('o')
-            | KeyCode::PageDown
-            | KeyCode::PageUp
-            | KeyCode::Home
-            | KeyCode::End => None,
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
-
             // TOC
             KeyCode::Char('t') => Some(Message::ToggleToc),
             KeyCode::Char('T') => Some(Message::ToggleTocFocus),
@@ -354,12 +334,11 @@ impl App {
         }
     }
 
-    pub(super) fn view(&self, model: &mut Model, frame: &mut Frame) {
+    pub(super) fn view(model: &mut Model, frame: &mut Frame) {
         crate::ui::render(model, frame);
     }
 
     pub(super) fn link_at_column(
-        &self,
         model: &Model,
         line: usize,
         content_col: usize,
@@ -388,11 +367,7 @@ impl App {
                 if content_col >= start_char && content_col < end_char {
                     return Some(link);
                 }
-                let dist = if content_col >= start_char {
-                    content_col - start_char
-                } else {
-                    start_char - content_col
-                };
+                let dist = content_col.abs_diff(start_char);
                 if best.as_ref().is_none_or(|(best_dist, _)| dist < *best_dist) {
                     best = Some((dist, link.clone()));
                 }
@@ -428,7 +403,7 @@ fn document_mouse_area(model: &Model) -> Rect {
     }
 }
 
-fn point_in_rect(col: u16, row: u16, rect: Rect) -> bool {
+const fn point_in_rect(col: u16, row: u16, rect: Rect) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
