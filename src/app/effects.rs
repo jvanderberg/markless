@@ -136,7 +136,7 @@ impl App {
     fn follow_link_on_line(&self, model: &mut Model, line: usize, col: Option<usize>) {
         if let Some(col) = col {
             if let Some(link) = self.link_at_column(model, line, col) {
-                let url = link.url.clone();
+                let url = link.url;
                 model.link_picker_items.clear();
                 self.follow_resolved_link(model, &url);
                 return;

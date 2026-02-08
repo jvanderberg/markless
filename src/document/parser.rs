@@ -116,7 +116,7 @@ fn create_options() -> Options {
     options.extension.subscript = true;
 
     // Enable other useful extensions
-    options.extension.header_ids = Some("".to_string());
+    options.extension.header_ids = Some(String::new());
     options.extension.description_lists = true;
 
     options
@@ -180,7 +180,22 @@ fn process_node<'a>(
             // Check if paragraph contains only an image (common case)
             let child_images = collect_paragraph_images(node);
 
-            if !child_images.is_empty() {
+            if child_images.is_empty() {
+                // Regular paragraph text with inline styling and wrapping
+                let spans = collect_inline_spans(node);
+                // Collect links from paragraph
+                collect_inline_elements(node, lines.len(), images, links);
+
+                let wrapped = wrap_spans(&spans, wrap_width, "", "");
+                for line_spans in wrapped {
+                    let content = spans_to_string(&line_spans);
+                    lines.push(RenderedLine::with_spans(
+                        content,
+                        LineType::Paragraph,
+                        line_spans,
+                    ));
+                }
+            } else {
                 for (alt, src) in child_images {
                     let height_lines = image_heights.get(&src).copied().unwrap_or(1).max(1);
                     let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
@@ -211,24 +226,8 @@ fn process_node<'a>(
                         line_range: start_line + usize::from(has_caption)..end_line,
                     });
                 }
-                lines.push(RenderedLine::new(String::new(), LineType::Empty));
-            } else {
-                // Regular paragraph text with inline styling and wrapping
-                let spans = collect_inline_spans(node);
-                // Collect links from paragraph
-                collect_inline_elements(node, lines.len(), images, links);
-
-                let wrapped = wrap_spans(&spans, wrap_width, "", "");
-                for line_spans in wrapped {
-                    let content = spans_to_string(&line_spans);
-                    lines.push(RenderedLine::with_spans(
-                        content,
-                        LineType::Paragraph,
-                        line_spans,
-                    ));
-                }
-                lines.push(RenderedLine::new(String::new(), LineType::Empty));
             }
+            lines.push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::CodeBlock(code_block) => {
@@ -271,8 +270,10 @@ fn process_node<'a>(
             let body_start = lines.len();
             let raw_lines: Vec<String> = literal.lines().map(ToString::to_string).collect();
             for raw_line in &raw_lines {
-                let mut plain_style = InlineStyle::default();
-                plain_style.code = true;
+                let plain_style = InlineStyle {
+                    code: true,
+                    ..InlineStyle::default()
+                };
                 let spans = vec![InlineSpan::new(raw_line.clone(), plain_style)];
                 let trimmed_spans = truncate_spans(&spans, content_width);
                 let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
@@ -387,7 +388,7 @@ fn process_node<'a>(
 
         NodeValue::Item(_) => {
             let indent = "  ".repeat(depth.saturating_sub(1));
-            let base_marker = list_marker.clone().unwrap_or_else(|| "- ".to_string());
+            let base_marker = list_marker.unwrap_or_else(|| "- ".to_string());
             let task_marker = find_task_marker(node);
             let marker = if let Some(task_marker) = task_marker {
                 format!("{} ", task_marker)
@@ -551,7 +552,7 @@ fn process_node<'a>(
 
             links.push(LinkRef {
                 text: label.clone(),
-                url: src.clone(),
+                url: src,
                 line: line_num + usize::from(has_caption),
             });
 
@@ -1078,9 +1079,8 @@ fn collect_inline_spans_recursive<'a>(
     spans: &mut Vec<InlineSpan>,
 ) {
     match &node.data.borrow().value {
-        NodeValue::List(_) | NodeValue::Item(_) => {
-            return;
-        }
+        NodeValue::List(_) | NodeValue::Item(_) => {}
+
         NodeValue::Text(t) => {
             push_text_with_footnote_fallback(spans, t, style);
         }
@@ -1226,11 +1226,11 @@ fn wrap_spans(
                           current_len: &mut usize,
                           has_word: &mut bool| {
         current.clear();
-        if !prefix.is_empty() {
+        if prefix.is_empty() {
+            *current_len = 0;
+        } else {
             current.push(InlineSpan::new(prefix.to_string(), InlineStyle::default()));
             *current_len = UnicodeWidthStr::width(prefix);
-        } else {
-            *current_len = 0;
         }
         *has_word = false;
     };

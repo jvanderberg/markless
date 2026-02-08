@@ -165,8 +165,10 @@ pub fn highlight_code(language: Option<&str>, code: &str) -> Vec<Vec<InlineSpan>
 
     let Some(syntax) = syntax else {
         for line in code.lines() {
-            let mut style = InlineStyle::default();
-            style.code = true;
+            let style = InlineStyle {
+                code: true,
+                ..InlineStyle::default()
+            };
             lines.push(vec![InlineSpan::new(line.to_string(), style)]);
         }
         return lines;
@@ -179,8 +181,10 @@ pub fn highlight_code(language: Option<&str>, code: &str) -> Vec<Vec<InlineSpan>
             .unwrap_or_default();
         let mut spans = Vec::new();
         for (style, text) in ranges {
-            let mut inline_style = InlineStyle::default();
-            inline_style.code = true;
+            let mut inline_style = InlineStyle {
+                code: true,
+                ..InlineStyle::default()
+            };
             let fg = InlineColor {
                 r: style.foreground.r,
                 g: style.foreground.g,

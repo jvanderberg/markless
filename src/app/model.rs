@@ -181,7 +181,7 @@ impl Model {
             selection: None,
             images_enabled: true,
             browse_mode: false,
-            browse_dir: base_dir.clone(),
+            browse_dir: base_dir,
             browse_entries: Vec::new(),
         }
     }
@@ -414,7 +414,7 @@ impl Model {
     /// Scan a directory and populate browse_entries.
     pub fn load_directory(&mut self, dir: &Path) -> Result<()> {
         let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        self.browse_dir = dir.clone();
+        self.browse_dir.clone_from(&dir);
         self.browse_entries.clear();
 
         // Add parent directory entry
@@ -706,8 +706,11 @@ fn clean_selected_line(
 }
 
 fn is_markdown_ext(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".markdown")
+    name.to_ascii_lowercase()
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| {
+            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+        })
 }
 
 // Implement Default for Model to allow std::mem::take

@@ -135,8 +135,10 @@ impl App {
         model.toc_visible = toc_visible;
         model.image_mode = self.image_mode;
         model.images_enabled = self.images_enabled;
-        model.config_global_path = self.config_global_path.clone();
-        model.config_local_path = self.config_local_path.clone();
+        model
+            .config_global_path
+            .clone_from(&self.config_global_path);
+        model.config_local_path.clone_from(&self.config_local_path);
 
         // Initialize browse mode
         if self.browse_mode {

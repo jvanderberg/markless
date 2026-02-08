@@ -119,7 +119,7 @@ impl Document {
 
     /// Lazily apply syntax highlighting to code blocks intersecting `range`.
     pub fn ensure_highlight_for_range(&mut self, range: Range<usize>) {
-        for block in self.code_blocks.iter_mut() {
+        for block in &mut self.code_blocks {
             if block.highlighted
                 || block.line_range.end <= range.start
                 || block.line_range.start >= range.end
@@ -157,6 +157,7 @@ impl Document {
     }
 }
 
+#[allow(clippy::redundant_pub_crate)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CodeBlockRef {
     pub line_range: Range<usize>,

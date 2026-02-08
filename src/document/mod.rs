@@ -19,6 +19,8 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "ico", "svg", "avif",
 ];
 
+/// Prepare file content for rendering based on its extension.
+///
 /// If the file has a recognized code extension, wrap content in a fenced code
 /// block so it renders with syntax highlighting. Image files are wrapped as
 /// markdown image references for inline rendering. Markdown and unrecognized
