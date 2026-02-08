@@ -86,7 +86,7 @@ impl App {
         // Create image picker BEFORE initializing terminal (queries stdio)
         let picker = if self.images_enabled {
             let _picker_scope = crate::perf::scope("app.create_picker");
-            let picker = crate::image::create_picker(self.force_half_cell);
+            let picker = crate::image::create_picker(self.image_mode);
             drop(_picker_scope);
             picker
         } else {
@@ -133,7 +133,7 @@ impl App {
             Model::new(effective_file, document, (size.width, size.height)).with_picker(picker);
         model.watch_enabled = self.watch_enabled;
         model.toc_visible = toc_visible;
-        model.force_half_cell = self.force_half_cell;
+        model.image_mode = self.image_mode;
         model.images_enabled = self.images_enabled;
         model.config_global_path = self.config_global_path.clone();
         model.config_local_path = self.config_local_path.clone();

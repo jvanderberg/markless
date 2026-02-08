@@ -10,6 +10,31 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// Forced image rendering mode.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageMode {
+    /// Kitty graphics protocol
+    Kitty,
+    /// Sixel graphics
+    Sixel,
+    /// iTerm2 inline images
+    #[value(name = "iterm2")]
+    ITerm2,
+    /// Unicode half-blocks (universal fallback)
+    Halfblock,
+}
+
+impl std::fmt::Display for ImageMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Kitty => write!(f, "Kitty"),
+            Self::Sixel => write!(f, "Sixel"),
+            Self::ITerm2 => write!(f, "iTerm2"),
+            Self::Halfblock => write!(f, "Halfblock"),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConfigFlags {
     pub watch: bool,
@@ -18,6 +43,7 @@ pub struct ConfigFlags {
     pub no_images: bool,
     pub perf: bool,
     pub force_half_cell: bool,
+    pub image_mode: Option<ImageMode>,
     pub theme: Option<ThemeMode>,
     pub render_debug_log: Option<PathBuf>,
 }
@@ -31,6 +57,7 @@ impl ConfigFlags {
             no_images: self.no_images || other.no_images,
             perf: self.perf || other.perf,
             force_half_cell: self.force_half_cell || other.force_half_cell,
+            image_mode: other.image_mode.or(self.image_mode),
             theme: other.theme.or(self.theme),
             render_debug_log: other
                 .render_debug_log
@@ -123,7 +150,15 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     if let Some(path) = &flags.render_debug_log {
         lines.push(format!("--render-debug-log {}", path.display()));
     }
-    if flags.force_half_cell {
+    if let Some(mode) = flags.image_mode {
+        let mode_str = match mode {
+            ImageMode::Kitty => "kitty",
+            ImageMode::Sixel => "sixel",
+            ImageMode::ITerm2 => "iterm2",
+            ImageMode::Halfblock => "halfblock",
+        };
+        lines.push(format!("--image-mode {mode_str}"));
+    } else if flags.force_half_cell {
         lines.push("--force-half-cell".to_string());
     }
     if let Some(parent) = path.parent() {
@@ -158,6 +193,14 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
             flags.perf = true;
         } else if token == "--force-half-cell" {
             flags.force_half_cell = true;
+            flags.image_mode = Some(ImageMode::Halfblock);
+        } else if token == "--image-mode" {
+            if let Some(next) = tokens.get(i + 1) {
+                flags.image_mode = parse_image_mode(next);
+                i += 1;
+            }
+        } else if let Some(value) = token.strip_prefix("--image-mode=") {
+            flags.image_mode = parse_image_mode(value);
         } else if token == "--theme" {
             if let Some(next) = tokens.get(i + 1) {
                 flags.theme = parse_theme(next);
@@ -176,6 +219,16 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
         i += 1;
     }
     flags
+}
+
+fn parse_image_mode(s: &str) -> Option<ImageMode> {
+    match s {
+        "kitty" => Some(ImageMode::Kitty),
+        "sixel" => Some(ImageMode::Sixel),
+        "iterm2" => Some(ImageMode::ITerm2),
+        "halfblock" => Some(ImageMode::Halfblock),
+        _ => None,
+    }
 }
 
 fn parse_theme(s: &str) -> Option<ThemeMode> {
@@ -212,6 +265,125 @@ mod tests {
         assert_eq!(flags.theme, Some(ThemeMode::Dark));
         assert_eq!(flags.render_debug_log, Some(PathBuf::from("render.log")));
         assert!(flags.force_half_cell);
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_image_mode_kitty() {
+        let args = vec!["--image-mode".to_string(), "kitty".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.image_mode, Some(ImageMode::Kitty));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_image_mode_sixel() {
+        let args = vec!["--image-mode=sixel".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.image_mode, Some(ImageMode::Sixel));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_image_mode_iterm2() {
+        let args = vec!["--image-mode".to_string(), "iterm2".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.image_mode, Some(ImageMode::ITerm2));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_image_mode_halfblock() {
+        let args = vec!["--image-mode=halfblock".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.image_mode, Some(ImageMode::Halfblock));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_image_mode_invalid_ignored() {
+        let args = vec!["--image-mode".to_string(), "invalid".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.image_mode, None);
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_force_half_cell_sets_image_mode() {
+        let args = vec!["--force-half-cell".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.image_mode, Some(ImageMode::Halfblock));
+    }
+
+    #[test]
+    fn test_config_union_image_mode_cli_overrides_file() {
+        let file = ConfigFlags {
+            image_mode: Some(ImageMode::Kitty),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags {
+            image_mode: Some(ImageMode::Sixel),
+            ..ConfigFlags::default()
+        };
+        let merged = file.union(&cli);
+        assert_eq!(merged.image_mode, Some(ImageMode::Sixel));
+    }
+
+    #[test]
+    fn test_config_union_image_mode_file_preserved_when_cli_none() {
+        let file = ConfigFlags {
+            image_mode: Some(ImageMode::ITerm2),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags::default();
+        let merged = file.union(&cli);
+        assert_eq!(merged.image_mode, Some(ImageMode::ITerm2));
+    }
+
+    #[test]
+    fn test_save_load_image_mode_kitty() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            image_mode: Some(ImageMode::Kitty),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.image_mode, Some(ImageMode::Kitty));
+    }
+
+    #[test]
+    fn test_save_load_image_mode_sixel() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            image_mode: Some(ImageMode::Sixel),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.image_mode, Some(ImageMode::Sixel));
+    }
+
+    #[test]
+    fn test_save_load_image_mode_iterm2() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            image_mode: Some(ImageMode::ITerm2),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.image_mode, Some(ImageMode::ITerm2));
+    }
+
+    #[test]
+    fn test_save_load_image_mode_halfblock() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            image_mode: Some(ImageMode::Halfblock),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.image_mode, Some(ImageMode::Halfblock));
     }
 
     #[test]

@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use image::DynamicImage;
 use ratatui_image::picker::{Picker, ProtocolType};
+
+use crate::config::ImageMode;
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::document::Document;
@@ -110,8 +112,8 @@ pub struct Model {
     resize_pending: bool,
     /// Short cooldown used only for iTerm2 inline image placeholdering while scrolling
     image_scroll_cooldown_ticks: u8,
-    /// Force half-cell image rendering path (used for debug and filter tuning)
-    pub force_half_cell: bool,
+    /// Forced image rendering mode (overrides auto-detection)
+    pub image_mode: Option<ImageMode>,
     /// Current line selection state (mouse drag)
     pub selection: Option<LineSelection>,
     /// Whether inline images are enabled
@@ -175,7 +177,7 @@ impl Model {
             image_layout_heights: HashMap::new(),
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
-            force_half_cell: false,
+            image_mode: None,
             selection: None,
             images_enabled: true,
             browse_mode: false,
@@ -275,7 +277,7 @@ impl Model {
                     let mut scaled = img.resize(
                         target_width_px,
                         scaled_height_px,
-                        if use_halfblocks || self.force_half_cell {
+                        if use_halfblocks {
                             image::imageops::FilterType::CatmullRom
                         } else {
                             image::imageops::FilterType::Nearest
@@ -739,7 +741,7 @@ impl Default for Model {
             image_layout_heights: HashMap::new(),
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
-            force_half_cell: false,
+            image_mode: None,
             selection: None,
             images_enabled: true,
             browse_mode: false,
