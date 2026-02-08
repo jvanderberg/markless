@@ -182,8 +182,44 @@ impl App {
             return;
         }
 
+        if url.starts_with("mermaid://") {
+            Self::open_mermaid_svg(model, url);
+            return;
+        }
+
         match open_external_link(url) {
             Ok(()) => model.show_toast(ToastLevel::Info, format!("Opened {url}")),
+            Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
+        }
+    }
+
+    fn open_mermaid_svg(model: &mut Model, mermaid_url: &str) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let Some(source) = model.document.mermaid_sources().get(mermaid_url).cloned() else {
+            model.show_toast(ToastLevel::Warning, "Mermaid source not found");
+            return;
+        };
+        let svg = match crate::mermaid::render_to_svg(&source) {
+            Ok(s) => s,
+            Err(err) => {
+                model.show_toast(ToastLevel::Error, format!("Mermaid render failed: {err}"));
+                return;
+            }
+        };
+        // Use a content hash so different diagrams get distinct files and
+        // different documents don't silently overwrite each other's SVGs.
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        let hash = hasher.finish();
+        let path = std::env::temp_dir().join(format!("markless-mermaid-{hash:016x}.svg"));
+        if let Err(err) = std::fs::write(&path, &svg) {
+            model.show_toast(ToastLevel::Error, format!("Write SVG failed: {err}"));
+            return;
+        }
+        let path_str = path.to_string_lossy();
+        match open_external_link(&path_str) {
+            Ok(()) => model.show_toast(ToastLevel::Info, "Opened mermaid SVG"),
             Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
         }
     }

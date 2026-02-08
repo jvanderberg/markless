@@ -13,6 +13,14 @@ use crate::document::Document;
 use crate::image::ImageLoader;
 use crate::ui::viewport::Viewport;
 
+/// Mermaid diagram display width as a percentage of the image target width.
+///
+/// Mermaid SVGs contain their own internal layout and render best at a
+/// narrower width than regular images (which scale to fill available space).
+/// 100 would match regular image width; 60 was chosen empirically as a
+/// good balance between readability and not overwhelming the terminal.
+const MERMAID_WIDTH_PERCENT: u32 = 60;
+
 use super::update::{closest_heading_to_line, refresh_search_matches};
 
 /// The complete application state.
@@ -192,6 +200,20 @@ impl Model {
         self
     }
 
+    /// Whether mermaid diagrams should be rendered as images.
+    ///
+    /// True only when images are enabled and the terminal supports a real
+    /// graphics protocol (Kitty, Sixel, iTerm2) — not half-block fallback.
+    pub fn should_render_mermaid_as_images(&self) -> bool {
+        if !self.images_enabled {
+            return false;
+        }
+        let Some(picker) = &self.picker else {
+            return false;
+        };
+        !matches!(picker.protocol_type(), ProtocolType::Halfblocks)
+    }
+
     /// Load images that are near the viewport (lazy loading with lookahead).
     pub fn load_nearby_images(&mut self) {
         if self.resize_pending {
@@ -260,10 +282,28 @@ impl Model {
             };
 
             if needs_protocol {
-                // Try to get original image from cache, or load from disk
+                // Try to get original image from cache, or load/render
                 let original: Option<DynamicImage> =
                     if let Some(img) = self.original_images.get(&src) {
                         Some(img.clone())
+                    } else if src.starts_with("mermaid://") {
+                        let mermaid_width_px = target_width_px * MERMAID_WIDTH_PERCENT / 100;
+                        self.document
+                            .mermaid_sources()
+                            .get(&src)
+                            .and_then(|mermaid_text| {
+                                crate::mermaid::render_to_image(mermaid_text, mermaid_width_px)
+                                    .inspect_err(|e| {
+                                        crate::perf::log_event(
+                                            "mermaid.render.error",
+                                            format!("src={src} err={e}"),
+                                        );
+                                    })
+                                    .ok()
+                            })
+                            .inspect(|img| {
+                                self.original_images.insert(src.clone(), img.clone());
+                            })
                     } else if let Some(img) = loader.load_sync(&src) {
                         self.original_images.insert(src.clone(), img.clone());
                         Some(img)
@@ -273,7 +313,6 @@ impl Model {
 
                 if let Some(img) = original {
                     // Scale to fit target width, preserving aspect ratio.
-                    // Use f64 to avoid precision loss with large u32 pixel values.
                     let scale = f64::from(target_width_px) / f64::from(img.width());
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     // Scaled image height is always positive and well within u32 range.
@@ -409,10 +448,12 @@ impl Model {
         if self.document.is_hex_mode() {
             return;
         }
-        if let Ok(document) = Document::parse_with_layout_and_image_heights(
+        let mermaid = self.should_render_mermaid_as_images();
+        if let Ok(document) = Document::parse_with_all_options(
             self.document.source(),
             self.layout_width(),
             &self.image_layout_heights,
+            mermaid,
         ) {
             self.document = document;
             self.viewport.set_total_lines(self.document.line_count());
@@ -474,6 +515,28 @@ impl Model {
         Ok(())
     }
 
+    /// Build a `Document` from raw file bytes, respecting current mermaid and
+    /// image-layout settings.
+    fn document_from_bytes(&self, path: &Path, raw_bytes: Vec<u8>) -> Result<Document> {
+        if crate::document::is_binary(&raw_bytes) || crate::document::is_image_file(path) {
+            return Ok(crate::document::prepare_document_from_bytes(
+                path,
+                raw_bytes,
+                self.layout_width(),
+            ));
+        }
+        let content = match String::from_utf8(raw_bytes) {
+            Ok(s) => crate::document::prepare_content(path, s),
+            Err(e) => crate::document::prepare_content(path, e.to_string()),
+        };
+        Document::parse_with_all_options(
+            &content,
+            self.layout_width(),
+            &self.image_layout_heights,
+            self.should_render_mermaid_as_images(),
+        )
+    }
+
     /// Load a file into the document area.
     ///
     /// # Errors
@@ -482,8 +545,7 @@ impl Model {
     /// fails to parse.
     pub fn load_file(&mut self, path: &Path) -> Result<()> {
         let raw_bytes = std::fs::read(path)?;
-        let document =
-            crate::document::prepare_document_from_bytes(path, raw_bytes, self.layout_width());
+        let document = self.document_from_bytes(path, raw_bytes)?;
         self.file_path = path.to_path_buf();
         self.base_dir = path
             .parent()
@@ -556,11 +618,8 @@ impl Model {
 
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
         let raw_bytes = std::fs::read(&self.file_path)?;
-        let document = crate::document::prepare_document_from_bytes(
-            &self.file_path,
-            raw_bytes,
-            self.layout_width(),
-        );
+        let path = self.file_path.clone();
+        let document = self.document_from_bytes(&path, raw_bytes)?;
         self.document = document;
 
         // Drop cached image entries that are no longer present in the document.

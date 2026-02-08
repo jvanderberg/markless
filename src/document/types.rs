@@ -3,6 +3,25 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// Result of parsing markdown, ready to be assembled into a `Document`.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedDocument {
+    /// Rendered lines for display
+    pub lines: Vec<RenderedLine>,
+    /// Heading references for TOC
+    pub headings: Vec<HeadingRef>,
+    /// Image references
+    pub images: Vec<ImageRef>,
+    /// Link references
+    pub links: Vec<LinkRef>,
+    /// Footnote definition lines by label
+    pub footnotes: HashMap<String, usize>,
+    /// Code blocks for lazy syntax highlighting
+    pub code_blocks: Vec<CodeBlockRef>,
+    /// Mermaid diagram sources keyed by synthetic image src
+    pub mermaid_sources: HashMap<String, String>,
+}
+
 /// Backing store for lazy hex dump rendering.
 #[derive(Debug, Clone)]
 pub struct HexData {
@@ -31,6 +50,8 @@ pub struct Document {
     footnotes: HashMap<String, usize>,
     /// Code blocks for lazy syntax highlighting
     code_blocks: Vec<CodeBlockRef>,
+    /// Mermaid diagram sources keyed by synthetic image src (e.g. `mermaid://0`)
+    mermaid_sources: HashMap<String, String>,
     /// Optional hex data for lazy binary file rendering
     hex_data: Option<HexData>,
 }
@@ -46,28 +67,22 @@ impl Document {
             links: Vec::new(),
             footnotes: HashMap::new(),
             code_blocks: Vec::new(),
+            mermaid_sources: HashMap::new(),
             hex_data: None,
         }
     }
 
-    /// Create a new document with the given content.
-    pub(crate) const fn new(
-        source: String,
-        lines: Vec<RenderedLine>,
-        headings: Vec<HeadingRef>,
-        images: Vec<ImageRef>,
-        link_refs: Vec<LinkRef>,
-        footnotes: HashMap<String, usize>,
-        code_blocks: Vec<CodeBlockRef>,
-    ) -> Self {
+    /// Create a new document from parsed results.
+    pub(crate) fn from_parsed(source: String, result: ParsedDocument) -> Self {
         Self {
             source,
-            lines,
-            headings,
-            images,
-            links: link_refs,
-            footnotes,
-            code_blocks,
+            lines: result.lines,
+            headings: result.headings,
+            images: result.images,
+            links: result.links,
+            footnotes: result.footnotes,
+            code_blocks: result.code_blocks,
+            mermaid_sources: result.mermaid_sources,
             hex_data: None,
         }
     }
@@ -109,6 +124,7 @@ impl Document {
             links: Vec::new(),
             footnotes: HashMap::new(),
             code_blocks: Vec::new(),
+            mermaid_sources: HashMap::new(),
             hex_data: Some(HexData {
                 bytes,
                 header_line_count,
@@ -142,6 +158,11 @@ impl Document {
     /// Get all link references.
     pub fn links(&self) -> &[LinkRef] {
         &self.links
+    }
+
+    /// Get mermaid diagram sources keyed by synthetic image src.
+    pub const fn mermaid_sources(&self) -> &HashMap<String, String> {
+        &self.mermaid_sources
     }
 
     pub fn footnote_line(&self, name: &str) -> Option<usize> {
@@ -573,14 +594,12 @@ mod tests {
             RenderedLine::new("Line 4".to_string(), LineType::Paragraph),
             RenderedLine::new("Line 5".to_string(), LineType::Paragraph),
         ];
-        let doc = Document::new(
+        let doc = Document::from_parsed(
             "source".to_string(),
-            lines,
-            vec![],
-            vec![],
-            vec![],
-            HashMap::new(),
-            vec![],
+            ParsedDocument {
+                lines,
+                ..ParsedDocument::default()
+            },
         );
 
         let visible = doc.visible_lines(1, 2);
@@ -595,14 +614,12 @@ mod tests {
             RenderedLine::new("Line 1".to_string(), LineType::Paragraph),
             RenderedLine::new("Line 2".to_string(), LineType::Paragraph),
         ];
-        let doc = Document::new(
+        let doc = Document::from_parsed(
             "source".to_string(),
-            lines,
-            vec![],
-            vec![],
-            vec![],
-            HashMap::new(),
-            vec![],
+            ParsedDocument {
+                lines,
+                ..ParsedDocument::default()
+            },
         );
 
         let visible = doc.visible_lines(0, 10);

@@ -10,7 +10,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::types::{
     CodeBlockRef, Document, HeadingRef, ImageRef, InlineSpan, InlineStyle, LineType, LinkRef,
-    RenderedLine,
+    ParsedDocument, RenderedLine,
 };
 
 /// Parse markdown source into a Document.
@@ -54,6 +54,32 @@ impl Document {
     ) -> Result<Self> {
         parse_with_layout(source, width, image_heights)
     }
+
+    /// Parse markdown, rendering mermaid code blocks as image placeholders.
+    ///
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
+    pub fn parse_with_mermaid_images(source: &str, width: u16) -> Result<Self> {
+        Ok(parse_with_all_options(source, width, &HashMap::new(), true))
+    }
+
+    /// Parse with all options: layout width, image heights, and mermaid-as-images flag.
+    ///
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
+    pub fn parse_with_all_options(
+        source: &str,
+        width: u16,
+        image_heights: &HashMap<String, usize>,
+        mermaid_as_images: bool,
+    ) -> Result<Self> {
+        Ok(parse_with_all_options(
+            source,
+            width,
+            image_heights,
+            mermaid_as_images,
+        ))
+    }
 }
 
 /// Parse markdown source into a `Document`.
@@ -84,6 +110,16 @@ pub fn parse_with_layout<S: BuildHasher>(
     width: u16,
     image_heights: &HashMap<String, usize, S>,
 ) -> Result<Document> {
+    Ok(parse_with_all_options(source, width, image_heights, false))
+}
+
+/// Parse markdown with all options including mermaid-as-images flag.
+fn parse_with_all_options<S: BuildHasher>(
+    source: &str,
+    width: u16,
+    image_heights: &HashMap<String, usize, S>,
+    mermaid_as_images: bool,
+) -> Document {
     let arena = Arena::new();
     let options = create_options();
     let root = parse_document(&arena, source, &options);
@@ -96,20 +132,25 @@ pub fn parse_with_layout<S: BuildHasher>(
         link_refs: Vec::new(),
         footnotes: HashMap::new(),
         code_blocks: Vec::new(),
+        mermaid_sources: HashMap::new(),
         image_heights,
         wrap_width,
+        mermaid_as_images,
     };
     process_node(root, &mut ctx, 0, None);
 
-    Ok(Document::new(
+    Document::from_parsed(
         source.to_string(),
-        ctx.lines,
-        ctx.headings,
-        ctx.images,
-        ctx.link_refs,
-        ctx.footnotes,
-        ctx.code_blocks,
-    ))
+        ParsedDocument {
+            lines: ctx.lines,
+            headings: ctx.headings,
+            images: ctx.images,
+            links: ctx.link_refs,
+            footnotes: ctx.footnotes,
+            code_blocks: ctx.code_blocks,
+            mermaid_sources: ctx.mermaid_sources,
+        },
+    )
 }
 
 fn create_options() -> Options {
@@ -139,8 +180,10 @@ struct ParseContext<'h, S: BuildHasher = std::collections::hash_map::RandomState
     link_refs: Vec<LinkRef>,
     footnotes: HashMap<String, usize>,
     code_blocks: Vec<CodeBlockRef>,
+    mermaid_sources: HashMap<String, String>,
     image_heights: &'h HashMap<String, usize, S>,
     wrap_width: usize,
+    mermaid_as_images: bool,
 }
 
 fn process_node<'a, S: BuildHasher>(
@@ -242,6 +285,52 @@ fn process_node<'a, S: BuildHasher>(
             let info = code_block.info.clone();
             let literal = code_block.literal.clone();
             let language = info.split_whitespace().next().filter(|s| !s.is_empty());
+
+            // Store mermaid diagram sources for optional image rendering.
+            if language == Some("mermaid") {
+                let key = format!("mermaid://{}", ctx.mermaid_sources.len());
+                ctx.mermaid_sources
+                    .insert(key.clone(), literal.trim_end().to_string());
+
+                if ctx.mermaid_as_images {
+                    // Emit as an image placeholder instead of a code block.
+                    let height_lines = ctx.image_heights.get(&key).copied().unwrap_or(1).max(1);
+                    let has_caption = ctx.image_heights.contains_key(&key);
+                    let start_line = ctx.lines.len();
+                    let label = "[Image: mermaid diagram]".to_string();
+
+                    if has_caption {
+                        ctx.lines.push(RenderedLine::new(
+                            "    mermaid diagram".to_string(),
+                            LineType::Image,
+                        ));
+                    }
+
+                    ctx.lines
+                        .push(RenderedLine::new(label.clone(), LineType::Image));
+                    ctx.link_refs.push(LinkRef {
+                        text: label,
+                        url: key.clone(),
+                        line: start_line + usize::from(has_caption),
+                    });
+
+                    for _ in 1..height_lines {
+                        ctx.lines
+                            .push(RenderedLine::new(String::new(), LineType::Image));
+                    }
+
+                    let end_line = ctx.lines.len();
+                    ctx.images.push(ImageRef {
+                        alt: "mermaid diagram".to_string(),
+                        src: key,
+                        line_range: start_line + usize::from(has_caption)..end_line,
+                    });
+                    ctx.lines
+                        .push(RenderedLine::new(String::new(), LineType::Empty));
+                    // Skip the normal code block rendering below.
+                    return;
+                }
+            }
 
             // Render CSV code blocks as tables instead of code blocks
             if language == Some("csv") {
@@ -2131,6 +2220,58 @@ mod tests {
         assert!(
             !code_lines.is_empty(),
             "Non-CSV code blocks should still render as CodeBlock"
+        );
+    }
+
+    #[test]
+    fn test_mermaid_code_block_stored_as_mermaid_source() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = parse(md).unwrap();
+        assert_eq!(doc.mermaid_sources().len(), 1);
+        let source = doc.mermaid_sources().values().next().unwrap();
+        assert!(source.contains("graph TD"));
+        assert!(source.contains("A --> B"));
+    }
+
+    #[test]
+    fn test_non_mermaid_code_block_not_in_mermaid_sources() {
+        let md = "```rust\nfn main() {}\n```";
+        let doc = parse(md).unwrap();
+        assert!(doc.mermaid_sources().is_empty());
+    }
+
+    #[test]
+    fn test_mermaid_block_renders_as_image_when_flag_set() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = Document::parse_with_mermaid_images(md, 80).unwrap();
+        assert_eq!(doc.images().len(), 1);
+        assert!(doc.images()[0].src.starts_with("mermaid://"));
+        // Should still have the source stored
+        assert_eq!(doc.mermaid_sources().len(), 1);
+    }
+
+    #[test]
+    fn test_mermaid_block_stays_as_code_without_flag() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        // No image entries for mermaid without the flag
+        assert!(doc.images().is_empty());
+        // Still stored as mermaid source
+        assert_eq!(doc.mermaid_sources().len(), 1);
+        // Rendered as code block lines
+        let lines = doc.visible_lines(0, 20);
+        assert!(lines.iter().any(|l| *l.line_type() == LineType::CodeBlock));
+    }
+
+    #[test]
+    fn test_mermaid_image_placeholder_text() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let doc = Document::parse_with_mermaid_images(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.content().contains("[Image: mermaid diagram]"))
         );
     }
 }
