@@ -55,23 +55,23 @@ impl App {
                 }
             }
             Message::OpenVisibleLinks => {
-                self.open_visible_links(model);
+                Self::open_visible_links(model);
             }
             Message::FollowLinkAtLine(line, col) => {
-                self.follow_link_on_line(model, *line, *col);
+                Self::follow_link_on_line(model, *line, *col);
             }
             Message::SelectVisibleLink(index) => {
-                self.follow_link_picker_index(model, *index);
+                Self::follow_link_picker_index(model, *index);
             }
             Message::EndSelection(_) => {
-                self.copy_selection(model);
+                Self::copy_selection(model);
                 model.clear_selection();
             }
             Message::TocSelect | Message::TocClick(_) | Message::TocExpand if model.browse_mode => {
-                self.browse_activate_selected(model);
+                Self::browse_activate_selected(model);
             }
             Message::TocCollapse if model.browse_mode => {
-                self.browse_navigate_parent(model);
+                Self::browse_navigate_parent(model);
             }
             Message::EnterBrowseMode => {
                 let dir = model
@@ -97,7 +97,7 @@ impl App {
         }
     }
 
-    fn open_visible_links(&self, model: &mut Model) {
+    fn open_visible_links(model: &mut Model) {
         let start = model.viewport.offset();
         let end = start + model.viewport.height() as usize;
         let mut visible: Vec<_> = model
@@ -111,7 +111,7 @@ impl App {
 
         match visible.len() {
             0 => model.show_toast(ToastLevel::Info, "No visible links"),
-            1 => self.follow_resolved_link(model, &visible[0].url),
+            1 => Self::follow_resolved_link(model, &visible[0].url),
             _ => {
                 model.link_picker_items = visible;
                 model.show_toast(ToastLevel::Info, "Select link: 1-9 (Esc to cancel)");
@@ -119,7 +119,7 @@ impl App {
         }
     }
 
-    fn follow_link_picker_index(&self, model: &mut Model, index: u8) {
+    fn follow_link_picker_index(model: &mut Model, index: u8) {
         if index == 0 {
             return;
         }
@@ -129,22 +129,22 @@ impl App {
         };
         let url = link.url.clone();
         model.link_picker_items.clear();
-        self.follow_resolved_link(model, &url);
+        Self::follow_resolved_link(model, &url);
     }
 
-    fn follow_link_on_line(&self, model: &mut Model, line: usize, col: Option<usize>) {
+    fn follow_link_on_line(model: &mut Model, line: usize, col: Option<usize>) {
         if let Some(col) = col
-            && let Some(link) = self.link_at_column(model, line, col)
+            && let Some(link) = Self::link_at_column(model, line, col)
         {
             let url = link.url;
             model.link_picker_items.clear();
-            self.follow_resolved_link(model, &url);
+            Self::follow_resolved_link(model, &url);
             return;
         }
         if let Some(link) = model.document.links().iter().find(|link| link.line == line) {
             let url = link.url.clone();
             model.link_picker_items.clear();
-            self.follow_resolved_link(model, &url);
+            Self::follow_resolved_link(model, &url);
             return;
         }
 
@@ -158,11 +158,10 @@ impl App {
         };
         let url = image.src.clone();
         model.link_picker_items.clear();
-        self.follow_resolved_link(model, &url);
+        Self::follow_resolved_link(model, &url);
     }
 
-    fn follow_resolved_link(&self, model: &mut Model, url: &str) {
-        let _ = self;
+    fn follow_resolved_link(model: &mut Model, url: &str) {
         if let Some(name) = url.strip_prefix("footnote:") {
             if let Some(target) = model.document.footnote_line(name) {
                 model.viewport.go_to_line(target);
@@ -189,8 +188,7 @@ impl App {
         }
     }
 
-    fn browse_activate_selected(&self, model: &mut Model) {
-        let _ = self;
+    fn browse_activate_selected(model: &mut Model) {
         let Some(sel) = model.toc_selected else {
             return;
         };
@@ -210,8 +208,7 @@ impl App {
         }
     }
 
-    fn browse_navigate_parent(&self, model: &mut Model) {
-        let _ = self;
+    fn browse_navigate_parent(model: &mut Model) {
         let parent = model
             .browse_dir
             .parent()
@@ -252,8 +249,7 @@ impl App {
         }
     }
 
-    fn copy_selection(&self, model: &mut Model) {
-        let _ = self;
+    fn copy_selection(model: &mut Model) {
         let Some((text, lines)) = model.selected_text() else {
             return;
         };

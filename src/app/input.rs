@@ -10,15 +10,14 @@ use super::event_loop::ResizeDebouncer;
 
 impl App {
     pub(super) fn handle_event(
-        &self,
         event: &Event,
         model: &Model,
         now_ms: u64,
         resize_debouncer: &mut ResizeDebouncer,
     ) -> Option<Message> {
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(*key, model),
-            Event::Mouse(mouse) => self.handle_mouse(*mouse, model),
+            Event::Key(key) if key.kind == KeyEventKind::Press => Self::handle_key(*key, model),
+            Event::Mouse(mouse) => Self::handle_mouse(*mouse, model),
             Event::Resize(w, h) => {
                 crate::perf::log_event("event.resize.queue", format!("width={w} height={h}"));
                 resize_debouncer.queue(*w, *h, now_ms);
@@ -28,7 +27,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_mouse(&self, mouse: MouseEvent, model: &Model) -> Option<Message> {
+    pub(super) fn handle_mouse(mouse: MouseEvent, model: &Model) -> Option<Message> {
         if model.help_visible {
             return None;
         }
@@ -92,7 +91,7 @@ impl App {
                             .column
                             .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
                             as usize;
-                        if self.link_at_column(model, line, content_col).is_some() {
+                        if Self::link_at_column(model, line, content_col).is_some() {
                             return Some(Message::FollowLinkAtLine(line, Some(content_col)));
                         }
                         if image_at_line(model, line) {
@@ -161,8 +160,7 @@ impl App {
                     .column
                     .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
                     as usize;
-                let hovered = self
-                    .link_at_column(model, line, content_col)
+                let hovered = Self::link_at_column(model, line, content_col)
                     .map(|link| link.url)
                     .or_else(|| image_url_at_line(model, line));
                 return Some(Message::HoverLink(hovered));
@@ -181,7 +179,7 @@ impl App {
                 .column
                 .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
                 as usize;
-            if self.link_at_column(model, line, content_col).is_some() {
+            if Self::link_at_column(model, line, content_col).is_some() {
                 return Some(Message::FollowLinkAtLine(line, Some(content_col)));
             }
             if image_at_line(model, line) {
@@ -208,8 +206,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_key(&self, key: event::KeyEvent, model: &Model) -> Option<Message> {
-        let _ = self;
+    pub(super) fn handle_key(key: event::KeyEvent, model: &Model) -> Option<Message> {
         if model.help_visible {
             let _ = key;
             return Some(Message::HideHelp);
@@ -337,18 +334,15 @@ impl App {
         }
     }
 
-    pub(super) fn view(&self, model: &mut Model, frame: &mut Frame) {
-        let _ = self;
+    pub(super) fn view(model: &mut Model, frame: &mut Frame) {
         crate::ui::render(model, frame);
     }
 
     pub(super) fn link_at_column(
-        &self,
         model: &Model,
         line: usize,
         content_col: usize,
     ) -> Option<crate::document::LinkRef> {
-        let _ = self;
         let line_text = model.document.line_at(line)?.content();
         let links_on_line: Vec<_> = model
             .document

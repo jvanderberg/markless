@@ -219,7 +219,7 @@ fn process_node<'a, S: BuildHasher>(
                         line: start_line + usize::from(has_caption),
                     });
 
-                    // Reserve additional ctx.lines for image content (empty Image ctx.lines)
+                    // Reserve additional lines for image content (empty Image lines)
                     for _ in 1..height_lines {
                         ctx.lines
                             .push(RenderedLine::new(String::new(), LineType::Image));

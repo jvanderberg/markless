@@ -714,11 +714,9 @@ fn clean_selected_line(
 }
 
 fn is_markdown_ext(name: &str) -> bool {
-    name.to_ascii_lowercase()
-        .rsplit_once('.')
-        .is_some_and(|(_, ext)| {
-            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
-        })
+    name.rsplit_once('.').is_some_and(|(_, ext)| {
+        ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+    })
 }
 
 // Implement Default for Model to allow std::mem::take

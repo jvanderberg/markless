@@ -317,9 +317,8 @@ impl Document {
     }
 }
 
-#[allow(clippy::redundant_pub_crate)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CodeBlockRef {
+pub struct CodeBlockRef {
     pub line_range: Range<usize>,
     pub language: Option<String>,
     pub raw_lines: Vec<String>,

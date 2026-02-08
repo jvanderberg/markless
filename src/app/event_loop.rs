@@ -100,7 +100,7 @@ impl App {
 
         // Determine the file to load (may be overridden in browse mode)
         let initial_file = if self.browse_mode {
-            self.find_first_viewable_file(&self.file_path.clone())
+            Self::find_first_viewable_file(&self.file_path)
         } else {
             Some(self.file_path.clone())
         };
@@ -174,8 +174,7 @@ impl App {
     }
 
     /// Find the first viewable file in a directory.
-    fn find_first_viewable_file(&self, dir: &std::path::Path) -> Option<std::path::PathBuf> {
-        let _ = self;
+    fn find_first_viewable_file(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return None;
         };
@@ -199,13 +198,11 @@ impl App {
     }
 
     const fn update_browse_debouncer(
-        &self,
         model: &Model,
         msg: &Message,
         now_ms: u64,
         debouncer: &mut BrowseDebouncer,
     ) {
-        let _ = self;
         if !model.browse_mode {
             return;
         }
@@ -326,7 +323,7 @@ impl App {
                 // Refresh timestamp after poll wait so debouncers use accurate times.
                 let event_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let msg =
-                    self.handle_event(&event::read()?, model, event_ms, &mut resize_debouncer);
+                    Self::handle_event(&event::read()?, model, event_ms, &mut resize_debouncer);
                 if let Some(msg) = msg {
                     crate::perf::log_event(
                         "event.message",
@@ -335,7 +332,12 @@ impl App {
                     let side_msg = msg.clone();
                     *model = update(std::mem::take(model), msg);
                     self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
-                    self.update_browse_debouncer(model, &side_msg, event_ms, &mut browse_debouncer);
+                    Self::update_browse_debouncer(
+                        model,
+                        &side_msg,
+                        event_ms,
+                        &mut browse_debouncer,
+                    );
                     needs_render = true;
                 }
 
@@ -344,13 +346,13 @@ impl App {
                 while event::poll(Duration::from_millis(0))? {
                     let drain_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     let msg =
-                        self.handle_event(&event::read()?, model, drain_ms, &mut resize_debouncer);
+                        Self::handle_event(&event::read()?, model, drain_ms, &mut resize_debouncer);
                     if let Some(msg) = msg {
                         drained += 1;
                         let side_msg = msg.clone();
                         *model = update(std::mem::take(model), msg);
                         self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
-                        self.update_browse_debouncer(
+                        Self::update_browse_debouncer(
                             model,
                             &side_msg,
                             drain_ms,
@@ -389,7 +391,7 @@ impl App {
 
                 // Render
                 let draw_start = Instant::now();
-                terminal.draw(|frame| self.view(model, frame))?;
+                terminal.draw(|frame| Self::view(model, frame))?;
                 crate::perf::log_event(
                     "frame.draw",
                     format!(
