@@ -78,8 +78,7 @@ impl App {
                     .file_path
                     .parent()
                     .filter(|p| !p.as_os_str().is_empty())
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from("."));
+                    .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
                 if let Err(err) = model.load_directory(&dir) {
                     model.show_toast(ToastLevel::Error, format!("Browse failed: {err}"));
                 } else {
@@ -134,13 +133,13 @@ impl App {
     }
 
     fn follow_link_on_line(&self, model: &mut Model, line: usize, col: Option<usize>) {
-        if let Some(col) = col {
-            if let Some(link) = self.link_at_column(model, line, col) {
-                let url = link.url;
-                model.link_picker_items.clear();
-                self.follow_resolved_link(model, &url);
-                return;
-            }
+        if let Some(col) = col
+            && let Some(link) = self.link_at_column(model, line, col)
+        {
+            let url = link.url;
+            model.link_picker_items.clear();
+            self.follow_resolved_link(model, &url);
+            return;
         }
         if let Some(link) = model.document.links().iter().find(|link| link.line == line) {
             let url = link.url.clone();
@@ -163,6 +162,7 @@ impl App {
     }
 
     fn follow_resolved_link(&self, model: &mut Model, url: &str) {
+        let _ = self;
         if let Some(name) = url.strip_prefix("footnote:") {
             if let Some(target) = model.document.footnote_line(name) {
                 model.viewport.go_to_line(target);
@@ -190,6 +190,7 @@ impl App {
     }
 
     fn browse_activate_selected(&self, model: &mut Model) {
+        let _ = self;
         let Some(sel) = model.toc_selected else {
             return;
         };
@@ -210,6 +211,7 @@ impl App {
     }
 
     fn browse_navigate_parent(&self, model: &mut Model) {
+        let _ = self;
         let parent = model
             .browse_dir
             .parent()
@@ -251,6 +253,7 @@ impl App {
     }
 
     fn copy_selection(&self, model: &mut Model) {
+        let _ = self;
         let Some((text, lines)) = model.selected_text() else {
             return;
         };
@@ -332,7 +335,7 @@ fn copy_to_clipboard_osc52(text: &str) -> std::io::Result<()> {
 
 fn osc52_sequence(text: &str) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    format!("\x1b]52;c;{}\x07", encoded)
+    format!("\x1b]52;c;{encoded}\x07")
 }
 
 #[cfg(test)]

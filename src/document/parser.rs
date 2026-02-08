@@ -1,6 +1,7 @@
 //! Markdown parsing with comrak.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use anyhow::Result;
 use comrak::nodes::{AstNode, NodeValue, TableAlignment};
@@ -23,14 +24,20 @@ use super::types::{
 /// assert!(doc.line_count() >= 3); // heading + empty + paragraph + trailing empty
 /// ```
 impl Document {
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse(source: &str) -> Result<Self> {
         parse(source)
     }
 
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_layout(source: &str, width: u16) -> Result<Self> {
         parse_with_layout(source, width, &HashMap::new())
     }
 
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_image_heights(
         source: &str,
         image_heights: &HashMap<String, usize>,
@@ -38,6 +45,8 @@ impl Document {
         parse_with_image_heights(source, image_heights)
     }
 
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
     pub fn parse_with_layout_and_image_heights(
         source: &str,
         width: u16,
@@ -47,59 +56,59 @@ impl Document {
     }
 }
 
-/// Parse markdown source into a Document.
+/// Parse markdown source into a `Document`.
+///
+/// # Errors
+/// Returns an error if markdown parsing fails.
 pub fn parse(source: &str) -> Result<Document> {
     parse_with_layout(source, 80, &HashMap::new())
 }
 
-/// Parse markdown source into a Document with known image heights (in terminal rows).
-pub fn parse_with_image_heights(
+/// Parse markdown with known image heights (in terminal rows).
+///
+/// # Errors
+/// Returns an error if markdown parsing fails.
+pub fn parse_with_image_heights<S: BuildHasher>(
     source: &str,
-    image_heights: &HashMap<String, usize>,
+    image_heights: &HashMap<String, usize, S>,
 ) -> Result<Document> {
     parse_with_layout(source, 80, image_heights)
 }
 
-/// Parse markdown source into a Document with layout and wrapping.
-pub fn parse_with_layout(
+/// Parse markdown with layout width and image heights.
+///
+/// # Errors
+/// Returns an error if markdown parsing fails.
+pub fn parse_with_layout<S: BuildHasher>(
     source: &str,
     width: u16,
-    image_heights: &HashMap<String, usize>,
+    image_heights: &HashMap<String, usize, S>,
 ) -> Result<Document> {
     let arena = Arena::new();
     let options = create_options();
     let root = parse_document(&arena, source, &options);
 
-    let mut lines = Vec::new();
-    let mut headings = Vec::new();
-    let mut images = Vec::new();
-    let mut links = Vec::new();
-    let mut footnotes = HashMap::new();
-    let mut code_blocks = Vec::new();
-
     let wrap_width = width.max(1) as usize;
-    process_node(
-        root,
-        &mut lines,
-        &mut headings,
-        &mut images,
-        &mut links,
-        &mut footnotes,
-        &mut code_blocks,
-        0,
+    let mut ctx = ParseContext {
+        lines: Vec::new(),
+        headings: Vec::new(),
+        images: Vec::new(),
+        link_refs: Vec::new(),
+        footnotes: HashMap::new(),
+        code_blocks: Vec::new(),
         image_heights,
         wrap_width,
-        None,
-    );
+    };
+    process_node(root, &mut ctx, 0, None);
 
     Ok(Document::new(
         source.to_string(),
-        lines,
-        headings,
-        images,
-        links,
-        footnotes,
-        code_blocks,
+        ctx.lines,
+        ctx.headings,
+        ctx.images,
+        ctx.link_refs,
+        ctx.footnotes,
+        ctx.code_blocks,
     ))
 }
 
@@ -122,35 +131,28 @@ fn create_options() -> Options {
     options
 }
 
-fn process_node<'a>(
-    node: &'a AstNode<'a>,
-    lines: &mut Vec<RenderedLine>,
-    headings: &mut Vec<HeadingRef>,
-    images: &mut Vec<ImageRef>,
-    links: &mut Vec<LinkRef>,
-    footnotes: &mut HashMap<String, usize>,
-    code_blocks: &mut Vec<CodeBlockRef>,
-    depth: usize,
-    image_heights: &HashMap<String, usize>,
+/// Mutable context threaded through recursive node processing.
+struct ParseContext<'h, S: BuildHasher = std::collections::hash_map::RandomState> {
+    lines: Vec<RenderedLine>,
+    headings: Vec<HeadingRef>,
+    images: Vec<ImageRef>,
+    link_refs: Vec<LinkRef>,
+    footnotes: HashMap<String, usize>,
+    code_blocks: Vec<CodeBlockRef>,
+    image_heights: &'h HashMap<String, usize, S>,
     wrap_width: usize,
+}
+
+fn process_node<'a, S: BuildHasher>(
+    node: &'a AstNode<'a>,
+    ctx: &mut ParseContext<'_, S>,
+    depth: usize,
     list_marker: Option<String>,
 ) {
     match &node.data.borrow().value {
         NodeValue::Document => {
             for child in node.children() {
-                process_node(
-                    child,
-                    lines,
-                    headings,
-                    images,
-                    links,
-                    footnotes,
-                    code_blocks,
-                    depth,
-                    image_heights,
-                    wrap_width,
-                    list_marker.clone(),
-                );
+                process_node(child, ctx, depth, list_marker.clone());
             }
         }
 
@@ -158,10 +160,10 @@ fn process_node<'a>(
             let text = extract_text(node);
 
             // Keep headings visually separated with two rows above.
-            ensure_trailing_empty_lines(lines, 2);
-            let line_num = lines.len();
+            ensure_trailing_empty_lines(&mut ctx.lines, 2);
+            let line_num = ctx.lines.len();
 
-            headings.push(HeadingRef {
+            ctx.headings.push(HeadingRef {
                 level: heading.level,
                 text: text.clone(),
                 line: line_num,
@@ -169,11 +171,12 @@ fn process_node<'a>(
             });
 
             let prefix = "#".repeat(heading.level as usize);
-            lines.push(RenderedLine::new(
-                format!("{} {}", prefix, text),
+            ctx.lines.push(RenderedLine::new(
+                format!("{prefix} {text}"),
                 LineType::Heading(heading.level),
             ));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::Paragraph => {
@@ -184,12 +187,12 @@ fn process_node<'a>(
                 // Regular paragraph text with inline styling and wrapping
                 let spans = collect_inline_spans(node);
                 // Collect links from paragraph
-                collect_inline_elements(node, lines.len(), images, links);
+                collect_inline_elements(node, ctx.lines.len(), &mut ctx.images, &mut ctx.link_refs);
 
-                let wrapped = wrap_spans(&spans, wrap_width, "", "");
+                let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
-                    lines.push(RenderedLine::with_spans(
+                    ctx.lines.push(RenderedLine::with_spans(
                         content,
                         LineType::Paragraph,
                         line_spans,
@@ -197,37 +200,41 @@ fn process_node<'a>(
                 }
             } else {
                 for (alt, src) in child_images {
-                    let height_lines = image_heights.get(&src).copied().unwrap_or(1).max(1);
-                    let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
-                    let start_line = lines.len();
+                    let height_lines = ctx.image_heights.get(&src).copied().unwrap_or(1).max(1);
+                    let has_caption = ctx.image_heights.contains_key(&src) && !alt.is_empty();
+                    let start_line = ctx.lines.len();
                     let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
 
                     if has_caption {
-                        lines.push(RenderedLine::new(format!("    {alt}"), LineType::Image));
+                        ctx.lines
+                            .push(RenderedLine::new(format!("    {alt}"), LineType::Image));
                     }
 
                     // First line shows the image placeholder/alt text
-                    lines.push(RenderedLine::new(label.clone(), LineType::Image));
-                    links.push(LinkRef {
+                    ctx.lines
+                        .push(RenderedLine::new(label.clone(), LineType::Image));
+                    ctx.link_refs.push(LinkRef {
                         text: label,
                         url: src.clone(),
                         line: start_line + usize::from(has_caption),
                     });
 
-                    // Reserve additional lines for image content (empty Image lines)
+                    // Reserve additional ctx.lines for image content (empty Image ctx.lines)
                     for _ in 1..height_lines {
-                        lines.push(RenderedLine::new(String::new(), LineType::Image));
+                        ctx.lines
+                            .push(RenderedLine::new(String::new(), LineType::Image));
                     }
 
-                    let end_line = lines.len();
-                    images.push(ImageRef {
+                    let end_line = ctx.lines.len();
+                    ctx.images.push(ImageRef {
                         alt: alt.clone(),
                         src: src.clone(),
                         line_range: start_line + usize::from(has_caption)..end_line,
                     });
                 }
             }
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::CodeBlock(code_block) => {
@@ -238,10 +245,11 @@ fn process_node<'a>(
 
             // Render CSV code blocks as tables instead of code blocks
             if language == Some("csv") {
-                let csv_lines = render_csv_as_table(&literal, wrap_width);
+                let csv_lines = render_csv_as_table(&literal, ctx.wrap_width);
                 if !csv_lines.is_empty() {
-                    lines.extend(csv_lines);
-                    lines.push(RenderedLine::new(String::new(), LineType::Empty));
+                    ctx.lines.extend(csv_lines);
+                    ctx.lines
+                        .push(RenderedLine::new(String::new(), LineType::Empty));
                     return;
                 }
                 // Fall through to normal code block rendering if CSV parsing fails
@@ -251,9 +259,9 @@ fn process_node<'a>(
                 .map(UnicodeWidthStr::width)
                 .max()
                 .unwrap_or(0)
-                .min(wrap_width.saturating_sub(4).max(1));
+                .min(ctx.wrap_width.saturating_sub(4).max(1));
             let title = language.unwrap_or("code");
-            let label = format!(" {} ", title);
+            let label = format!(" {title} ");
             let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
             let top_label_width = frame_inner_width.min(UnicodeWidthStr::width(label.as_str()));
             let visible_label: String = label.chars().take(top_label_width).collect();
@@ -265,9 +273,9 @@ fn process_node<'a>(
                         .saturating_sub(UnicodeWidthStr::width(visible_label.as_str()))
                 )
             );
-            lines.push(RenderedLine::new(top, LineType::CodeBlock));
+            ctx.lines.push(RenderedLine::new(top, LineType::CodeBlock));
 
-            let body_start = lines.len();
+            let body_start = ctx.lines.len();
             let raw_lines: Vec<String> = literal.lines().map(ToString::to_string).collect();
             for raw_line in &raw_lines {
                 let plain_style = InlineStyle {
@@ -284,19 +292,19 @@ fn process_node<'a>(
                 line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
                 line_spans.extend(trimmed_spans);
                 line_spans.push(InlineSpan::new(
-                    format!("{} │", padding),
+                    format!("{padding} │"),
                     InlineStyle::default(),
                 ));
                 let content = spans_to_string(&line_spans);
-                lines.push(RenderedLine::with_spans(
+                ctx.lines.push(RenderedLine::with_spans(
                     content,
                     LineType::CodeBlock,
                     line_spans,
                 ));
             }
-            let body_end = lines.len();
+            let body_end = ctx.lines.len();
 
-            code_blocks.push(CodeBlockRef {
+            ctx.code_blocks.push(CodeBlockRef {
                 line_range: body_start..body_end,
                 language: language.map(ToString::to_string),
                 raw_lines,
@@ -305,11 +313,12 @@ fn process_node<'a>(
                 right_padding: CODE_RIGHT_PADDING,
             });
 
-            lines.push(RenderedLine::new(
+            ctx.lines.push(RenderedLine::new(
                 format!("└{}┘", "─".repeat(frame_inner_width)),
                 LineType::CodeBlock,
             ));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::List(list) => {
@@ -328,39 +337,28 @@ fn process_node<'a>(
                     comrak::nodes::ListType::Bullet => "•".to_string(),
                     comrak::nodes::ListType::Ordered => {
                         let number = start + index;
-                        format!("{:>width$}{}", number, delimiter, width = number_width)
+                        format!("{number:>number_width$}{delimiter}")
                     }
                 };
-                let marker = format!("{} ", base_marker);
-                process_node(
-                    child,
-                    lines,
-                    headings,
-                    images,
-                    links,
-                    footnotes,
-                    code_blocks,
-                    list_depth,
-                    image_heights,
-                    wrap_width,
-                    Some(marker),
-                );
+                let marker = format!("{base_marker} ");
+                process_node(child, ctx, list_depth, Some(marker));
             }
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::TaskItem(symbol) => {
             let indent = "  ".repeat(depth.saturating_sub(1));
             let task_marker = if symbol.is_some() { "✓" } else { "□" };
-            let marker = format!("{} ", task_marker);
-            let prefix_first = format!("{}{}", indent, marker);
+            let marker = format!("{task_marker} ");
+            let prefix_first = format!("{indent}{marker}");
             let prefix_next = format!("{}{}", indent, " ".repeat(marker.len()));
 
             let spans = collect_inline_spans(node);
-            let wrapped = wrap_spans(&spans, wrap_width, &prefix_first, &prefix_next);
+            let wrapped = wrap_spans(&spans, ctx.wrap_width, &prefix_first, &prefix_next);
             for line_spans in wrapped {
                 let content = spans_to_string(&line_spans);
-                lines.push(RenderedLine::with_spans(
+                ctx.lines.push(RenderedLine::with_spans(
                     content,
                     LineType::ListItem(depth),
                     line_spans,
@@ -369,19 +367,7 @@ fn process_node<'a>(
 
             for child in node.children() {
                 if matches!(child.data.borrow().value, NodeValue::List(_)) {
-                    process_node(
-                        child,
-                        lines,
-                        headings,
-                        images,
-                        links,
-                        footnotes,
-                        code_blocks,
-                        depth,
-                        image_heights,
-                        wrap_width,
-                        None,
-                    );
+                    process_node(child, ctx, depth, None);
                 }
             }
         }
@@ -390,21 +376,18 @@ fn process_node<'a>(
             let indent = "  ".repeat(depth.saturating_sub(1));
             let base_marker = list_marker.unwrap_or_else(|| "- ".to_string());
             let task_marker = find_task_marker(node);
-            let marker = if let Some(task_marker) = task_marker {
-                format!("{} ", task_marker)
-            } else {
-                base_marker
-            };
-            let prefix_first = format!("{}{}", indent, marker);
+            let marker = task_marker.map_or(base_marker, |tm| format!("{tm} "));
+            let prefix_first = format!("{indent}{marker}");
             let prefix_next = format!("{}{}", indent, " ".repeat(marker.len()));
             let mut rendered_any = false;
             let mut rendered_paragraphs = 0usize;
 
             for child in node.children() {
                 match &child.data.borrow().value {
-                    NodeValue::Paragraph => {
+                    NodeValue::Paragraph | NodeValue::TaskItem(_) => {
                         if rendered_paragraphs > 0 {
-                            lines.push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
+                            ctx.lines
+                                .push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
                         }
                         let spans = collect_inline_spans(child);
                         let prefix = if rendered_any {
@@ -412,11 +395,11 @@ fn process_node<'a>(
                         } else {
                             &prefix_first
                         };
-                        let wrapped = wrap_spans(&spans, wrap_width, prefix, &prefix_next);
+                        let wrapped = wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
 
                         for line_spans in wrapped {
                             let content = spans_to_string(&line_spans);
-                            lines.push(RenderedLine::with_spans(
+                            ctx.lines.push(RenderedLine::with_spans(
                                 content,
                                 LineType::ListItem(depth),
                                 line_spans,
@@ -424,69 +407,19 @@ fn process_node<'a>(
                         }
                         rendered_any = true;
                         rendered_paragraphs += 1;
-                    }
-                    NodeValue::TaskItem(_) => {
-                        if rendered_paragraphs > 0 {
-                            lines.push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
-                        }
-                        let spans = collect_inline_spans(child);
-                        let prefix = if rendered_any {
-                            &prefix_next
-                        } else {
-                            &prefix_first
-                        };
-                        let wrapped = wrap_spans(&spans, wrap_width, prefix, &prefix_next);
-
-                        for line_spans in wrapped {
-                            let content = spans_to_string(&line_spans);
-                            lines.push(RenderedLine::with_spans(
-                                content,
-                                LineType::ListItem(depth),
-                                line_spans,
-                            ));
-                        }
-                        rendered_any = true;
-                        rendered_paragraphs += 1;
-                    }
-                    NodeValue::List(_) => {
-                        process_node(
-                            child,
-                            lines,
-                            headings,
-                            images,
-                            links,
-                            footnotes,
-                            code_blocks,
-                            depth,
-                            image_heights,
-                            wrap_width,
-                            None,
-                        );
                     }
                     _ => {
-                        process_node(
-                            child,
-                            lines,
-                            headings,
-                            images,
-                            links,
-                            footnotes,
-                            code_blocks,
-                            depth,
-                            image_heights,
-                            wrap_width,
-                            None,
-                        );
+                        process_node(child, ctx, depth, None);
                     }
                 }
             }
 
             if !rendered_any {
                 let spans = collect_inline_spans(node);
-                let wrapped = wrap_spans(&spans, wrap_width, &prefix_first, &prefix_next);
+                let wrapped = wrap_spans(&spans, ctx.wrap_width, &prefix_first, &prefix_next);
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
-                    lines.push(RenderedLine::with_spans(
+                    ctx.lines.push(RenderedLine::with_spans(
                         content,
                         LineType::ListItem(depth),
                         line_spans,
@@ -496,92 +429,87 @@ fn process_node<'a>(
         }
 
         NodeValue::BlockQuote => {
-            render_blockquote(node, lines, wrap_width, 1);
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            render_blockquote(node, &mut ctx.lines, ctx.wrap_width, 1);
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::ThematicBreak => {
-            lines.push(RenderedLine::new(
+            ctx.lines.push(RenderedLine::new(
                 "─────".to_string(),
                 LineType::HorizontalRule,
             ));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::Table(_) => {
-            lines.extend(render_table(node, wrap_width));
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines.extend(render_table(node, ctx.wrap_width));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::FootnoteDefinition(def) => {
-            let line_num = lines.len();
-            footnotes.insert(def.name.clone(), line_num);
+            let line_num = ctx.lines.len();
+            ctx.footnotes.insert(def.name.clone(), line_num);
             let label = format!("{} ", render_footnote_reference(&def.name));
             let continuation = " ".repeat(label.len());
             let spans = collect_inline_spans(node);
-            let wrapped = wrap_spans(&spans, wrap_width, &label, &continuation);
+            let wrapped = wrap_spans(&spans, ctx.wrap_width, &label, &continuation);
             if wrapped.is_empty() {
-                lines.push(RenderedLine::new(label, LineType::Paragraph));
+                ctx.lines
+                    .push(RenderedLine::new(label, LineType::Paragraph));
             } else {
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
-                    lines.push(RenderedLine::with_spans(
+                    ctx.lines.push(RenderedLine::with_spans(
                         content,
                         LineType::Paragraph,
                         line_spans,
                     ));
                 }
             }
-            lines.push(RenderedLine::new(String::new(), LineType::Empty));
+            ctx.lines
+                .push(RenderedLine::new(String::new(), LineType::Empty));
         }
 
         NodeValue::Image(image) => {
             let alt = extract_text(node);
             let src = image.url.clone();
-            let line_num = lines.len();
+            let line_num = ctx.lines.len();
             let label = format!("[Image: {}]", if alt.is_empty() { &src } else { &alt });
-            let height_lines = image_heights.get(&src).copied().unwrap_or(1).max(1);
-            let has_caption = image_heights.contains_key(&src) && !alt.is_empty();
+            let height_lines = ctx.image_heights.get(&src).copied().unwrap_or(1).max(1);
+            let has_caption = ctx.image_heights.contains_key(&src) && !alt.is_empty();
 
-            images.push(ImageRef {
+            ctx.images.push(ImageRef {
                 alt: alt.clone(),
                 src: src.clone(),
                 line_range: line_num + usize::from(has_caption)
                     ..line_num + usize::from(has_caption) + height_lines,
             });
 
-            links.push(LinkRef {
+            ctx.link_refs.push(LinkRef {
                 text: label.clone(),
                 url: src,
                 line: line_num + usize::from(has_caption),
             });
 
             if has_caption {
-                lines.push(RenderedLine::new(format!("    {alt}"), LineType::Image));
+                ctx.lines
+                    .push(RenderedLine::new(format!("    {alt}"), LineType::Image));
             }
-            lines.push(RenderedLine::new(label, LineType::Image));
+            ctx.lines.push(RenderedLine::new(label, LineType::Image));
 
             for _ in 1..height_lines {
-                lines.push(RenderedLine::new(String::new(), LineType::Image));
+                ctx.lines
+                    .push(RenderedLine::new(String::new(), LineType::Image));
             }
         }
 
         _ => {
             // Process children for unhandled nodes
             for child in node.children() {
-                process_node(
-                    child,
-                    lines,
-                    headings,
-                    images,
-                    links,
-                    footnotes,
-                    code_blocks,
-                    depth,
-                    image_heights,
-                    wrap_width,
-                    list_marker.clone(),
-                );
+                process_node(child, ctx, depth, list_marker.clone());
             }
         }
     }
@@ -736,7 +664,7 @@ fn collect_table_rows<'a>(
             if !matches!(cell_node.data.borrow().value, NodeValue::TableCell) {
                 continue;
             }
-            let spans = normalize_inline_whitespace(collect_inline_spans(cell_node));
+            let spans = normalize_inline_whitespace(&collect_inline_spans(cell_node));
             let text = spans_to_string(&spans);
             row_cells.push(TableCellRender { text, spans });
         }
@@ -881,8 +809,8 @@ fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
-fn normalize_inline_whitespace(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
-    let text = spans_to_string(&spans);
+fn normalize_inline_whitespace(spans: &[InlineSpan]) -> Vec<InlineSpan> {
+    let text = spans_to_string(spans);
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return Vec::new();
@@ -890,7 +818,7 @@ fn normalize_inline_whitespace(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
 
     let mut result = Vec::new();
     let mut first_word = true;
-    for token in split_tokens_preserve_whitespace(&spans) {
+    for token in split_tokens_preserve_whitespace(spans) {
         let is_ws = token.text().chars().all(char::is_whitespace);
         if is_ws {
             continue;
@@ -977,7 +905,7 @@ fn map_script_chars(text: &str, superscript: bool) -> Option<String> {
     Some(mapped)
 }
 
-fn superscript_char(ch: char) -> Option<char> {
+const fn superscript_char(ch: char) -> Option<char> {
     match ch {
         'a' => Some('ᵃ'),
         'b' => Some('ᵇ'),
@@ -1023,7 +951,7 @@ fn superscript_char(ch: char) -> Option<char> {
     }
 }
 
-fn subscript_char(ch: char) -> Option<char> {
+const fn subscript_char(ch: char) -> Option<char> {
     match ch {
         '0' => Some('₀'),
         '1' => Some('₁'),

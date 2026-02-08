@@ -39,7 +39,7 @@ impl Viewport {
     /// * `width` - Terminal width in columns
     /// * `height` - Terminal height in lines (for document area)
     /// * `total_lines` - Total lines in the document
-    pub fn new(width: u16, height: u16, total_lines: usize) -> Self {
+    pub const fn new(width: u16, height: u16, total_lines: usize) -> Self {
         Self {
             width,
             height,
@@ -49,22 +49,22 @@ impl Viewport {
     }
 
     /// Get the current scroll offset.
-    pub fn offset(&self) -> usize {
+    pub const fn offset(&self) -> usize {
         self.offset
     }
 
     /// Get the viewport width.
-    pub fn width(&self) -> u16 {
+    pub const fn width(&self) -> u16 {
         self.width
     }
 
     /// Get the viewport height.
-    pub fn height(&self) -> u16 {
+    pub const fn height(&self) -> u16 {
         self.height
     }
 
     /// Get the total number of lines in the document.
-    pub fn total_lines(&self) -> usize {
+    pub const fn total_lines(&self) -> usize {
         self.total_lines
     }
 
@@ -89,21 +89,29 @@ impl Viewport {
             return 100;
         }
 
-        ((self.offset as f64 / max_offset as f64) * 100.0).round() as u8
+        // Percentage value always 0-100
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        {
+            ((self.offset as f64 / max_offset as f64) * 100.0).round() as u8
+        }
     }
 
     /// Check if we can scroll up.
-    pub fn can_scroll_up(&self) -> bool {
+    pub const fn can_scroll_up(&self) -> bool {
         self.offset > 0
     }
 
     /// Check if we can scroll down.
-    pub fn can_scroll_down(&self) -> bool {
+    pub const fn can_scroll_down(&self) -> bool {
         self.offset < self.max_offset()
     }
 
     /// Scroll up by n lines.
-    pub fn scroll_up(&mut self, n: usize) {
+    pub const fn scroll_up(&mut self, n: usize) {
         self.offset = self.offset.saturating_sub(n);
     }
 
@@ -113,7 +121,7 @@ impl Viewport {
     }
 
     /// Scroll up one page.
-    pub fn page_up(&mut self) {
+    pub const fn page_up(&mut self) {
         self.scroll_up(self.height as usize);
     }
 
@@ -123,7 +131,7 @@ impl Viewport {
     }
 
     /// Scroll up half a page.
-    pub fn half_page_up(&mut self) {
+    pub const fn half_page_up(&mut self) {
         self.scroll_up(self.height as usize / 2);
     }
 
@@ -133,12 +141,12 @@ impl Viewport {
     }
 
     /// Go to the beginning of the document.
-    pub fn go_to_top(&mut self) {
+    pub const fn go_to_top(&mut self) {
         self.offset = 0;
     }
 
     /// Go to the end of the document.
-    pub fn go_to_bottom(&mut self) {
+    pub const fn go_to_bottom(&mut self) {
         self.offset = self.max_offset();
     }
 
@@ -152,7 +160,13 @@ impl Viewport {
     /// Go to a percentage through the document.
     pub fn go_to_percent(&mut self, percent: u8) {
         let percent = percent.min(100);
-        let target = (self.max_offset() as f64 * percent as f64 / 100.0).round() as usize;
+        // Acceptable for scrollbar/progress calculation
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let target = (self.max_offset() as f64 * f64::from(percent) / 100.0).round() as usize;
         self.offset = target;
     }
 
@@ -171,7 +185,7 @@ impl Viewport {
     }
 
     /// Calculate the maximum valid offset.
-    fn max_offset(&self) -> usize {
+    const fn max_offset(&self) -> usize {
         self.total_lines.saturating_sub(self.height as usize)
     }
 }

@@ -7,6 +7,10 @@ echo "==> Checking formatting..."
 cargo fmt --check
 echo "    OK"
 
+echo "==> Running clippy..."
+cargo clippy -- -D warnings
+echo "    OK"
+
 echo "==> Running tests..."
 cargo test
 echo "    OK"

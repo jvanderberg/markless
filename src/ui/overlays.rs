@@ -5,12 +5,14 @@ use crate::app::Model;
 
 pub fn link_picker_rect(area: Rect, items_len: usize) -> Rect {
     let popup_width = area.width.saturating_sub(16).max(44);
+    // Link picker has at most a handful of items
+    #[allow(clippy::cast_possible_truncation)]
     let needed_rows = (items_len as u16 * 2) + 4;
     let popup_height = needed_rows.min(area.height.saturating_sub(4).max(8));
     centered_popup_rect(popup_width, popup_height, area)
 }
 
-pub fn link_picker_content_top(popup: Rect) -> u16 {
+pub const fn link_picker_content_top(popup: Rect) -> u16 {
     // 1 row for border + 1 row for padding
     popup.y + 2
 }
