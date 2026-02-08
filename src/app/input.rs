@@ -244,12 +244,43 @@ impl App {
             };
         }
 
+        // Global keys — always apply regardless of TOC focus
+        match key.code {
+            KeyCode::Char(' ') | KeyCode::PageDown => {
+                if model.viewport.can_scroll_down() {
+                    return Some(Message::PageDown);
+                }
+            }
+            KeyCode::Char('b') | KeyCode::PageUp => {
+                if model.viewport.can_scroll_up() {
+                    return Some(Message::PageUp);
+                }
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if model.viewport.can_scroll_down() {
+                    return Some(Message::HalfPageDown);
+                }
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if model.viewport.can_scroll_up() {
+                    return Some(Message::HalfPageUp);
+                }
+            }
+            KeyCode::Char('g') | KeyCode::Home => return Some(Message::GoToTop),
+            KeyCode::Char('G') | KeyCode::End => return Some(Message::GoToBottom),
+            KeyCode::Char('/') => return Some(Message::StartSearch),
+            KeyCode::Char('w') => return Some(Message::ToggleWatch),
+            KeyCode::Char('R') | KeyCode::Char('r') => return Some(Message::ForceReload),
+            KeyCode::Char('o') => return Some(Message::OpenVisibleLinks),
+            _ => {}
+        }
+
         // Handle TOC-focused navigation
         if model.toc_focused && model.toc_visible {
             return match key.code {
                 KeyCode::Char('j') | KeyCode::Down => Some(Message::TocDown),
                 KeyCode::Char('k') | KeyCode::Up => Some(Message::TocUp),
-                KeyCode::Enter | KeyCode::Char(' ') => Some(Message::TocSelect),
+                KeyCode::Enter => Some(Message::TocSelect),
                 KeyCode::Char('h') | KeyCode::Left => Some(Message::TocCollapse),
                 KeyCode::Backspace if model.browse_mode => Some(Message::TocCollapse),
                 KeyCode::Char('l') | KeyCode::Right => Some(Message::TocExpand),
@@ -281,36 +312,22 @@ impl App {
                     None
                 }
             }
-            KeyCode::Char(' ') | KeyCode::PageDown => {
-                if model.viewport.can_scroll_down() {
-                    Some(Message::PageDown)
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('b') | KeyCode::PageUp => {
-                if model.viewport.can_scroll_up() {
-                    Some(Message::PageUp)
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if model.viewport.can_scroll_down() {
-                    Some(Message::HalfPageDown)
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if model.viewport.can_scroll_up() {
-                    Some(Message::HalfPageUp)
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('g') | KeyCode::Home => Some(Message::GoToTop),
-            KeyCode::Char('G') | KeyCode::End => Some(Message::GoToBottom),
+            // Global keys handled in early block above
+            KeyCode::Char('b')
+            | KeyCode::Char(' ')
+            | KeyCode::Char('g')
+            | KeyCode::Char('G')
+            | KeyCode::Char('/')
+            | KeyCode::Char('w')
+            | KeyCode::Char('R')
+            | KeyCode::Char('r')
+            | KeyCode::Char('o')
+            | KeyCode::PageDown
+            | KeyCode::PageUp
+            | KeyCode::Home
+            | KeyCode::End => None,
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
 
             // TOC
             KeyCode::Char('t') => Some(Message::ToggleToc),
@@ -322,14 +339,9 @@ impl App {
             KeyCode::Char('F') => Some(Message::EnterFileMode),
 
             // File
-            KeyCode::Char('w') => Some(Message::ToggleWatch),
-            KeyCode::Char('R') => Some(Message::ForceReload),
-            KeyCode::Char('r') => Some(Message::ForceReload),
-            KeyCode::Char('o') => Some(Message::OpenVisibleLinks),
             KeyCode::Char('?') | KeyCode::F(1) => Some(Message::ToggleHelp),
 
             // Search
-            KeyCode::Char('/') => Some(Message::StartSearch),
             KeyCode::Esc => Some(Message::ClearSearch),
 
             // Quit

@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use image::DynamicImage;
 use ratatui_image::picker::{Picker, ProtocolType};
+
+use crate::config::ImageMode;
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::document::Document;
@@ -110,8 +112,8 @@ pub struct Model {
     resize_pending: bool,
     /// Short cooldown used only for iTerm2 inline image placeholdering while scrolling
     image_scroll_cooldown_ticks: u8,
-    /// Force half-cell image rendering path (used for debug and filter tuning)
-    pub force_half_cell: bool,
+    /// Forced image rendering mode (overrides auto-detection)
+    pub image_mode: Option<ImageMode>,
     /// Current line selection state (mouse drag)
     pub selection: Option<LineSelection>,
     /// Whether inline images are enabled
@@ -175,7 +177,7 @@ impl Model {
             image_layout_heights: HashMap::new(),
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
-            force_half_cell: false,
+            image_mode: None,
             selection: None,
             images_enabled: true,
             browse_mode: false,
@@ -308,7 +310,7 @@ impl Model {
                     let mut scaled = img.resize(
                         target_width_px,
                         scaled_height_px,
-                        if use_halfblocks || self.force_half_cell {
+                        if use_halfblocks {
                             image::imageops::FilterType::CatmullRom
                         } else {
                             image::imageops::FilterType::Nearest
@@ -357,6 +359,15 @@ impl Model {
             self.image_layout_heights = current_layout_heights;
             self.reflow_layout();
         }
+    }
+
+    /// Ensure hex lines are cached for the current viewport with overscan.
+    pub fn ensure_hex_overscan(&mut self) {
+        let height = self.viewport.height() as usize;
+        let extra = height * 2;
+        let start = self.viewport.offset().saturating_sub(extra);
+        let end = (self.viewport.offset() + height + extra).min(self.document.line_count());
+        self.document.ensure_hex_lines_for_range(start..end);
     }
 
     pub fn ensure_highlight_overscan(&mut self) {
@@ -428,6 +439,10 @@ impl Model {
     }
 
     pub(super) fn reflow_layout(&mut self) {
+        // Hex mode documents have fixed-width layout — no reflow needed.
+        if self.document.is_hex_mode() {
+            return;
+        }
         let mermaid = self.should_render_mermaid_as_images();
         if let Ok(document) = Document::parse_with_all_options(
             self.document.source(),
@@ -492,19 +507,23 @@ impl Model {
 
     /// Load a file into the document area.
     pub fn load_file(&mut self, path: &Path) -> Result<()> {
-        let content = if crate::document::is_image_file(path) {
-            crate::document::image_markdown(path)
-        } else {
-            let raw = std::fs::read_to_string(path)?;
-            crate::document::prepare_content(path, raw)
-        };
-        let mermaid = self.should_render_mermaid_as_images();
-        let document = Document::parse_with_all_options(
-            &content,
-            self.layout_width(),
-            &self.image_layout_heights,
-            mermaid,
-        )?;
+        let raw_bytes = std::fs::read(path)?;
+        let document =
+            if crate::document::is_binary(&raw_bytes) || crate::document::is_image_file(path) {
+                crate::document::prepare_document_from_bytes(path, raw_bytes, self.layout_width())
+            } else {
+                let content = match String::from_utf8(raw_bytes) {
+                    Ok(s) => crate::document::prepare_content(path, s),
+                    Err(e) => crate::document::prepare_content(path, e.to_string()),
+                };
+                let mermaid = self.should_render_mermaid_as_images();
+                Document::parse_with_all_options(
+                    &content,
+                    self.layout_width(),
+                    &self.image_layout_heights,
+                    mermaid,
+                )?
+            };
         self.file_path = path.to_path_buf();
         self.base_dir = path
             .parent()
@@ -577,19 +596,28 @@ impl Model {
     }
 
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
-        let content = if crate::document::is_image_file(&self.file_path) {
-            crate::document::image_markdown(&self.file_path)
+        let raw_bytes = std::fs::read(&self.file_path)?;
+        let document = if crate::document::is_binary(&raw_bytes)
+            || crate::document::is_image_file(&self.file_path)
+        {
+            crate::document::prepare_document_from_bytes(
+                &self.file_path,
+                raw_bytes,
+                self.layout_width(),
+            )
         } else {
-            let raw = std::fs::read_to_string(&self.file_path)?;
-            crate::document::prepare_content(&self.file_path, raw)
+            let content = match String::from_utf8(raw_bytes) {
+                Ok(s) => crate::document::prepare_content(&self.file_path, s),
+                Err(e) => crate::document::prepare_content(&self.file_path, e.to_string()),
+            };
+            let mermaid = self.should_render_mermaid_as_images();
+            Document::parse_with_all_options(
+                &content,
+                self.layout_width(),
+                &self.image_layout_heights,
+                mermaid,
+            )?
         };
-        let mermaid = self.should_render_mermaid_as_images();
-        let document = Document::parse_with_all_options(
-            &content,
-            self.layout_width(),
-            &self.image_layout_heights,
-            mermaid,
-        )?;
         self.document = document;
 
         // Drop cached image entries that are no longer present in the document.
@@ -778,7 +806,7 @@ impl Default for Model {
             image_layout_heights: HashMap::new(),
             resize_pending: false,
             image_scroll_cooldown_ticks: 0,
-            force_half_cell: false,
+            image_mode: None,
             selection: None,
             images_enabled: true,
             browse_mode: false,
