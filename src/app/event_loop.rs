@@ -100,33 +100,25 @@ impl App {
             Some(self.file_path.clone())
         };
 
-        // Load the document
-        let _read_scope = crate::perf::scope("app.read_file");
-        let (content, effective_file) = if let Some(ref file) = initial_file {
-            let c = if crate::document::is_image_file(file) {
-                crate::document::image_markdown(file)
-            } else {
-                let raw = std::fs::read_to_string(file)?;
-                crate::document::prepare_content(file, raw)
-            };
-            (c, file.clone())
-        } else {
-            // No viewable file found; show empty document
-            (String::new(), self.file_path.clone())
-        };
-        drop(_read_scope);
-
         // Initialize terminal
         let _init_scope = crate::perf::scope("app.ratatui_init");
         let mut terminal = ratatui::init();
         let size = terminal.size()?;
         drop(_init_scope);
 
-        let _parse_scope = crate::perf::scope("app.parse_with_layout");
+        // Load the document
+        let _read_scope = crate::perf::scope("app.read_file");
         let toc_visible = self.toc_visible || self.browse_mode;
         let layout_width = crate::ui::document_content_width(size.width, toc_visible);
-        let document = crate::document::Document::parse_with_layout(&content, layout_width)?;
-        drop(_parse_scope);
+        let (document, effective_file) = if let Some(ref file) = initial_file {
+            let raw_bytes = std::fs::read(file)?;
+            let doc = crate::document::prepare_document_from_bytes(file, raw_bytes, layout_width);
+            (doc, file.clone())
+        } else {
+            // No viewable file found; show empty document
+            (crate::document::Document::empty(), self.file_path.clone())
+        };
+        drop(_read_scope);
 
         // Create initial model
         let mut model =
@@ -161,6 +153,7 @@ impl App {
         let _images_scope = crate::perf::scope("app.load_nearby_images.initial");
         model.load_nearby_images();
         drop(_images_scope);
+        model.ensure_hex_overscan();
         model.ensure_highlight_overscan();
 
         // Main loop
@@ -372,6 +365,7 @@ impl App {
                 // Load images near viewport before rendering (skip during active resize)
                 let load_start = Instant::now();
                 model.load_nearby_images();
+                model.ensure_hex_overscan();
                 model.ensure_highlight_overscan();
                 crate::perf::log_event(
                     "frame.prep",
