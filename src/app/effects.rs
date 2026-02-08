@@ -183,8 +183,38 @@ impl App {
             return;
         }
 
+        if url.starts_with("mermaid://") {
+            self.open_mermaid_svg(model, url);
+            return;
+        }
+
         match open_external_link(url) {
             Ok(()) => model.show_toast(ToastLevel::Info, format!("Opened {url}")),
+            Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
+        }
+    }
+
+    fn open_mermaid_svg(&self, model: &mut Model, mermaid_url: &str) {
+        let Some(source) = model.document.mermaid_sources().get(mermaid_url).cloned() else {
+            model.show_toast(ToastLevel::Warning, "Mermaid source not found");
+            return;
+        };
+        let svg = match crate::mermaid::render_to_svg(&source) {
+            Ok(s) => s,
+            Err(err) => {
+                model.show_toast(ToastLevel::Error, format!("Mermaid render failed: {err}"));
+                return;
+            }
+        };
+        let index = mermaid_url.strip_prefix("mermaid://").unwrap_or("0");
+        let path = std::env::temp_dir().join(format!("markless-mermaid-{index}.svg"));
+        if let Err(err) = std::fs::write(&path, &svg) {
+            model.show_toast(ToastLevel::Error, format!("Write SVG failed: {err}"));
+            return;
+        }
+        let path_str = path.to_string_lossy();
+        match open_external_link(&path_str) {
+            Ok(()) => model.show_toast(ToastLevel::Info, "Opened mermaid SVG"),
             Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
         }
     }

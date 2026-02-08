@@ -3,21 +3,38 @@
 //! Renders mermaid diagram source text to raster images using `mermaid-rs-renderer`
 //! for SVG generation and `resvg` for rasterization.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use image::DynamicImage;
+use resvg::usvg::fontdb;
+
+/// Render a mermaid diagram to an SVG string.
+///
+/// Generates SVG via `mermaid-rs-renderer` and fixes font-family quoting
+/// so the result can be parsed by standard SVG tools.
+///
+/// # Errors
+///
+/// Returns an error if the mermaid source cannot be parsed.
+pub fn render_to_svg(mermaid_source: &str) -> Result<String> {
+    let svg = mermaid_rs_renderer::render(mermaid_source)?;
+    Ok(fix_svg_font_families(&svg))
+}
 
 /// Render a mermaid diagram to a raster image.
 ///
 /// Uses `mermaid-rs-renderer` to generate SVG, then `resvg` to rasterize it.
+/// The `target_width_px` controls the rasterization width so the SVG is
+/// rendered at the final display resolution (no lossy upscaling).
 ///
 /// # Errors
 ///
 /// Returns an error if the mermaid source cannot be parsed or the SVG
 /// cannot be rasterized.
-pub fn render_to_image(mermaid_source: &str) -> Result<DynamicImage> {
-    let svg = mermaid_rs_renderer::render(mermaid_source)?;
-    let svg = fix_svg_font_families(&svg);
-    rasterize_svg(&svg)
+pub fn render_to_image(mermaid_source: &str, target_width_px: u32) -> Result<DynamicImage> {
+    let svg = render_to_svg(mermaid_source)?;
+    rasterize_svg(&svg, target_width_px)
 }
 
 /// Fix unescaped double quotes inside font-family attributes.
@@ -67,21 +84,35 @@ fn fix_svg_font_families(svg: &str) -> String {
 }
 
 /// Rasterize an SVG string to a `DynamicImage`.
-fn rasterize_svg(svg: &str) -> Result<DynamicImage> {
-    let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default())?;
+///
+/// Scales the SVG so its width matches `target_width_px`, preserving aspect
+/// ratio. This avoids lossy upscaling since the vector is rasterized directly
+/// at the final display resolution.
+fn rasterize_svg(svg: &str, target_width_px: u32) -> Result<DynamicImage> {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+
+    let opts = resvg::usvg::Options {
+        fontdb: Arc::new(db),
+        ..Default::default()
+    };
+
+    let tree = resvg::usvg::Tree::from_str(svg, &opts)?;
     let size = tree.size();
 
+    let scale = target_width_px as f32 / size.width();
+
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let width = size.width().ceil() as u32;
+    let width = (size.width() * scale).ceil() as u32;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let height = size.height().ceil() as u32;
+    let height = (size.height() * scale).ceil() as u32;
 
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| anyhow::anyhow!("failed to create pixmap {width}x{height}"))?;
 
     resvg::render(
         &tree,
-        resvg::tiny_skia::Transform::default(),
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
     );
 
@@ -114,18 +145,26 @@ mod tests {
     }
 
     #[test]
+    fn test_render_to_svg_returns_valid_svg() {
+        let source = "flowchart LR\n    A[Start] --> B[End]";
+        let svg = render_to_svg(source).unwrap();
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
     fn test_render_flowchart_to_image() {
         let source = "flowchart LR\n    A[Start] --> B[End]";
-        let img = render_to_image(source).unwrap();
-        assert!(img.width() > 0);
+        let img = render_to_image(source, 1200).unwrap();
+        assert_eq!(img.width(), 1200);
         assert!(img.height() > 0);
     }
 
     #[test]
     fn test_render_sequence_diagram_to_image() {
         let source = "sequenceDiagram\n    Alice->>Bob: Hello\n    Bob-->>Alice: Hi";
-        let img = render_to_image(source).unwrap();
-        assert!(img.width() > 0);
+        let img = render_to_image(source, 1200).unwrap();
+        assert_eq!(img.width(), 1200);
         assert!(img.height() > 0);
     }
 }

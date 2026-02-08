@@ -224,6 +224,10 @@ impl Model {
         let quantize_halfblocks = use_halfblocks && !crate::image::supports_truecolor_terminal();
         if width_changed {
             self.last_image_scale_width = current_width;
+            // Evict cached mermaid rasters so they are re-rendered at the new
+            // width instead of being lossily upscaled from the old raster.
+            self.original_images
+                .retain(|src, _| !src.starts_with("mermaid://"));
         }
 
         let font_size = picker.font_size();
@@ -277,12 +281,13 @@ impl Model {
                     if let Some(img) = self.original_images.get(&src) {
                         Some(img.clone())
                     } else if src.starts_with("mermaid://") {
-                        // Render mermaid diagram to image
+                        // Render mermaid diagram to image at 60% of terminal width
+                        let mermaid_width_px = (target_width_px as f32 * 0.6) as u32;
                         self.document
                             .mermaid_sources()
                             .get(&src)
                             .and_then(|mermaid_text| {
-                                crate::mermaid::render_to_image(mermaid_text)
+                                crate::mermaid::render_to_image(mermaid_text, mermaid_width_px)
                                     .inspect_err(|e| {
                                         crate::perf::log_event(
                                             "mermaid.render.error",
