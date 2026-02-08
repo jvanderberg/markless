@@ -274,11 +274,10 @@ impl Model {
                     let scale = target_width_px as f32 / img.width() as f32;
                     let scaled_height_px = (img.height() as f32 * scale) as u32;
 
-                    let force_halfblock = self.image_mode == Some(ImageMode::Halfblock);
                     let mut scaled = img.resize(
                         target_width_px,
                         scaled_height_px,
-                        if use_halfblocks || force_halfblock {
+                        if use_halfblocks {
                             image::imageops::FilterType::CatmullRom
                         } else {
                             image::imageops::FilterType::Nearest

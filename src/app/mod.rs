@@ -59,7 +59,7 @@ impl App {
     }
 
     /// Force a specific image rendering mode, bypassing auto-detection.
-    pub const fn with_image_mode(mut self, mode: Option<ImageMode>) -> Self {
+    pub fn with_image_mode(mut self, mode: Option<ImageMode>) -> Self {
         self.image_mode = mode;
         self
     }

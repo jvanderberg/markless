@@ -307,17 +307,10 @@ fn main() -> Result<()> {
     let is_directory = cli.path.is_dir();
 
     // Run the application
-    // Resolve image mode: explicit --image-mode takes priority, then --force-half-cell
-    let image_mode = effective.image_mode.or(if effective.force_half_cell {
-        Some(ImageMode::Halfblock)
-    } else {
-        None
-    });
-
     let mut app = App::new(cli.path)
         .with_watch(effective.watch)
         .with_toc_visible(effective.toc && !effective.no_toc)
-        .with_image_mode(image_mode)
+        .with_image_mode(effective.image_mode)
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
         .with_config_paths(

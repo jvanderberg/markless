@@ -24,6 +24,17 @@ pub enum ImageMode {
     Halfblock,
 }
 
+impl std::fmt::Display for ImageMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Kitty => write!(f, "Kitty"),
+            Self::Sixel => write!(f, "Sixel"),
+            Self::ITerm2 => write!(f, "iTerm2"),
+            Self::Halfblock => write!(f, "Halfblock"),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConfigFlags {
     pub watch: bool,
@@ -324,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn test_save_load_image_mode() {
+    fn test_save_load_image_mode_kitty() {
         let dir = tempdir().unwrap();
         let path = dir.path().join(".marklessrc");
         let flags = ConfigFlags {
@@ -334,6 +345,45 @@ mod tests {
         save_config_flags(&path, &flags).unwrap();
         let loaded = load_config_flags(&path).unwrap();
         assert_eq!(loaded.image_mode, Some(ImageMode::Kitty));
+    }
+
+    #[test]
+    fn test_save_load_image_mode_sixel() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            image_mode: Some(ImageMode::Sixel),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.image_mode, Some(ImageMode::Sixel));
+    }
+
+    #[test]
+    fn test_save_load_image_mode_iterm2() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            image_mode: Some(ImageMode::ITerm2),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.image_mode, Some(ImageMode::ITerm2));
+    }
+
+    #[test]
+    fn test_save_load_image_mode_halfblock() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            image_mode: Some(ImageMode::Halfblock),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.image_mode, Some(ImageMode::Halfblock));
     }
 
     #[test]
