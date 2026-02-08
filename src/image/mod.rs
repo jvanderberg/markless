@@ -16,22 +16,45 @@ use std::path::Path;
 use std::time::Duration;
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
-use ratatui_image::picker::Picker;
 #[cfg(unix)]
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
+use ratatui_image::picker::{Picker, ProtocolType};
+
+use crate::config::ImageMode;
 
 const PICKER_QUERY_TIMEOUT_MS: u64 = 250;
 
+/// Map an [`ImageMode`] to the corresponding [`ProtocolType`].
+const fn image_mode_to_protocol_type(mode: ImageMode) -> ProtocolType {
+    match mode {
+        ImageMode::Kitty => ProtocolType::Kitty,
+        ImageMode::Sixel => ProtocolType::Sixel,
+        ImageMode::ITerm2 => ProtocolType::Iterm2,
+        ImageMode::Halfblock => ProtocolType::Halfblocks,
+    }
+}
+
 /// Create a picker for terminal image rendering.
 ///
-/// The picker detects terminal capabilities and chooses the best protocol.
-pub fn create_picker(force_half_cell: bool) -> Option<Picker> {
-    if force_half_cell {
+/// When `image_mode` is `Some`, the picker is forced to use that protocol.
+/// Otherwise, terminal capabilities are auto-detected.
+pub fn create_picker(image_mode: Option<ImageMode>) -> Option<Picker> {
+    if let Some(mode) = image_mode {
+        let protocol_type = image_mode_to_protocol_type(mode);
+        if protocol_type == ProtocolType::Halfblocks {
+            crate::perf::log_event("image.create_picker", "forced protocol=Halfblocks");
+            return Some(Picker::halfblocks());
+        }
+
+        // For non-halfblock forced modes, start with a halfblocks picker
+        // (which doesn't require stdio queries) and override the protocol type.
+        let mut picker = Picker::halfblocks();
+        picker.set_protocol_type(protocol_type);
         crate::perf::log_event(
             "image.create_picker",
-            "force_half_cell=true protocol=Halfblocks",
+            format!("forced protocol={:?}", protocol_type),
         );
-        return Some(Picker::halfblocks());
+        return Some(picker);
     }
 
     // On Windows, skip the stdio capability query — it can leave orphaned reader

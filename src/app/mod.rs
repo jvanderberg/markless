@@ -17,12 +17,14 @@ pub use update::{Message, update};
 
 use std::path::PathBuf;
 
+use crate::config::ImageMode;
+
 /// Main application struct that owns the terminal and runs the event loop.
 pub struct App {
     file_path: PathBuf,
     watch_enabled: bool,
     toc_visible: bool,
-    force_half_cell: bool,
+    image_mode: Option<ImageMode>,
     images_enabled: bool,
     config_global_path: Option<PathBuf>,
     config_local_path: Option<PathBuf>,
@@ -36,7 +38,7 @@ impl App {
             file_path,
             watch_enabled: false,
             toc_visible: false,
-            force_half_cell: false,
+            image_mode: None,
             images_enabled: true,
             config_global_path: None,
             config_local_path: None,
@@ -56,9 +58,9 @@ impl App {
         self
     }
 
-    /// Force image rendering to use half-cell fallback mode.
-    pub fn with_force_half_cell(mut self, enabled: bool) -> Self {
-        self.force_half_cell = enabled;
+    /// Force a specific image rendering mode, bypassing auto-detection.
+    pub const fn with_image_mode(mut self, mode: Option<ImageMode>) -> Self {
+        self.image_mode = mode;
         self
     }
 

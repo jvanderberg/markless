@@ -18,7 +18,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use markless::app::App;
 use markless::config::{
-    ConfigFlags, ThemeMode, clear_config_flags, global_config_path, load_config_flags,
+    ConfigFlags, ImageMode, ThemeMode, clear_config_flags, global_config_path, load_config_flags,
     local_override_path, parse_flag_tokens, save_config_flags,
 };
 use markless::highlight::{HighlightBackground, set_background_mode};
@@ -63,6 +63,10 @@ struct Cli {
     /// Force image rendering to use half-cell fallback mode
     #[arg(long)]
     force_half_cell: bool,
+
+    /// Force a specific image rendering mode (kitty, sixel, iterm2, halfblock)
+    #[arg(long, value_enum)]
+    image_mode: Option<ImageMode>,
 
     /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
@@ -303,10 +307,17 @@ fn main() -> Result<()> {
     let is_directory = cli.path.is_dir();
 
     // Run the application
+    // Resolve image mode: explicit --image-mode takes priority, then --force-half-cell
+    let image_mode = effective.image_mode.or(if effective.force_half_cell {
+        Some(ImageMode::Halfblock)
+    } else {
+        None
+    });
+
     let mut app = App::new(cli.path)
         .with_watch(effective.watch)
         .with_toc_visible(effective.toc && !effective.no_toc)
-        .with_force_half_cell(effective.force_half_cell)
+        .with_image_mode(image_mode)
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
         .with_config_paths(
