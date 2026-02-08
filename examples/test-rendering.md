@@ -1269,3 +1269,62 @@ Superlongwordwithoutanyspacesthatmightcauseissueswithwrappingoroverflowinsometer
 ### Long URL
 
 Check out [this very long URL](https://example.com/path/to/some/very/deeply/nested/resource/that/has/many/path/segments/and/might/cause/wrapping/issues?with=query&parameters=included&and=more&stuff=here)
+
+
+---
+
+
+# Mermaid Diagrams
+
+## Kubernetes Ingress (Flowchart with classDef)
+
+From the Kubernetes official docs.
+
+```mermaid
+graph LR;
+ client([client])-. Ingress-managed <br> load balancer .->ingress[Ingress];
+ ingress-->|routing rule|service[Service];
+ subgraph cluster
+ ingress;
+ service-->pod1[Pod];
+ service-->pod2[Pod];
+ end
+ classDef plain fill:#ddd,stroke:#fff,stroke-width:4px,color:#000;
+ classDef k8s fill:#326ce5,stroke:#fff,stroke-width:4px,color:#fff;
+ classDef cluster fill:#fff,stroke:#bbb,stroke-width:2px,color:#326ce5;
+ class ingress,service,pod1,pod2 k8s;
+ class client plain;
+ class cluster cluster;
+```
+
+## OAuth 2.0 Flow (Sequence Diagram)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant O as Resource Owner
+    participant A as Authorization Server
+    participant R as Resource Server
+
+    C->>O: requests authorization
+    O->>C: receives authorization grant
+    C->>A: requests access token, presents grant
+    A->>C: authenticates client, validates grant, issues access token
+    C->>R: requests protected resource, presents access token
+    R->>C: validates access token, serves request
+```
+
+## PR Review State Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> InReview : Submit PR
+    InReview --> ChangesRequested : Request changes
+    ChangesRequested --> InReview : Push fixes
+    InReview --> Approved : Approve
+    Approved --> Merged : Merge
+    Merged --> [*]
+    InReview --> Closed : Close
+    Closed --> [*]
+```
