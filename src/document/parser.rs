@@ -236,6 +236,17 @@ fn process_node<'a>(
             let info = code_block.info.clone();
             let literal = code_block.literal.clone();
             let language = info.split_whitespace().next().filter(|s| !s.is_empty());
+
+            // Render CSV code blocks as tables instead of code blocks
+            if language == Some("csv") {
+                let csv_lines = render_csv_as_table(&literal, wrap_width);
+                if !csv_lines.is_empty() {
+                    lines.extend(csv_lines);
+                    lines.push(RenderedLine::new(String::new(), LineType::Empty));
+                    return;
+                }
+                // Fall through to normal code block rendering if CSV parsing fails
+            }
             let content_width = literal
                 .lines()
                 .map(UnicodeWidthStr::width)
@@ -784,6 +795,85 @@ fn render_table_row(
     }
     let content = spans_to_string(&spans);
     RenderedLine::with_spans(content, LineType::Table, spans)
+}
+
+/// Render CSV content as table lines, reusing the existing table rendering infrastructure.
+/// All rows are rendered; the TUI viewport handles paging/scrolling.
+fn render_csv_as_table(csv_content: &str, wrap_width: usize) -> Vec<RenderedLine> {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(csv_content.as_bytes());
+
+    let mut rows: Vec<Vec<TableCellRender>> = Vec::new();
+    for result in reader.records() {
+        let Ok(record) = result else { continue };
+        let cells: Vec<TableCellRender> = record
+            .iter()
+            .map(|field| {
+                let text = field.trim().to_string();
+                let spans = vec![InlineSpan::new(text.clone(), InlineStyle::default())];
+                TableCellRender { text, spans }
+            })
+            .collect();
+        if !cells.is_empty() {
+            rows.push(cells);
+        }
+    }
+
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let num_cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if num_cols == 0 {
+        return Vec::new();
+    }
+
+    // Pad rows to have equal column counts
+    for row in &mut rows {
+        while row.len() < num_cols {
+            row.push(TableCellRender {
+                text: String::new(),
+                spans: Vec::new(),
+            });
+        }
+    }
+
+    // Calculate column widths
+    let mut col_widths = vec![1_usize; num_cols];
+    for row in &rows {
+        for (idx, cell) in row.iter().enumerate() {
+            col_widths[idx] = col_widths[idx].max(display_width(&cell.text));
+        }
+    }
+
+    // Shrink to fit within wrap_width
+    let max_table_width = wrap_width.max(4);
+    while 1 + col_widths.iter().sum::<usize>() + (3 * num_cols) > max_table_width {
+        if let Some((widest_idx, _)) = col_widths.iter().enumerate().max_by_key(|(_, w)| *w) {
+            if col_widths[widest_idx] > 1 {
+                col_widths[widest_idx] -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // All columns left-aligned (CSV has no alignment info)
+    let alignments = vec![comrak::nodes::TableAlignment::None; num_cols];
+    let mid = render_table_inner_divider(&col_widths);
+
+    let mut lines = Vec::new();
+    for (idx, row) in rows.iter().enumerate() {
+        lines.push(render_table_row(row, &col_widths, &alignments));
+        // First row is treated as header
+        if idx == 0 {
+            lines.push(RenderedLine::new(mid.clone(), LineType::Table));
+        }
+    }
+
+    lines
 }
 
 fn display_width(text: &str) -> usize {
@@ -1947,5 +2037,181 @@ mod tests {
 
         assert!(list_lines[0].content().contains("Main task completed"));
         assert!(!list_lines[0].content().contains("Subtask"));
+    }
+
+    #[test]
+    fn test_csv_code_block_renders_as_table() {
+        let md = "```csv\nName,Age,City\nAlice,30,NYC\nBob,25,LA\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            !table_lines.is_empty(),
+            "CSV block should render as Table lines"
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Name") && l.content().contains("Age")),
+            "Header row should contain column names"
+        );
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Alice") && l.content().contains("30")),
+            "Data rows should be present"
+        );
+    }
+
+    #[test]
+    fn test_csv_code_block_has_header_divider() {
+        let md = "```csv\nA,B\n1,2\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines.iter().any(|l| l.content().contains("┼")),
+            "CSV table should have a header divider with ┼"
+        );
+    }
+
+    #[test]
+    fn test_csv_code_block_not_rendered_as_code_block() {
+        let md = "```csv\nX,Y\n1,2\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let code_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::CodeBlock)
+            .collect();
+        assert!(
+            code_lines.is_empty(),
+            "CSV block should not render as CodeBlock lines"
+        );
+    }
+
+    #[test]
+    fn test_csv_code_block_respects_layout_width() {
+        let md =
+            "```csv\nVery Long Column Name,Another Long Name\nsome really long content,12345\n```";
+        let doc = Document::parse_with_layout(md, 30).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        for line in lines.iter().filter(|l| *l.line_type() == LineType::Table) {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(line.content()) <= 30,
+                "CSV table line exceeds width: {}",
+                line.content()
+            );
+        }
+    }
+
+    #[test]
+    fn test_csv_with_quoted_fields() {
+        let md = "```csv\nName,Description\nAlice,\"Has a, comma\"\nBob,\"Simple\"\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines
+                .iter()
+                .any(|l| l.content().contains("Has a, comma")),
+            "Quoted CSV fields with commas should be handled correctly"
+        );
+    }
+
+    #[test]
+    fn test_csv_empty_block_renders_nothing() {
+        let md = "```csv\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            table_lines.is_empty(),
+            "Empty CSV block should not render table lines"
+        );
+    }
+
+    #[test]
+    fn test_csv_single_column() {
+        let md = "```csv\nName\nAlice\nBob\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let table_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table)
+            .collect();
+        assert!(
+            !table_lines.is_empty(),
+            "Single-column CSV should render as table"
+        );
+        assert!(
+            table_lines.iter().any(|l| l.content().contains("Name")),
+            "Header should be present"
+        );
+        assert!(
+            table_lines.iter().any(|l| l.content().contains("Alice")),
+            "Data rows should be present"
+        );
+    }
+
+    #[test]
+    fn test_csv_large_file_renders_all_rows() {
+        let mut md = String::from("```csv\nID,Value\n");
+        for i in 0..200 {
+            md.push_str(&format!("{},{}\n", i, i * 10));
+        }
+        md.push_str("```");
+        let doc = parse(&md).unwrap();
+        let lines = doc.visible_lines(0, 500);
+        let data_rows: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Table && !l.content().contains('┼'))
+            .collect();
+        // 1 header + 200 data rows = 201 total non-divider table lines
+        assert_eq!(data_rows.len(), 201, "All CSV rows should be rendered");
+    }
+
+    #[test]
+    fn test_csv_large_file_pages_via_viewport() {
+        let mut md = String::from("```csv\nID,Value\n");
+        for i in 0..200 {
+            md.push_str(&format!("{},{}\n", i, i * 10));
+        }
+        md.push_str("```");
+        let doc = parse(&md).unwrap();
+        // Simulate viewport paging: first page
+        let page1 = doc.visible_lines(0, 10);
+        assert_eq!(page1.len(), 10);
+        // Later page
+        let page2 = doc.visible_lines(100, 10);
+        assert_eq!(page2.len(), 10);
+        assert_ne!(page1[0].content(), page2[0].content());
+    }
+
+    #[test]
+    fn test_non_csv_code_block_unchanged() {
+        let md = "```rust\nfn main() {}\n```";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let code_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::CodeBlock)
+            .collect();
+        assert!(
+            !code_lines.is_empty(),
+            "Non-CSV code blocks should still render as CodeBlock"
+        );
     }
 }

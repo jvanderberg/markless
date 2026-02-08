@@ -18,6 +18,9 @@ crossterm = "0.29"
 # Markdown parsing
 comrak = { version = "0.31", default-features = false, features = ["shortcodes"] }
 
+# CSV parsing (for rendering CSV code blocks as tables)
+csv = "1"
+
 # Image rendering
 ratatui-image = { version = "10", default-features = false, features = ["image-defaults", "crossterm"] }
 image = "0.25"
