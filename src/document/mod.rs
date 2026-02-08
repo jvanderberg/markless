@@ -75,6 +75,35 @@ pub fn prepare_content_from_bytes(file_path: &std::path::Path, bytes: Vec<u8>) -
     format!("# {name}\n\n*Binary file — {size} bytes*\n\n```\n{hex}\n```")
 }
 
+/// Prepare a [`Document`] directly from raw file bytes.
+///
+/// Binary files use lazy hex rendering ([`Document::from_hex`]) and skip
+/// comrak entirely. Image files and text files use the existing markdown
+/// parsing pipeline.
+pub fn prepare_document_from_bytes(
+    file_path: &std::path::Path,
+    bytes: Vec<u8>,
+    layout_width: u16,
+) -> Document {
+    if is_image_file(file_path) {
+        let md = image_markdown(file_path);
+        return Document::parse_with_layout(&md, layout_width)
+            .unwrap_or_else(|_| Document::empty());
+    }
+    if !is_binary(&bytes) {
+        let content = match String::from_utf8(bytes) {
+            Ok(s) => prepare_content(file_path, s),
+            Err(e) => prepare_content(file_path, e.to_string()),
+        };
+        return Document::parse_with_layout(&content, layout_width)
+            .unwrap_or_else(|_| Document::empty());
+    }
+    let name = file_path
+        .file_name()
+        .map_or_else(|| "binary".to_string(), |n| n.to_string_lossy().to_string());
+    Document::from_hex(&name, bytes)
+}
+
 /// Returns true if the byte slice appears to be binary (non-text) content.
 ///
 /// Checks for null bytes and invalid UTF-8. Text files with valid UTF-8
@@ -89,13 +118,57 @@ pub fn is_binary(bytes: &[u8]) -> bool {
     std::str::from_utf8(bytes).is_err()
 }
 
+/// Format a single 16-byte chunk as one hex dump line.
+///
+/// Takes a chunk of up to 16 bytes and a byte offset, returning a line
+/// in `hexdump -C` style: 8-digit hex offset, 16 bytes in two groups of 8,
+/// and an ASCII representation where non-printable bytes appear as `.`.
+pub fn format_single_hex_line(chunk: &[u8], offset: usize) -> String {
+    use std::fmt::Write;
+
+    let mut output = String::new();
+
+    // Offset
+    let _ = write!(output, "{offset:08x}  ");
+
+    // Hex bytes: first group of 8
+    for i in 0..8 {
+        if i < chunk.len() {
+            let _ = write!(output, "{:02x} ", chunk[i]);
+        } else {
+            output.push_str("   ");
+        }
+    }
+    output.push(' ');
+
+    // Hex bytes: second group of 8
+    for i in 8..16 {
+        if i < chunk.len() {
+            let _ = write!(output, "{:02x} ", chunk[i]);
+        } else {
+            output.push_str("   ");
+        }
+    }
+
+    // ASCII representation
+    output.push('|');
+    for &byte in chunk {
+        if byte.is_ascii_graphic() || byte == b' ' {
+            output.push(byte as char);
+        } else {
+            output.push('.');
+        }
+    }
+    output.push('|');
+
+    output
+}
+
 /// Format raw bytes as a hex dump in the classic `hexdump -C` style.
 ///
 /// Each line shows: 8-digit hex offset, 16 bytes in two groups of 8,
 /// and an ASCII representation where non-printable bytes appear as `.`.
 pub fn format_hex_dump(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-
     if bytes.is_empty() {
         return String::new();
     }
@@ -103,39 +176,7 @@ pub fn format_hex_dump(bytes: &[u8]) -> String {
     let mut output = String::new();
     for (chunk_idx, chunk) in bytes.chunks(16).enumerate() {
         let offset = chunk_idx * 16;
-
-        // Offset
-        let _ = write!(output, "{offset:08x}  ");
-
-        // Hex bytes: first group of 8
-        for i in 0..8 {
-            if i < chunk.len() {
-                let _ = write!(output, "{:02x} ", chunk[i]);
-            } else {
-                output.push_str("   ");
-            }
-        }
-        output.push(' ');
-
-        // Hex bytes: second group of 8
-        for i in 8..16 {
-            if i < chunk.len() {
-                let _ = write!(output, "{:02x} ", chunk[i]);
-            } else {
-                output.push_str("   ");
-            }
-        }
-
-        // ASCII representation
-        output.push('|');
-        for &byte in chunk {
-            if byte.is_ascii_graphic() || byte == b' ' {
-                output.push(byte as char);
-            } else {
-                output.push('.');
-            }
-        }
-        output.push('|');
+        output.push_str(&format_single_hex_line(chunk, offset));
         output.push('\n');
     }
 
@@ -353,10 +394,82 @@ mod tests {
     }
 
     #[test]
+    fn test_format_single_hex_line_basic() {
+        let chunk = b"Hello World\x00\xff\xfe";
+        let line = format_single_hex_line(chunk, 0);
+        assert!(line.starts_with("00000000"));
+        assert!(line.contains("48 65 6c 6c 6f 20 57 6f"));
+        assert!(line.contains("72 6c 64 00 ff fe"));
+        assert!(line.contains("|Hello World...|"));
+    }
+
+    #[test]
+    fn test_format_single_hex_line_with_offset() {
+        let chunk: Vec<u8> = (0x41..=0x50).collect(); // A through P
+        let line = format_single_hex_line(&chunk, 0x100);
+        assert!(line.starts_with("00000100"));
+        assert!(line.contains("|ABCDEFGHIJKLMNOP|"));
+    }
+
+    #[test]
+    fn test_format_single_hex_line_partial_chunk() {
+        let chunk = &[0x41, 0x42, 0x43]; // ABC, only 3 bytes
+        let line = format_single_hex_line(chunk, 0);
+        assert!(line.contains("41 42 43"));
+        assert!(line.contains("|ABC|"));
+    }
+
+    #[test]
     fn test_prepare_content_from_bytes_image_file_shows_image() {
         let bytes = vec![0x89, 0x50, 0x4E, 0x47]; // PNG magic
         let result = prepare_content_from_bytes(Path::new("photo.png"), bytes);
         // Image files should still be handled as images, not hex
         assert!(result.contains("![photo.png]"));
+    }
+
+    #[test]
+    fn test_prepare_document_from_bytes_binary() {
+        let bytes = vec![0x00, 0x01, 0x02, 0xff];
+        let doc = prepare_document_from_bytes(Path::new("data.bin"), bytes, 80);
+        assert!(doc.is_hex_mode());
+        // Header (4) + 1 hex line
+        assert_eq!(doc.line_count(), 5);
+        // Heading should contain the filename
+        let heading = doc.line_at(0).unwrap();
+        assert!(heading.content().contains("data.bin"));
+    }
+
+    #[test]
+    fn test_prepare_document_from_bytes_text() {
+        let bytes = b"# Hello\n\nWorld".to_vec();
+        let doc = prepare_document_from_bytes(Path::new("README.md"), bytes, 80);
+        assert!(!doc.is_hex_mode());
+        assert!(doc.line_count() > 0);
+    }
+
+    #[test]
+    fn test_prepare_document_from_bytes_image() {
+        let bytes = vec![0x89, 0x50, 0x4E, 0x47]; // PNG magic
+        let doc = prepare_document_from_bytes(Path::new("photo.png"), bytes, 80);
+        assert!(!doc.is_hex_mode());
+        assert!(!doc.images().is_empty());
+    }
+
+    #[test]
+    fn test_large_binary_file_loads_fast() {
+        // 10MB binary file should create a hex document without hanging
+        let bytes = vec![0xABu8; 10 * 1024 * 1024];
+        let start = std::time::Instant::now();
+        let doc = prepare_document_from_bytes(Path::new("large.bin"), bytes, 80);
+        let elapsed = start.elapsed();
+        assert!(doc.is_hex_mode());
+        // 10MB / 16 = 655360 hex lines + 4 header
+        assert_eq!(doc.line_count(), 4 + 655360);
+        // Should complete in well under 1 second (no hex string generation)
+        assert!(
+            elapsed.as_millis() < 1000,
+            "Loading 10MB binary took {}ms, expected < 1000ms",
+            elapsed.as_millis()
+        );
     }
 }

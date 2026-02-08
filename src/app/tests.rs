@@ -517,9 +517,9 @@ fn test_search_mode_enter_moves_to_next_match() {
 }
 
 #[test]
-fn test_toc_focus_space_selects_heading() {
+fn test_toc_focus_space_pages_document() {
     let app = App::new(PathBuf::from("test.md"));
-    let mut model = create_test_model();
+    let mut model = create_long_test_model();
     model.toc_visible = true;
     model.toc_focused = true;
     model.toc_selected = Some(0);
@@ -528,7 +528,8 @@ fn test_toc_focus_space_selects_heading() {
         event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
         &model,
     );
-    assert_eq!(msg, Some(Message::TocSelect));
+    // Space always pages the document body, even when TOC is focused
+    assert_eq!(msg, Some(Message::PageDown));
 }
 
 #[test]

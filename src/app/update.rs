@@ -438,6 +438,14 @@ pub(super) fn refresh_search_matches(model: &mut Model, jump_to_first: bool, all
         return;
     }
 
+    // Large documents: defer search until explicit Enter to avoid hanging
+    // on every keystroke. 10k lines ≈ 160KB binary or a very long text file.
+    if !allow_short && model.document.line_count() > 10_000 {
+        model.search_matches.clear();
+        model.search_match_index = None;
+        return;
+    }
+
     model.search_matches = crate::search::find_matches(&model.document, query);
     if model.search_matches.is_empty() {
         model.search_match_index = None;
