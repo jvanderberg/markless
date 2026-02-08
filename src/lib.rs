@@ -43,6 +43,18 @@ pub mod highlight;
 pub mod image;
 pub mod input;
 pub mod mermaid;
+#[allow(
+    unsafe_code,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+    missing_docs,
+    dead_code,
+    unused,
+    unexpected_cfgs
+)]
+mod mermaid_renderer;
 pub mod perf;
 pub mod search;
 pub mod ui;

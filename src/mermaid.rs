@@ -18,7 +18,7 @@ use resvg::usvg::fontdb;
 ///
 /// Returns an error if the mermaid source cannot be parsed.
 pub fn render_to_svg(mermaid_source: &str) -> Result<String> {
-    let svg = mermaid_rs_renderer::render(mermaid_source)?;
+    let svg = crate::mermaid_renderer::render(mermaid_source)?;
     Ok(fix_svg_font_families(&svg))
 }
 
