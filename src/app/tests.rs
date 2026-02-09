@@ -1342,3 +1342,210 @@ fn test_mermaid_as_images_false_when_images_disabled() {
     model.images_enabled = false;
     assert!(!model.should_render_mermaid_as_images());
 }
+
+#[test]
+fn test_click_on_footnote_superscript_finds_link() {
+    let md = "See this[^1] thing.\n\n[^1]: The footnote.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+
+    // Find the footnote link
+    let footnote_link = model
+        .document
+        .links()
+        .iter()
+        .find(|l| l.url.starts_with("footnote:"))
+        .expect("should have a footnote link");
+    let link_line = footnote_link.line;
+
+    // The rendered line should contain the superscript "¹"
+    let line_text = model.document.line_at(link_line).unwrap().content();
+    assert!(
+        line_text.contains('¹'),
+        "rendered line should contain superscript: {line_text:?}"
+    );
+
+    // Find the column of the superscript character
+    let col = line_text.find('¹').unwrap();
+    let col_chars = line_text[..col].chars().count();
+
+    // link_at_column should find the footnote link via exact column hit
+    let found = App::link_at_column(&model, link_line, col_chars);
+    assert!(
+        found.is_some(),
+        "link_at_column should find footnote link at column {col_chars} in line {line_text:?}"
+    );
+    let found = found.unwrap();
+    assert!(found.url.starts_with("footnote:"));
+    // Verify the link text matches what's actually in the rendered line
+    assert_eq!(found.text, "¹");
+    assert!(
+        line_text.contains(&found.text),
+        "link text {:?} must appear in rendered line {:?}",
+        found.text,
+        line_text
+    );
+}
+
+#[test]
+fn test_mouse_click_on_footnote_superscript_emits_follow() {
+    let md = "See this[^1] thing.\n\n[^1]: The footnote.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.toc_visible = true;
+
+    // Simulate mouse Down (starts selection) then Up (triggers link follow)
+    let chunks = crate::ui::split_main_columns(Rect::new(0, 0, 80, 24));
+    let doc_x = chunks[1].x;
+
+    // Find where the superscript is in the rendered line
+    let footnote_link = model
+        .document
+        .links()
+        .iter()
+        .find(|l| l.url.starts_with("footnote:"))
+        .unwrap();
+    let link_line = footnote_link.line;
+    let line_text = model.document.line_at(link_line).unwrap().content();
+    let col_byte = line_text.find('¹').expect("superscript not found");
+    let col_chars = line_text[..col_byte].chars().count();
+
+    // Mouse Down
+    let down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING + col_chars as u16,
+        row: link_line as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(down, &model);
+    assert_eq!(msg, Some(Message::StartSelection(link_line)));
+    model = update(model, msg.unwrap());
+
+    // Mouse Up at same position
+    let up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: doc_x + crate::ui::DOCUMENT_LEFT_PADDING + col_chars as u16,
+        row: link_line as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(up, &model);
+    assert_eq!(
+        msg,
+        Some(Message::FollowLinkAtLine(link_line, Some(col_chars))),
+        "clicking on footnote superscript should emit FollowLinkAtLine"
+    );
+}
+
+#[test]
+fn test_footnote_link_ref_line_matches_rendered_line() {
+    // Realistic document with heading, paragraph, footnote ref, and definition
+    let md = "# Title\n\nSome text with a reference[^1] in it.\n\n[^1]: The footnote definition.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+
+    let footnote_links: Vec<_> = doc
+        .links()
+        .iter()
+        .filter(|l| l.url.starts_with("footnote:"))
+        .collect();
+    assert!(!footnote_links.is_empty(), "should have footnote link");
+
+    for link in &footnote_links {
+        let line_text = doc
+            .line_at(link.line)
+            .unwrap_or_else(|| panic!("no line at {}", link.line))
+            .content();
+
+        // The link text must actually appear in the rendered line
+        assert!(
+            line_text.contains(&link.text),
+            "link text {:?} not found in line {} content {:?}",
+            link.text,
+            link.line,
+            line_text
+        );
+    }
+}
+
+#[test]
+fn test_footnote_link_at_column_with_example_file() {
+    // Use the same content as the example footnotes file
+    let md = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/09-footnotes.md"),
+    )
+    .unwrap();
+    // Use a narrow width to trigger wrapping, more realistic
+    let doc = Document::parse_with_layout(&md, 40).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (40, 40));
+
+    // Dump all links for debugging
+    let all_links = model.document.links();
+    let footnote_links: Vec<_> = all_links
+        .iter()
+        .filter(|l| l.url.starts_with("footnote:"))
+        .collect();
+
+    assert!(
+        !footnote_links.is_empty(),
+        "should have footnote links, all links: {:?}",
+        all_links
+    );
+
+    // For each footnote link, verify link_at_column can find it
+    for link in &footnote_links {
+        let line_text = model
+            .document
+            .line_at(link.line)
+            .unwrap_or_else(|| panic!("no line at {}", link.line))
+            .content();
+
+        // The link text must appear in the line
+        let found_in_line = line_text.contains(&link.text);
+        assert!(
+            found_in_line,
+            "link {:?} (text={:?}) not found in line {} content {:?}. \
+             All lines: {:?}",
+            link.url,
+            link.text,
+            link.line,
+            line_text,
+            (0..model.document.line_count())
+                .map(|i| (i, model.document.line_at(i).unwrap().content().to_string()))
+                .collect::<Vec<_>>()
+        );
+
+        // Find the column position and check link_at_column
+        let col_byte = line_text.find(&link.text).unwrap();
+        let col_width = unicode_width::UnicodeWidthStr::width(&line_text[..col_byte]);
+
+        let found = App::link_at_column(&model, link.line, col_width);
+        assert!(
+            found.is_some(),
+            "link_at_column failed for {:?} at line {} col {}",
+            link.url,
+            link.line,
+            col_width
+        );
+    }
+}
+
+// Issue 4: clicking far from a link should not activate it
+#[test]
+fn test_link_at_column_returns_none_far_from_link() {
+    // A line with a short link at the start, click at the far right
+    let md = "[Go](https://go.dev) and then some very long filler text stretching out.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let link = model
+        .document
+        .links()
+        .iter()
+        .find(|l| l.url == "https://go.dev")
+        .unwrap()
+        .clone();
+    // Click at column 60, far from "Go" which is at column 0-1
+    let found = App::link_at_column(&model, link.line, 60);
+    assert!(
+        found.is_none(),
+        "clicking 60 columns away from a 2-char link should return None"
+    );
+}

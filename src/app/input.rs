@@ -3,6 +3,7 @@ use crossterm::event::{
 };
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Message, Model};
 
@@ -354,27 +355,28 @@ impl App {
         if links_on_line.is_empty() {
             return None;
         }
-        let mut best: Option<(usize, crate::document::LinkRef)> = None;
         for link in links_on_line {
+            if link.text.is_empty() {
+                continue;
+            }
             let mut search = 0usize;
             while search < line_text.len() {
-                let Some(rel) = line_text[search..].find(&link.text) else {
+                let Some(haystack) = line_text.get(search..) else {
+                    break;
+                };
+                let Some(rel) = haystack.find(&link.text) else {
                     break;
                 };
                 let start_byte = search + rel;
-                let start_char = line_text[..start_byte].chars().count();
-                let end_char = start_char + link.text.chars().count();
-                if content_col >= start_char && content_col < end_char {
+                let start_col = UnicodeWidthStr::width(&line_text[..start_byte]);
+                let end_col = start_col + UnicodeWidthStr::width(link.text.as_str());
+                if content_col >= start_col && content_col < end_col {
                     return Some(link);
                 }
-                let dist = content_col.abs_diff(start_char);
-                if best.as_ref().is_none_or(|(best_dist, _)| dist < *best_dist) {
-                    best = Some((dist, link.clone()));
-                }
-                search = start_byte + 1;
+                search = start_byte + link.text.len();
             }
         }
-        best.map(|(_, link)| link)
+        None
     }
 }
 
