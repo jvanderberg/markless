@@ -251,6 +251,7 @@ fn process_node<'a, S: BuildHasher>(
                     &mut ctx.link_refs[link_start..],
                     &ctx.lines[base_line..],
                     base_line,
+                    0,
                 );
                 ctx.link_refs.extend(extra);
             } else {
@@ -472,6 +473,7 @@ fn process_node<'a, S: BuildHasher>(
                 &mut ctx.link_refs[link_start..],
                 &ctx.lines[base_line..],
                 base_line,
+                prefix_next.len(),
             );
             ctx.link_refs.extend(extra);
 
@@ -522,6 +524,7 @@ fn process_node<'a, S: BuildHasher>(
                             &mut ctx.link_refs[link_start..],
                             &ctx.lines[base_line..],
                             base_line,
+                            prefix_next.len(),
                         );
                         ctx.link_refs.extend(extra);
                         rendered_any = true;
@@ -551,6 +554,7 @@ fn process_node<'a, S: BuildHasher>(
                     &mut ctx.link_refs[link_start..],
                     &ctx.lines[base_line..],
                     base_line,
+                    prefix_next.len(),
                 );
                 ctx.link_refs.extend(extra);
             }
@@ -618,6 +622,7 @@ fn process_node<'a, S: BuildHasher>(
                 &mut ctx.link_refs[link_start..],
                 &ctx.lines[base_line..],
                 base_line,
+                continuation.len(),
             );
             ctx.link_refs.extend(extra);
             ctx.lines
@@ -703,8 +708,12 @@ fn render_blockquote<'a>(
                         line_spans,
                     ));
                 }
-                let extra =
-                    fixup_link_lines(&mut link_refs[link_start..], &lines[base_line..], base_line);
+                let extra = fixup_link_lines(
+                    &mut link_refs[link_start..],
+                    &lines[base_line..],
+                    base_line,
+                    prefix.len(),
+                );
                 link_refs.extend(extra);
             }
             NodeValue::BlockQuote => {
@@ -730,8 +739,12 @@ fn render_blockquote<'a>(
                         ));
                     }
                 }
-                let extra =
-                    fixup_link_lines(&mut link_refs[link_start..], &lines[base_line..], base_line);
+                let extra = fixup_link_lines(
+                    &mut link_refs[link_start..],
+                    &lines[base_line..],
+                    base_line,
+                    prefix.len(),
+                );
                 link_refs.extend(extra);
             }
         }
@@ -1501,16 +1514,41 @@ fn collect_paragraph_images_recursive<'a>(
 /// `LinkRef` is updated to cover the first line and additional `LinkRef`
 /// entries (one per extra line) are returned so that every line containing
 /// part of the link text is clickable.
+///
+/// `prefix_len` is the byte length of the line prefix (e.g. blockquote
+/// marker, list indent) that should be stripped before cross-line
+/// concatenation.  All wrapped lines share the same prefix length.
 fn fixup_link_lines(
     links: &mut [LinkRef],
     wrapped_lines: &[RenderedLine],
     base_line: usize,
+    prefix_len: usize,
 ) -> Vec<LinkRef> {
     // Track which (line_index, byte_offset) occurrences have been claimed
     // so duplicate link text (e.g., two links both labelled "here") each
     // match a distinct occurrence in the rendered output.
     let mut claimed: Vec<(usize, usize)> = Vec::new();
     let mut extra: Vec<LinkRef> = Vec::new();
+
+    // Pre-build concatenation for the cross-line search (second pass).
+    // Strip the line prefix and trailing whitespace so the text flows
+    // continuously, then join with a single space.
+    let (concat, line_ranges) = if wrapped_lines.len() >= 2 {
+        let mut c = String::new();
+        let mut lr = Vec::new();
+        for (i, line) in wrapped_lines.iter().enumerate() {
+            let start = c.len();
+            let stripped = line.content().get(prefix_len..).unwrap_or("").trim_end();
+            c.push_str(stripped);
+            lr.push((start, c.len()));
+            if i + 1 < wrapped_lines.len() {
+                c.push(' ');
+            }
+        }
+        (c, lr)
+    } else {
+        (String::new(), Vec::new())
+    };
 
     for link in links.iter_mut() {
         if link.text.is_empty() {
@@ -1541,22 +1579,6 @@ fn fixup_link_lines(
         }
 
         // Second pass: link text may span multiple wrapped lines.
-        // Concatenate trimmed line contents with a single space join
-        // (the trailing whitespace on a wrapped line plus the dropped
-        // leading whitespace on the next line together represent a
-        // single original space).
-        let mut concat = String::new();
-        let mut line_ranges: Vec<(usize, usize)> = Vec::new();
-        for (i, line) in wrapped_lines.iter().enumerate() {
-            let start = concat.len();
-            let trimmed = line.content().trim_end();
-            concat.push_str(trimmed);
-            line_ranges.push((start, concat.len()));
-            if i + 1 < wrapped_lines.len() {
-                concat.push(' ');
-            }
-        }
-
         if let Some(pos) = concat.find(&link.text) {
             let end_pos = pos + link.text.len();
             let mut first_set = false;
@@ -1567,7 +1589,13 @@ fn fixup_link_lines(
                 if overlap_start >= overlap_end {
                     continue;
                 }
-                let portion = &wrapped_lines[i].content()[overlap_start - ls..overlap_end - ls];
+                // Extract portion from stripped content (prefix removed)
+                let stripped = wrapped_lines[i]
+                    .content()
+                    .get(prefix_len..)
+                    .unwrap_or("")
+                    .trim_end();
+                let portion = &stripped[overlap_start - ls..overlap_end - ls];
                 if first_set {
                     extra.push(LinkRef {
                         text: portion.to_string(),
@@ -2796,5 +2824,67 @@ mod tests {
             "link inside list in blockquote should be registered"
         );
         assert_eq!(links[0].text, "Rust");
+    }
+
+    #[test]
+    fn test_wrapped_link_in_blockquote_is_clickable_on_each_line() {
+        // A link inside a blockquote whose text wraps across two lines.
+        // The blockquote prefix ("  │ ") must not break link detection.
+        let md = "> Visit [click here for more details](https://example.com) for info.";
+        let doc = Document::parse_with_layout(md, 30).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://example.com")
+            .collect();
+
+        assert!(
+            links.len() >= 2,
+            "wrapped link in blockquote should produce link refs on each spanned line, \
+             got {} link(s): {:?}",
+            links.len(),
+            links
+        );
+
+        for link in &links {
+            let line_content = doc.line_at(link.line).unwrap().content();
+            assert!(
+                line_content.contains(&link.text),
+                "link text {:?} should appear on line {} ({:?})",
+                link.text,
+                link.line,
+                line_content
+            );
+        }
+    }
+
+    #[test]
+    fn test_wrapped_link_spanning_three_lines() {
+        // A very long link text that wraps across 3 lines at narrow width.
+        let md = "A [one two three four five six seven eight](https://example.com) end.";
+        let doc = Document::parse_with_layout(md, 15).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://example.com")
+            .collect();
+
+        assert!(
+            links.len() >= 3,
+            "link spanning 3+ lines should produce 3+ link refs, got {}: {:?}",
+            links.len(),
+            links
+        );
+
+        for link in &links {
+            let line_content = doc.line_at(link.line).unwrap().content();
+            assert!(
+                line_content.contains(&link.text),
+                "link text {:?} should appear on line {} ({:?})",
+                link.text,
+                link.line,
+                line_content
+            );
+        }
     }
 }
