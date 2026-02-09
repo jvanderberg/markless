@@ -213,6 +213,8 @@ fn process_node<'a, S: BuildHasher>(
                 id: None, // TODO: Extract from header_ids
             });
 
+            collect_inline_elements(node, line_num, &mut ctx.images, &mut ctx.link_refs);
+
             let prefix = "#".repeat(heading.level as usize);
             ctx.lines.push(RenderedLine::new(
                 format!("{prefix} {text}"),
@@ -229,9 +231,11 @@ fn process_node<'a, S: BuildHasher>(
             if child_images.is_empty() {
                 // Regular paragraph text with inline styling and wrapping
                 let spans = collect_inline_spans(node);
-                // Collect links from paragraph
-                collect_inline_elements(node, ctx.lines.len(), &mut ctx.images, &mut ctx.link_refs);
+                // Collect links with a placeholder line number (will be fixed up after wrapping)
+                let link_start = ctx.link_refs.len();
+                collect_inline_elements(node, 0, &mut ctx.images, &mut ctx.link_refs);
 
+                let base_line = ctx.lines.len();
                 let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
@@ -241,6 +245,13 @@ fn process_node<'a, S: BuildHasher>(
                         line_spans,
                     ));
                 }
+
+                // Fix up link line numbers: find which wrapped line contains each link's text
+                fixup_link_lines(
+                    &mut ctx.link_refs[link_start..],
+                    &ctx.lines[base_line..],
+                    base_line,
+                );
             } else {
                 for (alt, src) in child_images {
                     let height_lines = ctx.image_heights.get(&src).copied().unwrap_or(1).max(1);
@@ -444,6 +455,9 @@ fn process_node<'a, S: BuildHasher>(
             let prefix_next = format!("{}{}", indent, " ".repeat(marker.len()));
 
             let spans = collect_inline_spans(node);
+            let link_start = ctx.link_refs.len();
+            collect_inline_elements(node, 0, &mut ctx.images, &mut ctx.link_refs);
+            let base_line = ctx.lines.len();
             let wrapped = wrap_spans(&spans, ctx.wrap_width, &prefix_first, &prefix_next);
             for line_spans in wrapped {
                 let content = spans_to_string(&line_spans);
@@ -453,6 +467,11 @@ fn process_node<'a, S: BuildHasher>(
                     line_spans,
                 ));
             }
+            fixup_link_lines(
+                &mut ctx.link_refs[link_start..],
+                &ctx.lines[base_line..],
+                base_line,
+            );
 
             for child in node.children() {
                 if matches!(child.data.borrow().value, NodeValue::List(_)) {
@@ -479,11 +498,14 @@ fn process_node<'a, S: BuildHasher>(
                                 .push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
                         }
                         let spans = collect_inline_spans(child);
+                        let link_start = ctx.link_refs.len();
+                        collect_inline_elements(child, 0, &mut ctx.images, &mut ctx.link_refs);
                         let prefix = if rendered_any {
                             &prefix_next
                         } else {
                             &prefix_first
                         };
+                        let base_line = ctx.lines.len();
                         let wrapped = wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
 
                         for line_spans in wrapped {
@@ -494,6 +516,11 @@ fn process_node<'a, S: BuildHasher>(
                                 line_spans,
                             ));
                         }
+                        fixup_link_lines(
+                            &mut ctx.link_refs[link_start..],
+                            &ctx.lines[base_line..],
+                            base_line,
+                        );
                         rendered_any = true;
                         rendered_paragraphs += 1;
                     }
@@ -505,6 +532,9 @@ fn process_node<'a, S: BuildHasher>(
 
             if !rendered_any {
                 let spans = collect_inline_spans(node);
+                let link_start = ctx.link_refs.len();
+                collect_inline_elements(node, 0, &mut ctx.images, &mut ctx.link_refs);
+                let base_line = ctx.lines.len();
                 let wrapped = wrap_spans(&spans, ctx.wrap_width, &prefix_first, &prefix_next);
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
@@ -514,11 +544,23 @@ fn process_node<'a, S: BuildHasher>(
                         line_spans,
                     ));
                 }
+                fixup_link_lines(
+                    &mut ctx.link_refs[link_start..],
+                    &ctx.lines[base_line..],
+                    base_line,
+                );
             }
         }
 
         NodeValue::BlockQuote => {
-            render_blockquote(node, &mut ctx.lines, ctx.wrap_width, 1);
+            render_blockquote(
+                node,
+                &mut ctx.lines,
+                &mut ctx.link_refs,
+                &mut ctx.images,
+                ctx.wrap_width,
+                1,
+            );
             ctx.lines
                 .push(RenderedLine::new(String::new(), LineType::Empty));
         }
@@ -533,7 +575,14 @@ fn process_node<'a, S: BuildHasher>(
         }
 
         NodeValue::Table(_) => {
-            ctx.lines.extend(render_table(node));
+            let base_line = ctx.lines.len();
+            let link_start = ctx.link_refs.len();
+            let table_lines = render_table(node, &mut ctx.link_refs, &mut ctx.images);
+            ctx.lines.extend(table_lines);
+            // Fix up link lines relative to where the table was placed
+            for link in &mut ctx.link_refs[link_start..] {
+                link.line += base_line;
+            }
             ctx.lines
                 .push(RenderedLine::new(String::new(), LineType::Empty));
         }
@@ -544,6 +593,9 @@ fn process_node<'a, S: BuildHasher>(
             let label = format!("{} ", render_footnote_reference(&def.name));
             let continuation = " ".repeat(label.len());
             let spans = collect_inline_spans(node);
+            let link_start = ctx.link_refs.len();
+            collect_inline_elements(node, 0, &mut ctx.images, &mut ctx.link_refs);
+            let base_line = ctx.lines.len();
             let wrapped = wrap_spans(&spans, ctx.wrap_width, &label, &continuation);
             if wrapped.is_empty() {
                 ctx.lines
@@ -558,6 +610,11 @@ fn process_node<'a, S: BuildHasher>(
                     ));
                 }
             }
+            fixup_link_lines(
+                &mut ctx.link_refs[link_start..],
+                &ctx.lines[base_line..],
+                base_line,
+            );
             ctx.lines
                 .push(RenderedLine::new(String::new(), LineType::Empty));
         }
@@ -618,6 +675,8 @@ fn ensure_trailing_empty_lines(lines: &mut Vec<RenderedLine>, count: usize) {
 fn render_blockquote<'a>(
     node: &'a AstNode<'a>,
     lines: &mut Vec<RenderedLine>,
+    link_refs: &mut Vec<LinkRef>,
+    images: &mut Vec<ImageRef>,
     wrap_width: usize,
     quote_depth: usize,
 ) {
@@ -627,6 +686,9 @@ fn render_blockquote<'a>(
         match &child.data.borrow().value {
             NodeValue::Paragraph => {
                 let spans = collect_inline_spans(child);
+                let link_start = link_refs.len();
+                collect_inline_elements(child, 0, images, link_refs);
+                let base_line = lines.len();
                 let wrapped = wrap_spans(&spans, wrap_width, &prefix, &prefix);
                 for line_spans in wrapped {
                     let content = spans_to_string(&line_spans);
@@ -636,12 +698,16 @@ fn render_blockquote<'a>(
                         line_spans,
                     ));
                 }
+                fixup_link_lines(&mut link_refs[link_start..], &lines[base_line..], base_line);
             }
             NodeValue::BlockQuote => {
-                render_blockquote(child, lines, wrap_width, quote_depth + 1);
+                render_blockquote(child, lines, link_refs, images, wrap_width, quote_depth + 1);
             }
             _ => {
+                let link_start = link_refs.len();
+                collect_inline_elements(child, 0, images, link_refs);
                 let text = extract_text(child);
+                let base_line = lines.len();
                 for raw_line in text.lines() {
                     let spans = vec![InlineSpan::new(
                         raw_line.to_string(),
@@ -657,6 +723,7 @@ fn render_blockquote<'a>(
                         ));
                     }
                 }
+                fixup_link_lines(&mut link_refs[link_start..], &lines[base_line..], base_line);
             }
         }
     }
@@ -677,8 +744,17 @@ struct TableCellRender {
     spans: Vec<InlineSpan>,
 }
 
-fn render_table<'a>(table_node: &'a AstNode<'a>) -> Vec<RenderedLine> {
-    let (alignments, mut rows, has_header) = collect_table_rows(table_node);
+fn render_table<'a>(
+    table_node: &'a AstNode<'a>,
+    link_refs: &mut Vec<LinkRef>,
+    images: &mut Vec<ImageRef>,
+) -> Vec<RenderedLine> {
+    let CollectedTableRows {
+        alignments,
+        mut rows,
+        has_header,
+        row_link_indices: row_links,
+    } = collect_table_rows(table_node, link_refs, images);
     if rows.is_empty() {
         return Vec::new();
     }
@@ -708,7 +784,12 @@ fn render_table<'a>(table_node: &'a AstNode<'a>) -> Vec<RenderedLine> {
 
     let mut lines = Vec::new();
     for (idx, row) in rows.iter().enumerate() {
+        let output_line = lines.len();
         lines.push(render_table_row(row, &col_widths, &alignments));
+        // Assign the correct output line to links collected from this row
+        for link_idx in &row_links[idx] {
+            link_refs[*link_idx].line = output_line;
+        }
         if has_header && idx == 0 {
             lines.push(RenderedLine::new(mid.clone(), LineType::Table));
         }
@@ -716,9 +797,19 @@ fn render_table<'a>(table_node: &'a AstNode<'a>) -> Vec<RenderedLine> {
     lines
 }
 
+struct CollectedTableRows {
+    alignments: Vec<TableAlignment>,
+    rows: Vec<Vec<TableCellRender>>,
+    has_header: bool,
+    /// For each row, the indices into `link_refs` that belong to that row.
+    row_link_indices: Vec<Vec<usize>>,
+}
+
 fn collect_table_rows<'a>(
     table_node: &'a AstNode<'a>,
-) -> (Vec<TableAlignment>, Vec<Vec<TableCellRender>>, bool) {
+    link_refs: &mut Vec<LinkRef>,
+    images: &mut Vec<ImageRef>,
+) -> CollectedTableRows {
     let alignments = match &table_node.data.borrow().value {
         NodeValue::Table(table) => table.alignments.clone(),
         _ => Vec::new(),
@@ -726,6 +817,7 @@ fn collect_table_rows<'a>(
 
     let mut rows = Vec::new();
     let mut has_header = false;
+    let mut row_links: Vec<Vec<usize>> = Vec::new();
     for row_node in table_node.children() {
         let is_header_row = matches!(row_node.data.borrow().value, NodeValue::TableRow(true));
         if is_header_row {
@@ -736,18 +828,31 @@ fn collect_table_rows<'a>(
         }
 
         let mut row_cells = Vec::new();
+        let mut this_row_link_indices = Vec::new();
         for cell_node in row_node.children() {
             if !matches!(cell_node.data.borrow().value, NodeValue::TableCell) {
                 continue;
             }
             let spans = normalize_inline_whitespace(&collect_inline_spans(cell_node));
             let text = spans_to_string(&spans);
+            // Collect links from this cell; line will be fixed up later
+            let link_start = link_refs.len();
+            collect_inline_elements(cell_node, 0, images, link_refs);
+            for idx in link_start..link_refs.len() {
+                this_row_link_indices.push(idx);
+            }
             row_cells.push(TableCellRender { text, spans });
         }
         rows.push(row_cells);
+        row_links.push(this_row_link_indices);
     }
 
-    (alignments, rows, has_header)
+    CollectedTableRows {
+        alignments,
+        rows,
+        has_header,
+        row_link_indices: row_links,
+    }
 }
 
 fn render_table_inner_divider(widths: &[usize]) -> String {
@@ -1379,6 +1484,40 @@ fn collect_paragraph_images_recursive<'a>(
     }
 }
 
+/// After wrapping, fix up `LinkRef.line` values so each link points to
+/// the actual rendered line that contains its text, not the first line
+/// of the paragraph.
+fn fixup_link_lines(links: &mut [LinkRef], wrapped_lines: &[RenderedLine], base_line: usize) {
+    // Track which (line_index, byte_offset) occurrences have been claimed
+    // so duplicate link text (e.g., two links both labelled "here") each
+    // match a distinct occurrence in the rendered output.
+    let mut claimed: Vec<(usize, usize)> = Vec::new();
+
+    for link in links.iter_mut() {
+        if link.text.is_empty() {
+            continue;
+        }
+        let mut found = false;
+        for (i, line) in wrapped_lines.iter().enumerate() {
+            let content = line.content();
+            let mut search = 0usize;
+            while let Some(pos) = content[search..].find(&link.text) {
+                let byte_offset = search + pos;
+                if !claimed.contains(&(i, byte_offset)) {
+                    link.line = base_line + i;
+                    claimed.push((i, byte_offset));
+                    found = true;
+                    break;
+                }
+                search = byte_offset + link.text.len();
+            }
+            if found {
+                break;
+            }
+        }
+    }
+}
+
 fn collect_inline_elements<'a>(
     node: &'a AstNode<'a>,
     base_line: usize,
@@ -1406,16 +1545,49 @@ fn collect_inline_elements<'a>(
         }
         NodeValue::FootnoteReference(reference) => {
             links.push(LinkRef {
-                text: format!("[^{}]", reference.name),
+                text: render_footnote_reference(&reference.name),
                 url: format!("footnote:{}", reference.name),
                 line: base_line,
             });
+        }
+        NodeValue::Text(t) => {
+            // When comrak emits [^N] as plain text (no matching definition),
+            // render_text_with_footnote_fallback converts it to superscript.
+            // We need to create LinkRefs for these too.
+            collect_text_footnote_links(t, base_line, links);
         }
         _ => {
             for child in node.children() {
                 collect_inline_elements(child, base_line, images, links);
             }
         }
+    }
+}
+
+/// Scan a plain text string for `[^N]` footnote patterns (the same ones that
+/// `render_text_with_footnote_fallback` converts to superscript) and create
+/// `LinkRef` entries so they are clickable.
+fn collect_text_footnote_links(text: &str, base_line: usize, links: &mut Vec<LinkRef>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '[' && i + 3 < chars.len() && chars[i + 1] == '^' {
+            let mut j = i + 2;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 2 && j < chars.len() && chars[j] == ']' {
+                let digits: String = chars[i + 2..j].iter().collect();
+                links.push(LinkRef {
+                    text: render_superscript_text(&digits),
+                    url: format!("footnote:{digits}"),
+                    line: base_line,
+                });
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
     }
 }
 
@@ -1780,6 +1952,25 @@ mod tests {
         let doc = Document::parse_with_layout(md, 80).unwrap();
         let lines = doc.visible_lines(0, 10);
         assert!(lines.iter().any(|l| l.content().contains("footnote¹²³.")));
+    }
+
+    #[test]
+    fn test_footnote_without_definition_still_creates_link_ref() {
+        // When comrak emits [^1] as plain text (no definition),
+        // the text fallback renders it as superscript but should still create a LinkRef
+        let md = "Here is a sentence with a footnote[^1].";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let footnote_links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url.starts_with("footnote:"))
+            .collect();
+        assert_eq!(
+            footnote_links.len(),
+            1,
+            "text fallback should create a LinkRef for [^1]"
+        );
+        assert_eq!(footnote_links[0].text, "¹");
     }
 
     #[test]
@@ -2273,5 +2464,225 @@ mod tests {
                 .iter()
                 .any(|l| l.content().contains("[Image: mermaid diagram]"))
         );
+    }
+
+    #[test]
+    fn test_numeric_footnote_reference_link_uses_rendered_text() {
+        let md = "See this[^1].\n\n[^1]: A footnote.";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        // The rendered text uses superscript "¹", so the LinkRef text must match
+        let footnote_links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url.starts_with("footnote:"))
+            .collect();
+        assert!(!footnote_links.is_empty(), "should have a footnote link");
+        let link = &footnote_links[0];
+        assert_eq!(
+            link.text, "¹",
+            "LinkRef text should be the rendered superscript, not [^1]"
+        );
+    }
+
+    #[test]
+    fn test_footnote_definition_contains_link_refs() {
+        let md = "Alpha[^1]\n\n[^1]: See [example](https://example.com) for details.";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let url_links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://example.com")
+            .collect();
+        assert_eq!(
+            url_links.len(),
+            1,
+            "link inside footnote definition should be registered"
+        );
+        assert_eq!(url_links[0].text, "example");
+    }
+
+    #[test]
+    fn test_list_item_contains_link_refs() {
+        let md = "- Visit [Rust](https://rust-lang.org) for more\n- No link here";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://rust-lang.org")
+            .collect();
+        assert_eq!(links.len(), 1, "link inside list item should be registered");
+        assert_eq!(links[0].text, "Rust");
+        // The link line should match a line that actually contains "Rust"
+        let line_content = doc.line_at(links[0].line).unwrap().content();
+        assert!(
+            line_content.contains("Rust"),
+            "link line {} should contain 'Rust', got: {line_content}",
+            links[0].line
+        );
+    }
+
+    #[test]
+    fn test_blockquote_contains_link_refs() {
+        let md = "> Check [docs](https://docs.rs) for details";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://docs.rs")
+            .collect();
+        assert_eq!(
+            links.len(),
+            1,
+            "link inside blockquote should be registered"
+        );
+        assert_eq!(links[0].text, "docs");
+        let line_content = doc.line_at(links[0].line).unwrap().content();
+        assert!(
+            line_content.contains("docs"),
+            "link line {} should contain 'docs', got: {line_content}",
+            links[0].line
+        );
+    }
+
+    #[test]
+    fn test_table_contains_link_refs() {
+        let md = "| Name | Link |\n|------|------|\n| Foo | [Bar](https://bar.com) |";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://bar.com")
+            .collect();
+        assert_eq!(
+            links.len(),
+            1,
+            "link inside table cell should be registered"
+        );
+        assert_eq!(links[0].text, "Bar");
+        let line_content = doc.line_at(links[0].line).unwrap().content();
+        assert!(
+            line_content.contains("Bar"),
+            "link line {} should contain 'Bar', got: {line_content}",
+            links[0].line
+        );
+    }
+
+    #[test]
+    fn test_task_item_contains_link_refs() {
+        let md = "- [ ] Read [guide](https://guide.com)\n- [x] Done";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://guide.com")
+            .collect();
+        assert_eq!(links.len(), 1, "link inside task item should be registered");
+        assert_eq!(links[0].text, "guide");
+        let line_content = doc.line_at(links[0].line).unwrap().content();
+        assert!(
+            line_content.contains("guide"),
+            "link line {} should contain 'guide', got: {line_content}",
+            links[0].line
+        );
+    }
+
+    #[test]
+    fn test_heading_contains_link_refs() {
+        let md = "# Title with [link](https://heading.com)";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://heading.com")
+            .collect();
+        assert_eq!(links.len(), 1, "link inside heading should be registered");
+        assert_eq!(links[0].text, "link");
+        let line_content = doc.line_at(links[0].line).unwrap().content();
+        assert!(
+            line_content.contains("link"),
+            "link line {} should contain 'link', got: {line_content}",
+            links[0].line
+        );
+    }
+
+    #[test]
+    fn test_nested_blockquote_contains_link_refs() {
+        let md = "> > See [inner](https://inner.com)";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://inner.com")
+            .collect();
+        assert_eq!(
+            links.len(),
+            1,
+            "link inside nested blockquote should be registered"
+        );
+        assert_eq!(links[0].text, "inner");
+    }
+
+    // Issue 2: fixup_link_lines with duplicate link text
+    #[test]
+    fn test_duplicate_link_text_assigned_to_correct_wrapped_lines() {
+        // Two links both labelled "here" in a paragraph, narrow width forces
+        // the second "here" onto a different wrapped line.
+        let md = "Click [here](https://first.com) for the first thing, then click [here](https://second.com) for second.";
+        let doc = Document::parse_with_layout(md, 35).unwrap();
+        let first: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://first.com")
+            .collect();
+        let second: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://second.com")
+            .collect();
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+
+        // Verify they actually ended up on different rendered lines
+        // (the wrap at 35 chars should separate them)
+        let line_first = doc.line_at(first[0].line).unwrap().content();
+        let line_second = doc.line_at(second[0].line).unwrap().content();
+
+        // Both lines must contain the link text
+        assert!(
+            line_first.contains("here"),
+            "first link at line {} should contain 'here': {line_first:?}",
+            first[0].line
+        );
+        assert!(
+            line_second.contains("here"),
+            "second link at line {} should contain 'here': {line_second:?}",
+            second[0].line
+        );
+
+        // The second link must NOT be assigned to the same line as the first
+        // if the text is actually on a different rendered line
+        assert_ne!(
+            first[0].line, second[0].line,
+            "duplicate 'here' links should be on different lines after wrapping \
+             (first line: {line_first:?}, second line: {line_second:?})"
+        );
+    }
+
+    // Issue 3: links in lists inside blockquotes
+    #[test]
+    fn test_blockquote_list_contains_link_refs() {
+        let md = "> - Visit [Rust](https://rust-lang.org) today";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://rust-lang.org")
+            .collect();
+        assert_eq!(
+            links.len(),
+            1,
+            "link inside list in blockquote should be registered"
+        );
+        assert_eq!(links[0].text, "Rust");
     }
 }
