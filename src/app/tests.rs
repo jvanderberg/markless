@@ -812,6 +812,45 @@ fn test_follow_link_at_column_picks_correct_link_on_same_line() {
 }
 
 #[test]
+fn test_wrapped_link_is_clickable_on_both_lines() {
+    // A link whose text wraps to a second line should be clickable on both lines.
+    let md = "Go [click here for more details](https://example.com) now.";
+    let doc = Document::parse_with_layout(md, 25).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (25, 10));
+
+    let links: Vec<_> = model
+        .document
+        .links()
+        .iter()
+        .filter(|l| l.url == "https://example.com")
+        .collect();
+
+    // Should have link refs on two different lines
+    assert!(
+        links.len() >= 2,
+        "expected link refs on 2+ lines, got {}: {:?}",
+        links.len(),
+        links
+    );
+
+    // Both lines should be clickable at the column where the link text appears
+    for link in &links {
+        let line_content = model.document.line_at(link.line).unwrap().content();
+        let byte_pos = line_content.find(&link.text).unwrap();
+        let col = unicode_width::UnicodeWidthStr::width(&line_content[..byte_pos]);
+        let found = App::link_at_column(&model, link.line, col);
+        assert!(
+            found.is_some(),
+            "link should be clickable at line {} col {} (text {:?})",
+            link.line,
+            col,
+            link.text
+        );
+        assert_eq!(found.unwrap().url, "https://example.com");
+    }
+}
+
+#[test]
 fn test_open_visible_links_shows_picker_when_multiple() {
     let md = "[A](#one)\n\n[B](#two)\n\n## One\n\n## Two";
     let doc = Document::parse_with_layout(md, 80).unwrap();
@@ -1169,6 +1208,24 @@ fn test_sync_toc_skipped_in_browse_mode() {
     // Scrolling should NOT auto-sync TOC selection in browse mode
     let model = update(model, Message::ScrollDown(5));
     assert_eq!(model.toc_selected, Some(0));
+}
+
+#[test]
+fn test_toc_auto_sync_works_when_toc_focused() {
+    let mut model = create_many_headings_model();
+    model = update(model, Message::ToggleToc);
+    model.toc_focused = true;
+
+    let target_idx = 8;
+    let target_line = model.document.headings()[target_idx].line;
+    // Scrolling to a heading should still sync TOC selection even when TOC is focused
+    model = update(model, Message::GoToLine(target_line));
+
+    assert_eq!(
+        model.toc_selected,
+        Some(target_idx),
+        "TOC should sync to viewport even when toc_focused is true"
+    );
 }
 
 #[test]

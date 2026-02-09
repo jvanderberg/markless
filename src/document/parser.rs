@@ -247,11 +247,13 @@ fn process_node<'a, S: BuildHasher>(
                 }
 
                 // Fix up link line numbers: find which wrapped line contains each link's text
-                fixup_link_lines(
+                let extra = fixup_link_lines(
                     &mut ctx.link_refs[link_start..],
                     &ctx.lines[base_line..],
                     base_line,
+                    0,
                 );
+                ctx.link_refs.extend(extra);
             } else {
                 for (alt, src) in child_images {
                     let height_lines = ctx.image_heights.get(&src).copied().unwrap_or(1).max(1);
@@ -467,11 +469,13 @@ fn process_node<'a, S: BuildHasher>(
                     line_spans,
                 ));
             }
-            fixup_link_lines(
+            let extra = fixup_link_lines(
                 &mut ctx.link_refs[link_start..],
                 &ctx.lines[base_line..],
                 base_line,
+                prefix_next.len(),
             );
+            ctx.link_refs.extend(extra);
 
             for child in node.children() {
                 if matches!(child.data.borrow().value, NodeValue::List(_)) {
@@ -516,11 +520,13 @@ fn process_node<'a, S: BuildHasher>(
                                 line_spans,
                             ));
                         }
-                        fixup_link_lines(
+                        let extra = fixup_link_lines(
                             &mut ctx.link_refs[link_start..],
                             &ctx.lines[base_line..],
                             base_line,
+                            prefix_next.len(),
                         );
+                        ctx.link_refs.extend(extra);
                         rendered_any = true;
                         rendered_paragraphs += 1;
                     }
@@ -544,11 +550,13 @@ fn process_node<'a, S: BuildHasher>(
                         line_spans,
                     ));
                 }
-                fixup_link_lines(
+                let extra = fixup_link_lines(
                     &mut ctx.link_refs[link_start..],
                     &ctx.lines[base_line..],
                     base_line,
+                    prefix_next.len(),
                 );
+                ctx.link_refs.extend(extra);
             }
         }
 
@@ -610,11 +618,13 @@ fn process_node<'a, S: BuildHasher>(
                     ));
                 }
             }
-            fixup_link_lines(
+            let extra = fixup_link_lines(
                 &mut ctx.link_refs[link_start..],
                 &ctx.lines[base_line..],
                 base_line,
+                continuation.len(),
             );
+            ctx.link_refs.extend(extra);
             ctx.lines
                 .push(RenderedLine::new(String::new(), LineType::Empty));
         }
@@ -698,7 +708,13 @@ fn render_blockquote<'a>(
                         line_spans,
                     ));
                 }
-                fixup_link_lines(&mut link_refs[link_start..], &lines[base_line..], base_line);
+                let extra = fixup_link_lines(
+                    &mut link_refs[link_start..],
+                    &lines[base_line..],
+                    base_line,
+                    prefix.len(),
+                );
+                link_refs.extend(extra);
             }
             NodeValue::BlockQuote => {
                 render_blockquote(child, lines, link_refs, images, wrap_width, quote_depth + 1);
@@ -723,7 +739,13 @@ fn render_blockquote<'a>(
                         ));
                     }
                 }
-                fixup_link_lines(&mut link_refs[link_start..], &lines[base_line..], base_line);
+                let extra = fixup_link_lines(
+                    &mut link_refs[link_start..],
+                    &lines[base_line..],
+                    base_line,
+                    prefix.len(),
+                );
+                link_refs.extend(extra);
             }
         }
     }
@@ -1487,16 +1509,52 @@ fn collect_paragraph_images_recursive<'a>(
 /// After wrapping, fix up `LinkRef.line` values so each link points to
 /// the actual rendered line that contains its text, not the first line
 /// of the paragraph.
-fn fixup_link_lines(links: &mut [LinkRef], wrapped_lines: &[RenderedLine], base_line: usize) {
+///
+/// When link text wraps across multiple rendered lines, the original
+/// `LinkRef` is updated to cover the first line and additional `LinkRef`
+/// entries (one per extra line) are returned so that every line containing
+/// part of the link text is clickable.
+///
+/// `prefix_len` is the byte length of the line prefix (e.g. blockquote
+/// marker, list indent) that should be stripped before cross-line
+/// concatenation.  All wrapped lines share the same prefix length.
+fn fixup_link_lines(
+    links: &mut [LinkRef],
+    wrapped_lines: &[RenderedLine],
+    base_line: usize,
+    prefix_len: usize,
+) -> Vec<LinkRef> {
     // Track which (line_index, byte_offset) occurrences have been claimed
     // so duplicate link text (e.g., two links both labelled "here") each
     // match a distinct occurrence in the rendered output.
     let mut claimed: Vec<(usize, usize)> = Vec::new();
+    let mut extra: Vec<LinkRef> = Vec::new();
+
+    // Pre-build concatenation for the cross-line search (second pass).
+    // Strip the line prefix and trailing whitespace so the text flows
+    // continuously, then join with a single space.
+    let (concat, line_ranges) = if wrapped_lines.len() >= 2 {
+        let mut c = String::new();
+        let mut lr = Vec::new();
+        for (i, line) in wrapped_lines.iter().enumerate() {
+            let start = c.len();
+            let stripped = line.content().get(prefix_len..).unwrap_or("").trim_end();
+            c.push_str(stripped);
+            lr.push((start, c.len()));
+            if i + 1 < wrapped_lines.len() {
+                c.push(' ');
+            }
+        }
+        (c, lr)
+    } else {
+        (String::new(), Vec::new())
+    };
 
     for link in links.iter_mut() {
         if link.text.is_empty() {
             continue;
         }
+        // First pass: try to find the full link text on a single line.
         let mut found = false;
         for (i, line) in wrapped_lines.iter().enumerate() {
             let content = line.content();
@@ -1515,7 +1573,45 @@ fn fixup_link_lines(links: &mut [LinkRef], wrapped_lines: &[RenderedLine], base_
                 break;
             }
         }
+
+        if found || wrapped_lines.len() < 2 {
+            continue;
+        }
+
+        // Second pass: link text may span multiple wrapped lines.
+        if let Some(pos) = concat.find(&link.text) {
+            let end_pos = pos + link.text.len();
+            let mut first_set = false;
+            for (i, &(ls, le)) in line_ranges.iter().enumerate() {
+                // Compute overlap of link range [pos, end_pos) with line range [ls, le)
+                let overlap_start = pos.max(ls);
+                let overlap_end = end_pos.min(le);
+                if overlap_start >= overlap_end {
+                    continue;
+                }
+                // Extract portion from stripped content (prefix removed)
+                let stripped = wrapped_lines[i]
+                    .content()
+                    .get(prefix_len..)
+                    .unwrap_or("")
+                    .trim_end();
+                let portion = &stripped[overlap_start - ls..overlap_end - ls];
+                if first_set {
+                    extra.push(LinkRef {
+                        text: portion.to_string(),
+                        url: link.url.clone(),
+                        line: base_line + i,
+                    });
+                } else {
+                    link.line = base_line + i;
+                    link.text = portion.to_string();
+                    first_set = true;
+                }
+            }
+        }
     }
+
+    extra
 }
 
 fn collect_inline_elements<'a>(
@@ -2668,6 +2764,50 @@ mod tests {
         );
     }
 
+    // Issue: link text wrapping across lines should create clickable regions on each line
+    #[test]
+    fn test_wrapped_link_text_creates_link_refs_on_each_line() {
+        // A link whose text is long enough to wrap across two rendered lines.
+        // At width 25, "click here for more details" should wrap.
+        let md = "Go [click here for more details](https://example.com) now.";
+        let doc = Document::parse_with_layout(md, 25).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://example.com")
+            .collect();
+
+        // There should be link refs on BOTH wrapped lines so clicking
+        // either line follows the link.
+        assert!(
+            links.len() >= 2,
+            "wrapped link should produce link refs on each spanned line, got {} link(s): {:?}",
+            links.len(),
+            links
+        );
+
+        // Each link ref's text should be found on its respective line
+        for link in &links {
+            let line_content = doc.line_at(link.line).unwrap().content();
+            assert!(
+                line_content.contains(&link.text),
+                "link text {:?} should appear on line {} ({:?})",
+                link.text,
+                link.line,
+                line_content
+            );
+        }
+
+        // The links should be on different lines
+        let lines: Vec<_> = links.iter().map(|l| l.line).collect();
+        let unique_lines: std::collections::HashSet<_> = lines.iter().collect();
+        assert!(
+            unique_lines.len() >= 2,
+            "wrapped link refs should span multiple lines, got lines: {:?}",
+            lines
+        );
+    }
+
     // Issue 3: links in lists inside blockquotes
     #[test]
     fn test_blockquote_list_contains_link_refs() {
@@ -2684,5 +2824,67 @@ mod tests {
             "link inside list in blockquote should be registered"
         );
         assert_eq!(links[0].text, "Rust");
+    }
+
+    #[test]
+    fn test_wrapped_link_in_blockquote_is_clickable_on_each_line() {
+        // A link inside a blockquote whose text wraps across two lines.
+        // The blockquote prefix ("  │ ") must not break link detection.
+        let md = "> Visit [click here for more details](https://example.com) for info.";
+        let doc = Document::parse_with_layout(md, 30).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://example.com")
+            .collect();
+
+        assert!(
+            links.len() >= 2,
+            "wrapped link in blockquote should produce link refs on each spanned line, \
+             got {} link(s): {:?}",
+            links.len(),
+            links
+        );
+
+        for link in &links {
+            let line_content = doc.line_at(link.line).unwrap().content();
+            assert!(
+                line_content.contains(&link.text),
+                "link text {:?} should appear on line {} ({:?})",
+                link.text,
+                link.line,
+                line_content
+            );
+        }
+    }
+
+    #[test]
+    fn test_wrapped_link_spanning_three_lines() {
+        // A very long link text that wraps across 3 lines at narrow width.
+        let md = "A [one two three four five six seven eight](https://example.com) end.";
+        let doc = Document::parse_with_layout(md, 15).unwrap();
+        let links: Vec<_> = doc
+            .links()
+            .iter()
+            .filter(|l| l.url == "https://example.com")
+            .collect();
+
+        assert!(
+            links.len() >= 3,
+            "link spanning 3+ lines should produce 3+ link refs, got {}: {:?}",
+            links.len(),
+            links
+        );
+
+        for link in &links {
+            let line_content = doc.line_at(link.line).unwrap().content();
+            assert!(
+                line_content.contains(&link.text),
+                "link text {:?} should appear on line {} ({:?})",
+                link.text,
+                link.line,
+                line_content
+            );
+        }
     }
 }

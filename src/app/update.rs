@@ -380,7 +380,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.should_quit = true;
         }
     }
-    if should_sync_toc && model.toc_visible && !model.toc_focused && !model.browse_mode {
+    if should_sync_toc && model.toc_visible && !model.browse_mode {
         model.sync_toc_to_viewport();
     }
     model
