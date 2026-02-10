@@ -251,6 +251,14 @@ fn parse_osc_component(s: &str) -> Option<u8> {
 }
 
 fn main() -> Result<()> {
+    // Restore terminal state on panic so the shell isn't left in raw mode
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen);
+        default_hook(info);
+    }));
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(

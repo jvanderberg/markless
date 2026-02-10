@@ -21,7 +21,9 @@ pub fn split_main_columns(area: Rect) -> std::rc::Rc<[Rect]> {
 pub fn document_content_width(total_width: u16, toc_visible: bool) -> u16 {
     let area = Rect::new(0, 0, total_width, 1);
     let doc_width = if toc_visible {
-        split_main_columns(area)[1].width
+        split_main_columns(area)
+            .get(1)
+            .map_or(total_width, |r| r.width)
     } else {
         total_width
     };
@@ -33,10 +35,14 @@ pub fn render(model: &mut Model, frame: &mut Frame) {
     let area = frame.area();
 
     if model.toc_visible {
-        // Split into TOC and document
+        // Split into TOC and document (always yields exactly 2 chunks)
         let chunks = split_main_columns(area);
-        render_toc(model, frame, chunks[0]);
-        render_document(model, frame, chunks[1]);
+        if let (Some(&toc_area), Some(&doc_area)) = (chunks.first(), chunks.get(1)) {
+            render_toc(model, frame, toc_area);
+            render_document(model, frame, doc_area);
+        } else {
+            render_document(model, frame, area);
+        }
     } else {
         render_document(model, frame, area);
     }

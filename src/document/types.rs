@@ -316,6 +316,9 @@ impl Document {
             for (line_idx, spans) in
                 (block.line_range.start..block.line_range.end).zip(highlighted.into_iter())
             {
+                if line_idx >= self.lines.len() {
+                    break;
+                }
                 let trimmed_spans = truncate_spans_to_chars(&spans, block.content_width);
                 let trimmed_len = spans_char_len(&trimmed_spans);
                 let padding = " "
