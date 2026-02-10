@@ -126,6 +126,8 @@ pub struct Model {
     pub selection: Option<LineSelection>,
     /// Whether inline images are enabled
     pub images_enabled: bool,
+    /// Optional maximum content wrap width in columns
+    pub wrap_width: Option<u16>,
     /// Whether directory browse mode is active
     pub browse_mode: bool,
     /// Current directory being browsed
@@ -187,6 +189,7 @@ impl Model {
             image_mode: None,
             selection: None,
             images_enabled: true,
+            wrap_width: None,
             browse_mode: false,
             browse_dir: base_dir,
             browse_entries: Vec::new(),
@@ -409,7 +412,12 @@ impl Model {
     }
 
     pub(super) fn layout_width(&self) -> u16 {
-        crate::ui::document_content_width(self.viewport.width(), self.toc_visible)
+        let terminal_width =
+            crate::ui::document_content_width(self.viewport.width(), self.toc_visible);
+        match self.wrap_width {
+            Some(w) if w > 0 => terminal_width.min(w),
+            _ => terminal_width,
+        }
     }
 
     pub(super) const fn toc_visible_rows(&self) -> usize {
@@ -448,10 +456,11 @@ impl Model {
         if self.document.is_hex_mode() {
             return;
         }
+        let width = self.layout_width();
         let mermaid = self.should_render_mermaid_as_images();
         if let Ok(document) = Document::parse_with_all_options(
             self.document.source(),
-            self.layout_width(),
+            width,
             &self.image_layout_heights,
             mermaid,
         ) {
@@ -812,6 +821,7 @@ impl Default for Model {
             image_mode: None,
             selection: None,
             images_enabled: true,
+            wrap_width: None,
             browse_mode: false,
             browse_dir: PathBuf::from("."),
             browse_entries: Vec::new(),

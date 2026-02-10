@@ -29,6 +29,7 @@ pub struct App {
     config_global_path: Option<PathBuf>,
     config_local_path: Option<PathBuf>,
     browse_mode: bool,
+    wrap_width: Option<u16>,
 }
 
 impl App {
@@ -43,6 +44,7 @@ impl App {
             config_global_path: None,
             config_local_path: None,
             browse_mode: false,
+            wrap_width: None,
         }
     }
 
@@ -78,6 +80,13 @@ impl App {
     #[must_use]
     pub const fn with_browse_mode(mut self, enabled: bool) -> Self {
         self.browse_mode = enabled;
+        self
+    }
+
+    /// Set the maximum content wrap width in columns.
+    #[must_use]
+    pub const fn with_wrap_width(mut self, width: Option<u16>) -> Self {
+        self.wrap_width = width;
         self
     }
 

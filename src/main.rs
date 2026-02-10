@@ -70,6 +70,10 @@ struct Cli {
     #[arg(long, value_enum)]
     image_mode: Option<ImageMode>,
 
+    /// Maximum content width for word wrapping (in columns)
+    #[arg(long, value_name = "COLS")]
+    wrap_width: Option<u16>,
+
     /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
     save: bool,
@@ -317,6 +321,7 @@ fn main() -> Result<()> {
         .with_image_mode(effective.image_mode)
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
+        .with_wrap_width(effective.wrap_width)
         .with_config_paths(
             Some(global_path),
             if local_path.exists() {

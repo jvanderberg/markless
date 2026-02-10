@@ -1606,3 +1606,262 @@ fn test_link_at_column_returns_none_far_from_link() {
         "clicking 60 columns away from a 2-char link should return None"
     );
 }
+
+#[test]
+fn test_wrap_width_caps_layout_width() {
+    let md = "This is a very long paragraph that should wrap at the configured wrap width rather than the full terminal width when wrap_width is set.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (120, 24));
+    model.wrap_width = Some(60);
+    model.reflow_layout();
+
+    let paragraph_lines: Vec<_> = model
+        .document
+        .visible_lines(0, 50)
+        .iter()
+        .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+        .map(|l| l.content().chars().count())
+        .collect();
+
+    assert!(
+        paragraph_lines.len() > 1,
+        "expected text to wrap with wrap_width=60"
+    );
+    for len in &paragraph_lines {
+        assert!(*len <= 60, "line exceeds wrap_width: {} > 60", len);
+    }
+}
+
+#[test]
+fn test_wrap_width_none_uses_terminal_width() {
+    let md = "Short text.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = None;
+
+    // layout_width should equal document_content_width for 80-col terminal
+    let expected = crate::ui::document_content_width(80, false);
+    assert_eq!(model.layout_width(), expected);
+}
+
+#[test]
+fn test_wrap_width_larger_than_terminal_uses_terminal() {
+    let md = "Short text.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = Some(200); // larger than terminal
+
+    // Should still cap to terminal width
+    let terminal_width = crate::ui::document_content_width(80, false);
+    assert_eq!(model.layout_width(), terminal_width);
+}
+
+#[test]
+fn test_wrap_width_preserved_after_resize() {
+    let md = "This is a long paragraph that should always wrap at 40 columns regardless of how wide the terminal gets after a resize event.";
+    let doc = Document::parse_with_layout(md, 40).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = Some(40);
+    model.reflow_layout();
+
+    // Verify initial wrapping at 40
+    let lines_before: Vec<_> = model
+        .document
+        .visible_lines(0, 50)
+        .iter()
+        .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+        .map(|l| l.content().chars().count())
+        .collect();
+    assert!(lines_before.len() > 1, "should wrap at 40");
+    for len in &lines_before {
+        assert!(
+            *len <= 40,
+            "line exceeds wrap_width before resize: {len} > 40"
+        );
+    }
+
+    // Simulate resize to much wider terminal
+    model = update(model, Message::Resize(200, 50));
+
+    // wrap_width must still be 40 and lines must still respect it
+    assert_eq!(model.wrap_width, Some(40), "wrap_width lost after resize");
+    let lines_after: Vec<_> = model
+        .document
+        .visible_lines(0, 50)
+        .iter()
+        .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+        .map(|l| l.content().chars().count())
+        .collect();
+    assert!(lines_after.len() > 1, "should still wrap after resize");
+    for len in &lines_after {
+        assert!(
+            *len <= 40,
+            "line exceeds wrap_width after resize: {len} > 40"
+        );
+    }
+}
+
+#[test]
+fn test_wrap_width_stable_through_multiple_resizes() {
+    let md = "This is a fairly long paragraph of text that should consistently wrap at exactly 40 columns no matter how many times the terminal is resized to various widths both smaller and larger.";
+    let doc = Document::parse_with_layout(md, 40).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = Some(40);
+    model.reflow_layout();
+
+    // Resize through a series of widths: narrow, wide, narrow, wider
+    for &(width, height) in &[(60, 24), (200, 50), (45, 24), (300, 60)] {
+        model = update(model, Message::Resize(width, height));
+        assert_eq!(
+            model.wrap_width,
+            Some(40),
+            "wrap_width lost at {width}x{height}"
+        );
+        let lines: Vec<_> = model
+            .document
+            .visible_lines(0, 50)
+            .iter()
+            .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+            .map(|l| l.content().chars().count())
+            .collect();
+        assert!(lines.len() > 1, "should wrap at {width}x{height}");
+        for len in &lines {
+            assert!(
+                *len <= 40,
+                "line exceeds wrap_width at {width}x{height}: {len} > 40"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_wrap_width_with_toc_visible_after_resize() {
+    let md = "# Heading\n\nThis is a long paragraph that should always wrap at 40 columns even when the table of contents is visible and the terminal is resized.";
+    let doc = Document::parse_with_layout(md, 40).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = Some(40);
+    model.toc_visible = true;
+    model.reflow_layout();
+
+    // Resize wider
+    model = update(model, Message::Resize(200, 50));
+
+    assert_eq!(model.wrap_width, Some(40));
+    let lines: Vec<_> = model
+        .document
+        .visible_lines(0, 50)
+        .iter()
+        .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+        .map(|l| l.content().chars().count())
+        .collect();
+    for len in &lines {
+        assert!(
+            *len <= 40,
+            "line exceeds wrap_width with TOC visible: {len} > 40"
+        );
+    }
+}
+
+#[test]
+fn test_wrap_width_with_toc_toggle_after_resize() {
+    let md = "# Heading\n\nThis is a long paragraph that should always wrap at 40 columns even when the table of contents is toggled on and off during resizes.";
+    let doc = Document::parse_with_layout(md, 40).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (120, 24));
+    model.wrap_width = Some(40);
+    model.reflow_layout();
+
+    // Resize wide, then toggle TOC on
+    model = update(model, Message::Resize(200, 50));
+    model = update(model, Message::ToggleToc);
+
+    assert_eq!(model.wrap_width, Some(40));
+    let lines: Vec<_> = model
+        .document
+        .visible_lines(0, 50)
+        .iter()
+        .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+        .map(|l| l.content().chars().count())
+        .collect();
+    for len in &lines {
+        assert!(
+            *len <= 40,
+            "line exceeds wrap_width after TOC toggle: {len} > 40"
+        );
+    }
+}
+
+/// The initial document load must respect wrap_width immediately, not only
+/// after the first resize. This mimics the event_loop init path where the
+/// document is parsed at terminal width and wrap_width is set afterward.
+#[test]
+fn test_wrap_width_applied_at_init_before_any_resize() {
+    let md = "This paragraph is long enough to demonstrate that the initial document load must apply the wrap width immediately rather than waiting for the first resize event to trigger a reflow.";
+
+    // Mimic event_loop: parse at terminal content width (ignoring wrap_width)
+    let terminal_content_w = crate::ui::document_content_width(160, true);
+    let doc = Document::parse_with_layout(md, terminal_content_w).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (160, 40));
+    model.toc_visible = true;
+    model.wrap_width = Some(80);
+
+    // Immediately after init (no resize yet), text should respect wrap_width
+    model.reflow_layout();
+
+    let lines: Vec<_> = model
+        .document
+        .visible_lines(0, 50)
+        .iter()
+        .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+        .map(|l| l.content().chars().count())
+        .collect();
+    assert!(
+        lines.len() > 1,
+        "should wrap at 80, not {terminal_content_w}"
+    );
+    for len in &lines {
+        assert!(*len <= 80, "line exceeds wrap_width on init: {len} > 80");
+    }
+}
+
+/// Verify that layout_width stays exactly at wrap_width across all sizes
+/// and that the longest paragraph line matches it, not something smaller.
+#[test]
+fn test_wrap_width_is_exact_target_not_smaller() {
+    let md = "This is a sentence that is definitely much longer than forty characters so it must wrap at least once when the wrap width is set to forty columns.";
+    let doc = Document::parse_with_layout(md, 40).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = Some(40);
+    model.toc_visible = true;
+    model.browse_mode = true;
+
+    // Check at several terminal widths: the wrap target should always be 40
+    for &terminal_width in &[80u16, 120, 200, 300] {
+        model = update(model, Message::Resize(terminal_width, 40));
+        let lw = model.layout_width();
+        assert_eq!(
+            lw, 40,
+            "layout_width should be 40 at terminal {terminal_width}, got {lw}"
+        );
+
+        let max_para_len = model
+            .document
+            .visible_lines(0, 50)
+            .iter()
+            .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+            .map(|l| l.content().chars().count())
+            .max()
+            .unwrap_or(0);
+
+        // The longest line should be close to 40, not way below
+        assert!(
+            max_para_len > 30,
+            "longest paragraph line is only {max_para_len} chars at terminal \
+             {terminal_width} — text is wrapping too narrow (expected ~40)"
+        );
+        assert!(
+            max_para_len <= 40,
+            "longest paragraph line is {max_para_len} chars at terminal \
+             {terminal_width} — exceeds wrap_width 40"
+        );
+    }
+}

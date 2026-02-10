@@ -662,6 +662,22 @@ fn process_node<'a, S: BuildHasher>(
             }
         }
 
+        NodeValue::HtmlBlock(html_block) => {
+            for (src, alt) in extract_html_images(&html_block.literal) {
+                emit_html_image(ctx, &src, &alt);
+            }
+        }
+
+        NodeValue::HtmlInline(html) => {
+            for (src, alt) in extract_html_images(html) {
+                emit_html_image(ctx, &src, &alt);
+            }
+            // Also process children (nested inline HTML may wrap content)
+            for child in node.children() {
+                process_node(child, ctx, depth, list_marker.clone());
+            }
+        }
+
         _ => {
             // Process children for unhandled nodes
             for child in node.children() {
@@ -1685,6 +1701,88 @@ fn collect_text_footnote_links(text: &str, base_line: usize, links: &mut Vec<Lin
         }
         i += 1;
     }
+}
+
+/// Extract `(src, alt)` pairs from `<img>` tags in raw HTML.
+fn extract_html_images(html: &str) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    let lower = html.to_ascii_lowercase();
+    let mut search = 0;
+    while let Some(pos) = lower[search..].find("<img") {
+        let abs = search + pos;
+        // Find the end of this tag
+        let tag_end = match html[abs..].find('>') {
+            Some(e) => abs + e + 1,
+            None => break,
+        };
+        let tag = &html[abs..tag_end];
+        if let Some(src) = extract_html_attr(tag, "src") {
+            let alt = extract_html_attr(tag, "alt").unwrap_or_default();
+            results.push((src, alt));
+        }
+        search = tag_end;
+    }
+    results
+}
+
+/// Extract the value of an HTML attribute from a tag string.
+fn extract_html_attr(tag: &str, attr_name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let pattern = format!("{attr_name}=");
+    let pos = lower.find(&pattern)?;
+    let after = &tag[pos + pattern.len()..];
+    let trimmed = after.trim_start();
+    if let Some(content) = trimmed.strip_prefix('"') {
+        let end = content.find('"')?;
+        Some(content[..end].to_string())
+    } else if let Some(content) = trimmed.strip_prefix('\'') {
+        let end = content.find('\'')?;
+        Some(content[..end].to_string())
+    } else {
+        // Unquoted attribute value - take until whitespace or >
+        let end = trimmed
+            .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+            .unwrap_or(trimmed.len());
+        if end > 0 {
+            Some(trimmed[..end].to_string())
+        } else {
+            None
+        }
+    }
+}
+
+/// Emit an image placeholder for an HTML `<img>` tag.
+fn emit_html_image<S: BuildHasher>(ctx: &mut ParseContext<'_, S>, src: &str, alt: &str) {
+    let line_num = ctx.lines.len();
+    let label = format!("[Image: {}]", if alt.is_empty() { src } else { alt });
+    let height_lines = ctx.image_heights.get(src).copied().unwrap_or(1).max(1);
+    let has_caption = ctx.image_heights.contains_key(src) && !alt.is_empty();
+
+    ctx.images.push(ImageRef {
+        alt: alt.to_string(),
+        src: src.to_string(),
+        line_range: line_num + usize::from(has_caption)
+            ..line_num + usize::from(has_caption) + height_lines,
+    });
+
+    ctx.link_refs.push(LinkRef {
+        text: label.clone(),
+        url: src.to_string(),
+        line: line_num + usize::from(has_caption),
+    });
+
+    if has_caption {
+        ctx.lines
+            .push(RenderedLine::new(format!("    {alt}"), LineType::Image));
+    }
+    ctx.lines.push(RenderedLine::new(label, LineType::Image));
+
+    for _ in 1..height_lines {
+        ctx.lines
+            .push(RenderedLine::new(String::new(), LineType::Image));
+    }
+    ctx.lines
+        .push(RenderedLine::new(String::new(), LineType::Empty));
 }
 
 #[cfg(test)]
@@ -2886,5 +2984,143 @@ mod tests {
                 line_content
             );
         }
+    }
+
+    #[test]
+    fn test_html_img_tag_renders_as_image_placeholder() {
+        let md = r#"<img src="photo.png" alt="A photo">"#;
+        let doc = Document::parse(md).unwrap();
+        let image_lines: Vec<_> = (0..doc.line_count())
+            .filter_map(|i| doc.line_at(i))
+            .filter(|l| *l.line_type() == LineType::Image)
+            .collect();
+        assert!(
+            !image_lines.is_empty(),
+            "HTML <img> tag should produce Image lines"
+        );
+        assert!(
+            image_lines[0].content().contains("[Image:"),
+            "Image placeholder should contain [Image: prefix, got: {}",
+            image_lines[0].content()
+        );
+    }
+
+    #[test]
+    fn test_html_img_tag_populates_image_refs() {
+        let md = r#"<img src="photo.png" alt="A photo">"#;
+        let doc = Document::parse(md).unwrap();
+        assert!(
+            !doc.images().is_empty(),
+            "HTML <img> tag should register an image ref"
+        );
+        assert_eq!(doc.images()[0].src, "photo.png");
+        assert_eq!(doc.images()[0].alt, "A photo");
+    }
+
+    #[test]
+    fn test_html_img_without_alt_uses_src() {
+        let md = r#"<img src="diagram.svg">"#;
+        let doc = Document::parse(md).unwrap();
+        let image_lines: Vec<_> = (0..doc.line_count())
+            .filter_map(|i| doc.line_at(i))
+            .filter(|l| *l.line_type() == LineType::Image)
+            .collect();
+        assert!(!image_lines.is_empty());
+        assert!(
+            image_lines[0].content().contains("diagram.svg"),
+            "Should use src as fallback label"
+        );
+    }
+
+    #[test]
+    fn test_html_img_centered_with_div() {
+        let md = r#"<div align="center"><img src="logo.png" alt="Logo"></div>"#;
+        let doc = Document::parse(md).unwrap();
+        assert!(
+            !doc.images().is_empty(),
+            "Centered HTML <img> inside <div> should register an image ref"
+        );
+        assert_eq!(doc.images()[0].src, "logo.png");
+    }
+
+    #[test]
+    fn test_extract_html_images_basic() {
+        let results = extract_html_images(r#"<img src="a.png" alt="desc">"#);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "a.png");
+        assert_eq!(results[0].1, "desc");
+    }
+
+    #[test]
+    fn test_extract_html_images_no_alt() {
+        let results = extract_html_images(r#"<img src="b.png">"#);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "b.png");
+        assert_eq!(results[0].1, "");
+    }
+
+    #[test]
+    fn test_extract_html_images_single_quotes() {
+        let results = extract_html_images("<img src='c.png' alt='hello'>");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "c.png");
+        assert_eq!(results[0].1, "hello");
+    }
+
+    #[test]
+    fn test_extract_html_images_multiple() {
+        let html = r#"<img src="a.png"><br><img src="b.png" alt="B">"#;
+        let results = extract_html_images(html);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "a.png");
+        assert_eq!(results[1].0, "b.png");
+        assert_eq!(results[1].1, "B");
+    }
+
+    #[test]
+    fn test_extract_html_images_self_closing() {
+        let results = extract_html_images(r#"<img src="d.png" />"#);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "d.png");
+    }
+
+    #[test]
+    fn test_extract_html_attr_missing() {
+        assert!(extract_html_attr(r#"<img src="a.png">"#, "alt").is_none());
+    }
+
+    #[test]
+    fn test_extract_html_no_img_tag() {
+        let results = extract_html_images(r#"<div class="foo">hello</div>"#);
+        assert!(results.is_empty());
+    }
+
+    /// Test the exact example from issue #11: an `<img>` nested inside a
+    /// styled `<div>` block, which is a common pattern in GitHub READMEs.
+    #[test]
+    fn test_html_img_in_styled_div_issue_11() {
+        let md = r#"<div style="text-align: center;">
+  <img src="Emacs-rust-eglot-markdown.png" height=800>
+</div>"#;
+        let doc = Document::parse(md).unwrap();
+        assert!(
+            !doc.images().is_empty(),
+            "Should extract <img> nested inside a styled <div>"
+        );
+        assert_eq!(doc.images()[0].src, "Emacs-rust-eglot-markdown.png");
+
+        let image_lines: Vec<_> = (0..doc.line_count())
+            .filter_map(|i| doc.line_at(i))
+            .filter(|l| *l.line_type() == LineType::Image)
+            .collect();
+        assert!(
+            !image_lines.is_empty(),
+            "Should render an image placeholder line"
+        );
+        assert!(
+            image_lines[0]
+                .content()
+                .contains("Emacs-rust-eglot-markdown.png")
+        );
     }
 }
