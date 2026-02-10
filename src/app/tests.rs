@@ -1865,3 +1865,654 @@ fn test_wrap_width_is_exact_target_not_smaller() {
         );
     }
 }
+
+// --- Editor mode tests ---
+
+#[test]
+fn test_enter_edit_mode_populates_buffer() {
+    let model = create_test_model();
+    assert!(!model.editor_mode);
+    assert!(model.editor_buffer.is_none());
+
+    let model = update(model, Message::EnterEditMode);
+    assert!(model.editor_mode);
+    assert!(model.editor_buffer.is_some());
+}
+
+#[test]
+fn test_enter_edit_mode_loads_source() {
+    let model = create_test_model();
+    let source = model.document.source().to_string();
+
+    let model = update(model, Message::EnterEditMode);
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert_eq!(buf.text(), source);
+}
+
+#[test]
+fn test_exit_edit_mode_clears_buffer() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    assert!(model.editor_mode);
+
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+    assert!(model.editor_buffer.is_none());
+}
+
+#[test]
+fn test_exit_edit_mode_after_save_keeps_changes() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Test\n\nHello world").unwrap();
+
+    let doc = Document::parse("# Test\n\nHello world").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // Save via side effect (marks buffer clean)
+    let app = App::new(file_path);
+    let mut model = model;
+    let mut watcher = None;
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(!model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // Now Esc exits immediately (buffer is clean) and re-parses
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+    assert!(model.document.source().contains('X'));
+}
+
+#[test]
+fn test_exit_edit_mode_discard_reverts_document() {
+    let model = create_test_model();
+    let original_source = model.document.source().to_string();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // Discard: Esc twice
+    let model = update(model, Message::ExitEditMode);
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+    // Document should have original source, NOT the edited version
+    assert_eq!(model.document.source(), original_source);
+}
+
+#[test]
+fn test_editor_insert_char() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('Z'));
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.is_dirty());
+    assert!(buf.text().starts_with('Z'));
+}
+
+#[test]
+fn test_editor_delete_back() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('A'));
+    let model = update(model, Message::EditorInsertChar('B'));
+    let model = update(model, Message::EditorDeleteBack);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.text().starts_with('A'));
+    assert!(!buf.text().starts_with("AB"));
+}
+
+#[test]
+fn test_editor_split_line() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let line_count_before = model.editor_buffer.as_ref().unwrap().line_count();
+
+    let model = update(model, Message::EditorSplitLine);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert_eq!(buf.line_count(), line_count_before + 1);
+}
+
+#[test]
+fn test_editor_cursor_movement() {
+    use crate::editor::Direction;
+
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // Move right, then check cursor moved
+    let model = update(model, Message::EditorMoveCursor(Direction::Right));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert_eq!(cursor.col, 1);
+}
+
+#[test]
+fn test_editor_move_home_end() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let model = update(model, Message::EditorMoveEnd);
+    let end_col = model.editor_buffer.as_ref().unwrap().cursor().col;
+    assert!(end_col > 0);
+
+    let model = update(model, Message::EditorMoveHome);
+    let col = model.editor_buffer.as_ref().unwrap().cursor().col;
+    assert_eq!(col, 0);
+}
+
+#[test]
+fn test_editor_scroll_keeps_cursor_visible() {
+    let mut md = String::new();
+    for i in 1..=50 {
+        md.push_str(&format!("Line {i}\n"));
+    }
+    let doc = Document::parse(&md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 10));
+    let model = update(model, Message::EnterEditMode);
+    assert_eq!(model.editor_scroll_offset, 0);
+
+    // Move cursor down many lines
+    let mut model = model;
+    for _ in 0..20 {
+        model = update(
+            model,
+            Message::EditorMoveCursor(crate::editor::Direction::Down),
+        );
+    }
+    // Cursor should be visible — scroll offset should have adjusted
+    let cursor_line = model.editor_buffer.as_ref().unwrap().cursor().line;
+    assert_eq!(cursor_line, 20);
+    assert!(model.editor_scroll_offset > 0);
+    assert!(cursor_line >= model.editor_scroll_offset);
+}
+
+#[test]
+fn test_editor_scroll_up_down() {
+    // Use a long document so scrolling isn't clamped too early
+    let model = create_long_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let model = update(model, Message::EditorScrollDown(5));
+    assert_eq!(model.editor_scroll_offset, 5);
+
+    let model = update(model, Message::EditorScrollUp(3));
+    assert_eq!(model.editor_scroll_offset, 2);
+
+    let model = update(model, Message::EditorScrollUp(10));
+    assert_eq!(model.editor_scroll_offset, 0);
+}
+
+#[test]
+fn test_enter_edit_mode_is_idempotent() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // Entering edit mode again should not reset the buffer
+    let model = update(model, Message::EnterEditMode);
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.text().starts_with('X'));
+}
+
+// --- Editor input mapping tests ---
+
+#[test]
+fn test_e_key_enters_edit_mode() {
+    let model = create_test_model();
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EnterEditMode));
+}
+
+#[test]
+fn test_editor_mode_esc_exits() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::ExitEditMode));
+}
+
+#[test]
+fn test_editor_mode_char_inserts() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorInsertChar('a')));
+}
+
+#[test]
+fn test_editor_mode_arrows_move_cursor() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(
+        msg,
+        Some(Message::EditorMoveCursor(crate::editor::Direction::Left))
+    );
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(
+        msg,
+        Some(Message::EditorMoveCursor(crate::editor::Direction::Right))
+    );
+}
+
+#[test]
+fn test_editor_mode_ctrl_s_saves() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorSave));
+}
+
+#[test]
+fn test_editor_mode_enter_splits_line() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorSplitLine));
+}
+
+#[test]
+fn test_editor_mode_backspace_deletes_back() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorDeleteBack));
+}
+
+#[test]
+fn test_editor_mode_ctrl_left_moves_word_left() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorMoveWordLeft));
+}
+
+#[test]
+fn test_editor_mode_home_end() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorMoveHome));
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorMoveEnd));
+}
+
+#[test]
+fn test_editor_mode_mouse_scroll() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let msg = App::handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        },
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorScrollDown(3)));
+
+    let msg = App::handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        },
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorScrollUp(3)));
+}
+
+#[test]
+fn test_editor_save_writes_file() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Hello\n\nOriginal content").unwrap();
+
+    let doc = Document::parse("# Hello\n\nOriginal content").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    // Enter edit mode
+    model = update(model, Message::EnterEditMode);
+
+    // Type some text at the beginning
+    model = update(model, Message::EditorInsertChar('X'));
+    assert!(model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // Save via side effect
+    let app = App::new(file_path.clone());
+    let mut watcher = None;
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    // Buffer should be marked clean
+    assert!(!model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // File should contain the modified content
+    let saved = std::fs::read_to_string(&file_path).unwrap();
+    assert!(saved.starts_with('X'));
+}
+
+#[test]
+fn test_editor_save_no_changes_shows_toast() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Hello").unwrap();
+
+    let doc = Document::parse("# Hello").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    model = update(model, Message::EnterEditMode);
+
+    // Save without any edits
+    let app = App::new(file_path);
+    let mut watcher = None;
+    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    // Should show "No changes" toast
+    let toast = model.active_toast();
+    assert!(toast.is_some());
+    assert!(toast.unwrap().0.contains("No changes"));
+}
+
+// --- Dirty buffer protection tests ---
+
+#[test]
+fn test_quit_with_dirty_editor_shows_warning() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // First quit should warn, not quit
+    let model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+    assert!(model.quit_confirmed);
+}
+
+#[test]
+fn test_quit_twice_with_dirty_editor_quits() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    let model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+
+    let model = update(model, Message::Quit);
+    assert!(model.should_quit);
+}
+
+#[test]
+fn test_quit_clean_editor_quits_immediately() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // No edits — quit should work immediately
+    let model = update(model, Message::Quit);
+    assert!(model.should_quit);
+}
+
+#[test]
+fn test_quit_confirmation_resets_on_other_action() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // First quit warns
+    let model = update(model, Message::Quit);
+    assert!(model.quit_confirmed);
+
+    // Typing resets the confirmation
+    let model = update(model, Message::EditorInsertChar('Y'));
+    assert!(!model.quit_confirmed);
+
+    // Must press q twice again
+    let model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+}
+
+#[test]
+fn test_exit_edit_mode_dirty_warns_first() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // First Esc warns
+    let model = update(model, Message::ExitEditMode);
+    assert!(model.editor_mode);
+    assert!(model.exit_confirmed);
+
+    // Second Esc actually exits
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+}
+
+#[test]
+fn test_exit_edit_mode_clean_exits_immediately() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // No edits — Esc should exit immediately
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+}
+
+// --- Scroll position sync tests ---
+
+#[test]
+fn test_enter_edit_mode_from_scrolled_position() {
+    let model = create_long_test_model();
+    // Scroll to middle
+    let model = update(model, Message::GoToBottom);
+    let vp_offset = model.viewport.offset();
+    assert!(vp_offset > 0, "Should be scrolled");
+
+    let model = update(model, Message::EnterEditMode);
+    // Editor should not start at line 0
+    assert!(
+        model.editor_scroll_offset > 0,
+        "Editor should scroll to approximate position, got {}",
+        model.editor_scroll_offset
+    );
+}
+
+#[test]
+fn test_enter_edit_mode_from_top_stays_at_top() {
+    let model = create_test_model();
+    assert_eq!(model.viewport.offset(), 0);
+
+    let model = update(model, Message::EnterEditMode);
+    assert_eq!(model.editor_scroll_offset, 0);
+    assert_eq!(model.editor_buffer.as_ref().unwrap().cursor().line, 0);
+}
+
+#[test]
+fn test_exit_edit_mode_restores_scroll_position() {
+    let model = create_long_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // Scroll editor to the middle
+    let mut model = model;
+    for _ in 0..30 {
+        model = update(
+            model,
+            Message::EditorMoveCursor(crate::editor::Direction::Down),
+        );
+    }
+    assert!(model.editor_scroll_offset > 0);
+
+    // Exit edit mode
+    let model = update(model, Message::ExitEditMode);
+    // View should be scrolled to approximately the same position
+    assert!(
+        model.viewport.offset() > 0,
+        "Viewport should be scrolled after exiting editor"
+    );
+}
+
+#[test]
+fn test_discard_edit_then_reenter_shows_original() {
+    let model = create_test_model();
+    let original_source = model.document.source().to_string();
+
+    // Enter edit, make a change
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('Z'));
+
+    // Discard: Esc twice (first warns, second discards)
+    let model = update(model, Message::ExitEditMode);
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+
+    // Document should have the ORIGINAL source, not the edited version
+    assert_eq!(model.document.source(), original_source);
+
+    // Re-enter edit mode — buffer should also have the original source
+    let model = update(model, Message::EnterEditMode);
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(
+        !buf.text().starts_with('Z'),
+        "Re-entered editor should show original text, not discarded edits"
+    );
+    assert_eq!(buf.text(), original_source);
+}
+
+// --- Editor mouse click tests ---
+
+#[test]
+fn test_editor_mouse_click_positions_cursor() {
+    let md = "Hello world\nSecond line\nThird line\n";
+    let doc = Document::parse(md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    let gutter_width = crate::ui::line_number_width(buf.line_count()) as u16 + 1; // +1 space
+
+    // Click on line 1 (0-indexed), col 3
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: gutter_width + 3,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::EditorMoveTo(1, 3)));
+
+    // Apply and verify cursor position
+    let model = update(model, Message::EditorMoveTo(1, 3));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert_eq!(cursor.line, 1);
+    assert_eq!(cursor.col, 3);
+}
+
+#[test]
+fn test_editor_mouse_click_with_scroll_offset() {
+    let mut md = String::new();
+    for i in 1..=50 {
+        md.push_str(&format!("Line {i}\n"));
+    }
+    let doc = Document::parse(&md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    // Scroll down 10 lines
+    let model = update(model, Message::EditorScrollDown(10));
+    assert_eq!(model.editor_scroll_offset, 10);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    let gutter_width = crate::ui::line_number_width(buf.line_count()) as u16 + 1;
+
+    // Click on row 5 of the viewport — should map to line 15 (scroll_offset=10 + row=5)
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: gutter_width + 2,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::EditorMoveTo(15, 2)));
+}
+
+#[test]
+fn test_editor_mouse_click_clamps_past_end() {
+    let md = "Short\n";
+    let doc = Document::parse(md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    // Click at a column past the end of the line — move_to should clamp
+    let model = update(model, Message::EditorMoveTo(0, 999));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert_eq!(cursor.line, 0);
+    // Should be clamped to line length
+    assert!(cursor.col <= 5);
+
+    // Click past the last line — move_to should clamp
+    let model = update(model, Message::EditorMoveTo(999, 0));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert!(cursor.line < 999);
+}
+
+#[test]
+fn test_editor_mouse_click_in_gutter() {
+    let md = "Hello world\nSecond line\n";
+    let doc = Document::parse(md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    // Click in the gutter area (column 0) — should set col to 0
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 0,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::EditorMoveTo(1, 0)));
+}

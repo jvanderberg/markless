@@ -39,6 +39,7 @@
 pub mod app;
 pub mod config;
 pub mod document;
+pub mod editor;
 pub mod highlight;
 pub mod image;
 pub mod input;

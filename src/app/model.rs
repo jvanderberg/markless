@@ -10,6 +10,7 @@ use crate::config::ImageMode;
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::document::Document;
+use crate::editor::EditorBuffer;
 use crate::image::ImageLoader;
 use crate::ui::viewport::Viewport;
 
@@ -134,6 +135,16 @@ pub struct Model {
     pub browse_dir: PathBuf,
     /// Directory entries shown in browse-mode TOC
     pub browse_entries: Vec<DirEntry>,
+    /// Whether the editor is active (edit mode vs view mode)
+    pub editor_mode: bool,
+    /// The editor text buffer (populated when entering edit mode)
+    pub editor_buffer: Option<EditorBuffer>,
+    /// Scroll offset for the editor viewport (line index of first visible line)
+    pub editor_scroll_offset: usize,
+    /// Set after first quit attempt with unsaved editor changes; allows second quit to proceed
+    pub quit_confirmed: bool,
+    /// Set after first Esc press with unsaved editor changes; allows second Esc to discard
+    pub exit_confirmed: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -142,6 +153,7 @@ impl std::fmt::Debug for Model {
             .field("file_path", &self.file_path)
             .field("toc_visible", &self.toc_visible)
             .field("watch_enabled", &self.watch_enabled)
+            .field("editor_mode", &self.editor_mode)
             .finish_non_exhaustive()
     }
 }
@@ -193,6 +205,11 @@ impl Model {
             browse_mode: false,
             browse_dir: base_dir,
             browse_entries: Vec::new(),
+            editor_mode: false,
+            editor_buffer: None,
+            editor_scroll_offset: 0,
+            quit_confirmed: false,
+            exit_confirmed: false,
         }
     }
 
@@ -595,6 +612,15 @@ impl Model {
             .map(|(idx, e)| (idx, e.path.clone()))
     }
 
+    /// Whether the editor has unsaved changes.
+    pub fn editor_is_dirty(&self) -> bool {
+        self.editor_mode
+            && self
+                .editor_buffer
+                .as_ref()
+                .is_some_and(crate::editor::EditorBuffer::is_dirty)
+    }
+
     pub(super) fn show_toast(&mut self, level: ToastLevel, message: impl Into<String>) {
         self.toast = Some(Toast {
             level,
@@ -825,6 +851,11 @@ impl Default for Model {
             browse_mode: false,
             browse_dir: PathBuf::from("."),
             browse_entries: Vec::new(),
+            editor_mode: false,
+            editor_buffer: None,
+            editor_scroll_offset: 0,
+            quit_confirmed: false,
+            exit_confirmed: false,
         }
     }
 }

@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Message, Model};
+use crate::editor::Direction;
 
 use super::event_loop::ResizeDebouncer;
 
@@ -64,6 +65,33 @@ impl App {
             if matches!(mouse.kind, MouseEventKind::Moved) {
                 return None;
             }
+        }
+
+        // Editor mode: handle scroll wheel and mouse click
+        if model.editor_mode {
+            return match mouse.kind {
+                MouseEventKind::ScrollDown => Some(Message::EditorScrollDown(3)),
+                MouseEventKind::ScrollUp => Some(Message::EditorScrollUp(3)),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let buf = model.editor_buffer.as_ref()?;
+                    let toast_active = model.active_toast().is_some();
+                    let footer_rows = 1 + u16::from(toast_active);
+                    let editor_area_height = model
+                        .viewport
+                        .height()
+                        .saturating_add(1)
+                        .saturating_sub(footer_rows);
+                    let gutter_width = crate::ui::line_number_width(buf.line_count()) + 1;
+                    let clicked_line = model.editor_scroll_offset + mouse.row as usize;
+                    let clicked_col = (mouse.column as usize).saturating_sub(gutter_width as usize);
+                    if mouse.row < editor_area_height {
+                        Some(Message::EditorMoveTo(clicked_line, clicked_col))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
         }
 
         let doc_area = document_mouse_area(model);
@@ -222,6 +250,10 @@ impl App {
             };
         }
 
+        if model.editor_mode {
+            return Self::handle_editor_key(key);
+        }
+
         if let Some(active_query) = model.search_query.as_ref() {
             return match key.code {
                 KeyCode::Esc => Some(Message::ClearSearch),
@@ -319,6 +351,9 @@ impl App {
             KeyCode::Char('B') => Some(Message::EnterBrowseMode),
             KeyCode::Char('F') => Some(Message::EnterFileMode),
 
+            // Editor
+            KeyCode::Char('e') => Some(Message::EnterEditMode),
+
             // File
             KeyCode::Char('?') | KeyCode::F(1) => Some(Message::ToggleHelp),
 
@@ -330,6 +365,43 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Message::Quit)
             }
+
+            _ => None,
+        }
+    }
+
+    const fn handle_editor_key(key: event::KeyEvent) -> Option<Message> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            // Exit edit mode
+            KeyCode::Esc => Some(Message::ExitEditMode),
+
+            // Save
+            KeyCode::Char('s') if ctrl => Some(Message::EditorSave),
+
+            // Navigation with Ctrl
+            KeyCode::Left if ctrl => Some(Message::EditorMoveWordLeft),
+            KeyCode::Right if ctrl => Some(Message::EditorMoveWordRight),
+            KeyCode::Home if ctrl => Some(Message::EditorMoveToStart),
+            KeyCode::End if ctrl => Some(Message::EditorMoveToEnd),
+
+            // Basic navigation
+            KeyCode::Left => Some(Message::EditorMoveCursor(Direction::Left)),
+            KeyCode::Right => Some(Message::EditorMoveCursor(Direction::Right)),
+            KeyCode::Up => Some(Message::EditorMoveCursor(Direction::Up)),
+            KeyCode::Down => Some(Message::EditorMoveCursor(Direction::Down)),
+            KeyCode::Home => Some(Message::EditorMoveHome),
+            KeyCode::End => Some(Message::EditorMoveEnd),
+            KeyCode::PageUp => Some(Message::EditorScrollUp(20)),
+            KeyCode::PageDown => Some(Message::EditorScrollDown(20)),
+
+            // Editing
+            KeyCode::Enter => Some(Message::EditorSplitLine),
+            KeyCode::Backspace => Some(Message::EditorDeleteBack),
+            KeyCode::Delete => Some(Message::EditorDeleteForward),
+            KeyCode::Tab => Some(Message::EditorInsertChar('\t')),
+            KeyCode::Char(c) if !ctrl => Some(Message::EditorInsertChar(c)),
 
             _ => None,
         }

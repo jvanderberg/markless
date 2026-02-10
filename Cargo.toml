@@ -57,6 +57,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Unicode handling
 unicode-width = "0.2"
+ropey = "1.6.1"
 
 [dev-dependencies]
 # Testing

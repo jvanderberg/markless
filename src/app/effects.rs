@@ -73,6 +73,9 @@ impl App {
             Message::TocCollapse if model.browse_mode => {
                 Self::browse_navigate_parent(model);
             }
+            Message::EditorSave => {
+                Self::save_editor_buffer(model);
+            }
             Message::EnterBrowseMode => {
                 let dir = model
                     .file_path
@@ -281,6 +284,27 @@ impl App {
                 model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
             } else {
                 model.toc_selected = Some(idx);
+            }
+        }
+    }
+
+    fn save_editor_buffer(model: &mut Model) {
+        let Some(buf) = &mut model.editor_buffer else {
+            return;
+        };
+        if !buf.is_dirty() {
+            model.show_toast(ToastLevel::Info, "No changes to save");
+            return;
+        }
+        let text = buf.text();
+        let path = model.file_path.clone();
+        match std::fs::write(&path, &text) {
+            Ok(()) => {
+                buf.mark_clean();
+                model.show_toast(ToastLevel::Info, format!("Saved {}", path.display()));
+            }
+            Err(err) => {
+                model.show_toast(ToastLevel::Error, format!("Save failed: {err}"));
             }
         }
     }

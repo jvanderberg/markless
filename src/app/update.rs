@@ -1,5 +1,6 @@
 use crate::app::Model;
 use crate::app::model::{LineSelection, SelectionState};
+use crate::editor::{Direction, EditorBuffer};
 
 /// All possible events and actions in the application.
 ///
@@ -102,6 +103,42 @@ pub enum Message {
     /// Switch to browse mode (TOC shows directory listing)
     EnterBrowseMode,
 
+    // Editor
+    /// Enter edit mode (load source into editor buffer)
+    EnterEditMode,
+    /// Exit edit mode (return to view mode)
+    ExitEditMode,
+    /// Insert a character at the cursor
+    EditorInsertChar(char),
+    /// Delete character before cursor (Backspace)
+    EditorDeleteBack,
+    /// Delete character at cursor (Delete)
+    EditorDeleteForward,
+    /// Split line at cursor (Enter)
+    EditorSplitLine,
+    /// Move cursor in a direction
+    EditorMoveCursor(Direction),
+    /// Move cursor to beginning of line (Home)
+    EditorMoveHome,
+    /// Move cursor to end of line (End)
+    EditorMoveEnd,
+    /// Move cursor one word left (Ctrl+Left)
+    EditorMoveWordLeft,
+    /// Move cursor one word right (Ctrl+Right)
+    EditorMoveWordRight,
+    /// Move cursor to start of buffer (Ctrl+Home)
+    EditorMoveToStart,
+    /// Move cursor to end of buffer (Ctrl+End)
+    EditorMoveToEnd,
+    /// Save editor buffer to file
+    EditorSave,
+    /// Scroll editor viewport up by n lines
+    EditorScrollUp(usize),
+    /// Move cursor to absolute position (line, col) — e.g. from mouse click
+    EditorMoveTo(usize, usize),
+    /// Scroll editor viewport down by n lines
+    EditorScrollDown(usize),
+
     // Window
     /// Terminal resized
     Resize(u16, u16),
@@ -130,6 +167,14 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             | Message::TocExpand
             | Message::HoverLink(_)
     );
+    // Reset confirmation flags on any action other than the confirmed one
+    if !matches!(msg, Message::Quit) {
+        model.quit_confirmed = false;
+    }
+    if !matches!(msg, Message::ExitEditMode) {
+        model.exit_confirmed = false;
+    }
+
     match msg {
         // Navigation
         Message::ScrollUp(n) => {
@@ -262,7 +307,8 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         | Message::TocExpand
         | Message::FileChanged
         | Message::ForceReload
-        | Message::Redraw => {}
+        | Message::Redraw
+        | Message::EditorSave => {}
 
         // Search
         Message::StartSearch => {
@@ -356,6 +402,158 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             model.clear_selection();
         }
 
+        // Editor
+        Message::EnterEditMode => {
+            if !model.editor_mode {
+                let source = model.document.source().to_string();
+                let mut buf = EditorBuffer::from_text(&source);
+
+                // Approximate editor scroll from viewport position
+                let vp_offset = model.viewport.offset();
+                let rendered_total = model.document.line_count().max(1);
+                let source_lines = buf.line_count();
+                // Map rendered-line offset to source-line offset proportionally
+                let target_line = if rendered_total > 1 && vp_offset > 0 {
+                    (vp_offset * source_lines.saturating_sub(1)) / rendered_total.saturating_sub(1)
+                } else {
+                    0
+                };
+                buf.move_to(target_line, 0);
+                model.editor_scroll_offset = target_line;
+
+                model.editor_buffer = Some(buf);
+                model.editor_mode = true;
+            }
+        }
+        Message::ExitEditMode => {
+            if model.editor_mode {
+                // Warn about unsaved changes on first Esc press
+                if model.editor_is_dirty() && !model.exit_confirmed {
+                    model.show_toast(
+                        crate::app::ToastLevel::Warning,
+                        "Unsaved changes! Press Esc again to discard, or Ctrl+S to save",
+                    );
+                    model.exit_confirmed = true;
+                    return model;
+                }
+
+                // Remember scroll position ratio before dropping the buffer
+                let scroll_ratio = model.editor_buffer.as_ref().map(|buf| {
+                    let source_total = buf.line_count().saturating_sub(1).max(1);
+                    (model.editor_scroll_offset, source_total)
+                });
+
+                // Only update the document if the buffer was saved (clean).
+                // If dirty, the user is discarding — keep the original document.
+                let is_clean = model.editor_buffer.as_ref().is_some_and(|b| !b.is_dirty());
+                if is_clean && let Some(buf) = &model.editor_buffer {
+                    let text = buf.text();
+                    if let Ok(doc) = crate::document::Document::parse_with_all_options(
+                        &text,
+                        model.layout_width(),
+                        &std::collections::HashMap::new(),
+                        model.should_render_mermaid_as_images(),
+                    ) {
+                        model.document = doc;
+                        model.viewport.set_total_lines(model.document.line_count());
+                    }
+                }
+                model.editor_mode = false;
+                model.editor_buffer = None;
+                model.editor_scroll_offset = 0;
+
+                // Map source scroll position to rendered line position
+                if let Some((src_offset, src_total)) = scroll_ratio
+                    && src_offset > 0
+                {
+                    let rendered_total = model.document.line_count().saturating_sub(1).max(1);
+                    let target = (src_offset * rendered_total) / src_total;
+                    model.viewport.go_to_line(target);
+                }
+            }
+        }
+        Message::EditorInsertChar(ch) => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.insert_char(ch);
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorDeleteBack => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.delete_back();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorDeleteForward => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.delete_forward();
+            }
+        }
+        Message::EditorSplitLine => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.split_line();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveCursor(dir) => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_cursor(dir);
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveHome => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_home();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveEnd => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_end();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveWordLeft => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_word_left();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveWordRight => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_word_right();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveToStart => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_to_start();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveToEnd => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_to_end();
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorMoveTo(line, col) => {
+            if let Some(buf) = &mut model.editor_buffer {
+                buf.move_to(line, col);
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorScrollUp(n) => {
+            model.editor_scroll_offset = model.editor_scroll_offset.saturating_sub(n);
+        }
+        Message::EditorScrollDown(n) => {
+            let max = model
+                .editor_buffer
+                .as_ref()
+                .map_or(0, |buf| buf.line_count().saturating_sub(1));
+            model.editor_scroll_offset = (model.editor_scroll_offset + n).min(max);
+        }
+
         // Browse mode
         Message::EnterFileMode => {
             model.browse_mode = false;
@@ -377,7 +575,15 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         }
         // Application
         Message::Quit => {
-            model.should_quit = true;
+            if model.editor_is_dirty() && !model.quit_confirmed {
+                model.show_toast(
+                    crate::app::ToastLevel::Warning,
+                    "Unsaved changes! Press q again to quit, or Ctrl+S to save",
+                );
+                model.quit_confirmed = true;
+            } else {
+                model.should_quit = true;
+            }
         }
     }
     if should_sync_toc && model.toc_visible && !model.browse_mode {
@@ -407,6 +613,25 @@ pub(super) fn closest_heading_to_line(
         Some(prev_idx)
     } else {
         Some(next)
+    }
+}
+
+/// Ensure the editor cursor line is visible in the viewport.
+fn editor_ensure_cursor_visible(model: &mut Model) {
+    let Some(buf) = &model.editor_buffer else {
+        return;
+    };
+    let cursor_line = buf.cursor().line;
+    let visible_height = usize::from(model.viewport.height().saturating_sub(1));
+    if visible_height == 0 {
+        model.editor_scroll_offset = cursor_line;
+        return;
+    }
+
+    if cursor_line < model.editor_scroll_offset {
+        model.editor_scroll_offset = cursor_line;
+    } else if cursor_line >= model.editor_scroll_offset + visible_height {
+        model.editor_scroll_offset = cursor_line + 1 - visible_height;
     }
 }
 

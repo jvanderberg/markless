@@ -934,3 +934,97 @@ fn test_image_rescales_on_viewport_resize() {
         new_width
     );
 }
+
+#[test]
+fn test_editor_mode_renders_source_text() {
+    let md = "# Hello\n\nSome paragraph text";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    // Should show the raw source text, not rendered markdown
+    assert!(
+        content.contains("# Hello"),
+        "Editor should show raw markdown source"
+    );
+}
+
+#[test]
+fn test_editor_mode_shows_line_numbers() {
+    let md = "line one\nline two\nline three";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let first_row: String = (0..buffer.area.width)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol().to_string())
+        .collect();
+    // First row should contain line number "1"
+    assert!(
+        first_row.starts_with("1 "),
+        "Should show line number: got '{first_row}'"
+    );
+}
+
+#[test]
+fn test_editor_status_bar_shows_edit_indicator() {
+    let md = "# Test";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    // Last row should be the status bar
+    let last_row: String = (0..buffer.area.width)
+        .map(|x| {
+            buffer
+                .cell((x, buffer.area.height - 1))
+                .unwrap()
+                .symbol()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        last_row.contains("EDIT"),
+        "Status bar should show EDIT: got '{last_row}'"
+    );
+}
+
+#[test]
+fn test_editor_status_bar_shows_modified_after_edit() {
+    let md = "# Test";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    model = crate::app::update(model, crate::app::Message::EditorInsertChar('X'));
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let last_row: String = (0..buffer.area.width)
+        .map(|x| {
+            buffer
+                .cell((x, buffer.area.height - 1))
+                .unwrap()
+                .symbol()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        last_row.contains("modified"),
+        "Status bar should show modified: got '{last_row}'"
+    );
+}

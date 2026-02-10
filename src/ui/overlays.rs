@@ -109,6 +109,11 @@ Browse
   F                   Focus on file only
   Backspace           Parent directory (in TOC)
 
+Editor
+  e                   Enter edit mode
+  Esc                 Return to view mode
+  Ctrl-s              Save file
+
 Other
   w                   Toggle watch
   r or R              Reload file
