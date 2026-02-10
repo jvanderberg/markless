@@ -3094,4 +3094,33 @@ mod tests {
         let results = extract_html_images(r#"<div class="foo">hello</div>"#);
         assert!(results.is_empty());
     }
+
+    /// Test the exact example from issue #11: an `<img>` nested inside a
+    /// styled `<div>` block, which is a common pattern in GitHub READMEs.
+    #[test]
+    fn test_html_img_in_styled_div_issue_11() {
+        let md = r#"<div style="text-align: center;">
+  <img src="Emacs-rust-eglot-markdown.png" height=800>
+</div>"#;
+        let doc = Document::parse(md).unwrap();
+        assert!(
+            !doc.images().is_empty(),
+            "Should extract <img> nested inside a styled <div>"
+        );
+        assert_eq!(doc.images()[0].src, "Emacs-rust-eglot-markdown.png");
+
+        let image_lines: Vec<_> = (0..doc.line_count())
+            .filter_map(|i| doc.line_at(i))
+            .filter(|l| *l.line_type() == LineType::Image)
+            .collect();
+        assert!(
+            !image_lines.is_empty(),
+            "Should render an image placeholder line"
+        );
+        assert!(
+            image_lines[0]
+                .content()
+                .contains("Emacs-rust-eglot-markdown.png")
+        );
+    }
 }

@@ -114,7 +114,23 @@ impl App {
         // Load the document
         let read_scope = crate::perf::scope("app.read_file");
         let toc_visible = self.toc_visible || self.browse_mode;
-        let layout_width = crate::ui::document_content_width(size.width, toc_visible);
+        let terminal_content_width = crate::ui::document_content_width(size.width, toc_visible);
+        let layout_width = match self.wrap_width {
+            Some(w) if w > 0 => terminal_content_width.min(w),
+            _ => terminal_content_width,
+        };
+        crate::perf::log_event(
+            "init.layout",
+            format!(
+                "terminal={}x{} toc_visible={} content_w={} wrap_width={:?} layout_width={}",
+                size.width,
+                size.height,
+                toc_visible,
+                terminal_content_width,
+                self.wrap_width,
+                layout_width
+            ),
+        );
         let (document, effective_file) = if let Some(ref file) = initial_file {
             let raw_bytes = std::fs::read(file)?;
             let doc = crate::document::prepare_document_from_bytes(file, raw_bytes, layout_width);

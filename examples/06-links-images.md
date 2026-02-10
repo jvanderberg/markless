@@ -69,3 +69,32 @@ Here is some text with an inline image ![icon](icon.png) embedded in the middle 
 ## Multiple Images
 
 ![Sample](sample-image.png) ![Square](square.png) ![Icon](icon.png)
+
+## HTML Images
+
+Basic HTML image tag:
+
+<img src="sample-image.png" alt="Sample image via HTML">
+
+Self-closing with explicit alt text:
+
+<img src="icon.png" alt="App icon" />
+
+Image inside a centered div (common in GitHub READMEs):
+
+<div style="text-align: center;">
+  <img src="banner.png" alt="Centered banner">
+</div>
+
+Image with height attribute (from issue #11):
+
+<div style="text-align: center;">
+  <img src="portrait.png" height=800>
+</div>
+
+Multiple HTML images in one block:
+
+<p>
+  <img src="square.png" alt="First">
+  <img src="icon.png" alt="Second">
+</p>

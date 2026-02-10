@@ -456,10 +456,11 @@ impl Model {
         if self.document.is_hex_mode() {
             return;
         }
+        let width = self.layout_width();
         let mermaid = self.should_render_mermaid_as_images();
         if let Ok(document) = Document::parse_with_all_options(
             self.document.source(),
-            self.layout_width(),
+            width,
             &self.image_layout_heights,
             mermaid,
         ) {
