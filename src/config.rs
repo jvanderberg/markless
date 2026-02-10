@@ -46,6 +46,7 @@ pub struct ConfigFlags {
     pub image_mode: Option<ImageMode>,
     pub theme: Option<ThemeMode>,
     pub render_debug_log: Option<PathBuf>,
+    pub wrap_width: Option<u16>,
 }
 
 impl ConfigFlags {
@@ -64,6 +65,7 @@ impl ConfigFlags {
                 .render_debug_log
                 .clone()
                 .or_else(|| self.render_debug_log.clone()),
+            wrap_width: other.wrap_width.or(self.wrap_width),
         }
     }
 }
@@ -170,6 +172,9 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     } else if flags.force_half_cell {
         lines.push("--force-half-cell".to_string());
     }
+    if let Some(width) = flags.wrap_width {
+        lines.push(format!("--wrap-width {width}"));
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create config dir {}", parent.display()))?;
@@ -228,6 +233,13 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
             }
         } else if let Some(value) = token.strip_prefix("--render-debug-log=") {
             flags.render_debug_log = Some(PathBuf::from(value));
+        } else if token == "--wrap-width" {
+            if let Some(next) = tokens.get(i + 1) {
+                flags.wrap_width = next.parse::<u16>().ok();
+                i += 1;
+            }
+        } else if let Some(value) = token.strip_prefix("--wrap-width=") {
+            flags.wrap_width = value.parse::<u16>().ok();
         }
         i += 1;
     }
@@ -444,5 +456,64 @@ mod tests {
 
         clear_config_flags(&path).unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_wrap_width_space() {
+        let args = vec!["--wrap-width".to_string(), "60".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.wrap_width, Some(60));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_wrap_width_equals() {
+        let args = vec!["--wrap-width=100".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.wrap_width, Some(100));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_wrap_width_invalid_ignored() {
+        let args = vec!["--wrap-width".to_string(), "notanumber".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.wrap_width, None);
+    }
+
+    #[test]
+    fn test_config_union_wrap_width_cli_overrides_file() {
+        let file = ConfigFlags {
+            wrap_width: Some(80),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags {
+            wrap_width: Some(120),
+            ..ConfigFlags::default()
+        };
+        let merged = file.union(&cli);
+        assert_eq!(merged.wrap_width, Some(120));
+    }
+
+    #[test]
+    fn test_config_union_wrap_width_file_preserved_when_cli_none() {
+        let file = ConfigFlags {
+            wrap_width: Some(60),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags::default();
+        let merged = file.union(&cli);
+        assert_eq!(merged.wrap_width, Some(60));
+    }
+
+    #[test]
+    fn test_save_load_wrap_width() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            wrap_width: Some(72),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.wrap_width, Some(72));
     }
 }

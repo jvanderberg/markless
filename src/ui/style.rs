@@ -57,14 +57,12 @@ pub fn style_for_line_type(line_type: &LineType) -> Style {
             })
             .add_modifier(Modifier::BOLD),
 
-        // Code blocks - use a dimmer color, italic for differentiation
-        LineType::CodeBlock => Style::default()
-            .fg(if light_bg {
-                Color::Indexed(238)
-            } else {
-                Color::Indexed(245)
-            })
-            .add_modifier(Modifier::DIM),
+        // Code blocks - readable base color without DIM
+        LineType::CodeBlock => Style::default().fg(if light_bg {
+            Color::Indexed(238)
+        } else {
+            Color::Indexed(250)
+        }),
 
         // Block quotes - italic blue
         LineType::BlockQuote => Style::default()
@@ -246,7 +244,7 @@ impl Default for Theme {
             h4: Style::default()
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
-            code: Style::default().fg(Color::Indexed(245)),
+            code: Style::default().fg(Color::Indexed(250)),
             inline_code: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             quote: Style::default()
                 .fg(Color::Blue)
@@ -338,6 +336,40 @@ mod tests {
     fn test_code_block_style() {
         let style = style_for_line_type(&LineType::CodeBlock);
         assert!(style.fg.is_some());
+    }
+
+    #[test]
+    fn test_code_block_not_dim() {
+        let style = style_for_line_type(&LineType::CodeBlock);
+        assert!(
+            !style.add_modifier.contains(Modifier::DIM),
+            "Code blocks should not use DIM modifier for better readability"
+        );
+    }
+
+    #[test]
+    fn test_dark_theme_code_brighter_than_245() {
+        // The dark theme code block base color should be brighter than xterm 245
+        // (which was the previous faint color)
+        let theme = Theme::dark();
+        match theme.code.fg {
+            Some(Color::Indexed(idx)) => {
+                assert!(
+                    idx > 245,
+                    "Dark theme code color {idx} should be brighter than 245"
+                );
+            }
+            _ => panic!("Dark theme code should use indexed color"),
+        }
+    }
+
+    #[test]
+    fn test_light_theme_code_not_dim() {
+        let theme = Theme::light();
+        assert!(
+            !theme.code.add_modifier.contains(Modifier::DIM),
+            "Light theme code blocks should not use DIM modifier"
+        );
     }
 
     #[test]

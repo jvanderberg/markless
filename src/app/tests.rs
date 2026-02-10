@@ -1606,3 +1606,52 @@ fn test_link_at_column_returns_none_far_from_link() {
         "clicking 60 columns away from a 2-char link should return None"
     );
 }
+
+#[test]
+fn test_wrap_width_caps_layout_width() {
+    let md = "This is a very long paragraph that should wrap at the configured wrap width rather than the full terminal width when wrap_width is set.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (120, 24));
+    model.wrap_width = Some(60);
+    model.reflow_layout();
+
+    let paragraph_lines: Vec<_> = model
+        .document
+        .visible_lines(0, 50)
+        .iter()
+        .filter(|l| *l.line_type() == crate::document::LineType::Paragraph)
+        .map(|l| l.content().chars().count())
+        .collect();
+
+    assert!(
+        paragraph_lines.len() > 1,
+        "expected text to wrap with wrap_width=60"
+    );
+    for len in &paragraph_lines {
+        assert!(*len <= 60, "line exceeds wrap_width: {} > 60", len);
+    }
+}
+
+#[test]
+fn test_wrap_width_none_uses_terminal_width() {
+    let md = "Short text.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = None;
+
+    // layout_width should equal document_content_width for 80-col terminal
+    let expected = crate::ui::document_content_width(80, false);
+    assert_eq!(model.layout_width(), expected);
+}
+
+#[test]
+fn test_wrap_width_larger_than_terminal_uses_terminal() {
+    let md = "Short text.";
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model.wrap_width = Some(200); // larger than terminal
+
+    // Should still cap to terminal width
+    let terminal_width = crate::ui::document_content_width(80, false);
+    assert_eq!(model.layout_width(), terminal_width);
+}
