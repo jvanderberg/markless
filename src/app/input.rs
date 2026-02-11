@@ -31,7 +31,11 @@ impl App {
 
     pub(super) fn handle_mouse(mouse: MouseEvent, model: &Model) -> Option<Message> {
         if model.help_visible {
-            return None;
+            return match mouse.kind {
+                MouseEventKind::ScrollDown => Some(Message::HelpScrollDown(3)),
+                MouseEventKind::ScrollUp => Some(Message::HelpScrollUp(3)),
+                _ => None,
+            };
         }
 
         if model.link_picker_active() {
@@ -237,8 +241,16 @@ impl App {
 
     pub(super) fn handle_key(key: event::KeyEvent, model: &Model) -> Option<Message> {
         if model.help_visible {
-            let _ = key;
-            return Some(Message::HideHelp);
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('?' | 'q') | KeyCode::F(1) => Some(Message::HideHelp),
+                KeyCode::Char('j') | KeyCode::Down => Some(Message::HelpScrollDown(1)),
+                KeyCode::Char('k') | KeyCode::Up => Some(Message::HelpScrollUp(1)),
+                KeyCode::Char(' ') | KeyCode::PageDown => Some(Message::HelpScrollDown(10)),
+                KeyCode::Char('b') | KeyCode::PageUp => Some(Message::HelpScrollUp(10)),
+                KeyCode::Char('g') | KeyCode::Home => Some(Message::HelpScrollUp(usize::MAX)),
+                KeyCode::Char('G') | KeyCode::End => Some(Message::HelpScrollDown(usize::MAX)),
+                _ => None,
+            };
         }
 
         if model.link_picker_active() {

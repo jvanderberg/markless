@@ -582,7 +582,7 @@ fn test_help_mode_esc_closes_help() {
 }
 
 #[test]
-fn test_help_mode_any_key_closes_help() {
+fn test_help_mode_unrecognized_key_ignored() {
     let mut model = create_test_model();
     model.help_visible = true;
 
@@ -590,7 +590,7 @@ fn test_help_mode_any_key_closes_help() {
         event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         &model,
     );
-    assert_eq!(msg, Some(Message::HideHelp));
+    assert_eq!(msg, None);
 }
 
 #[test]
@@ -2883,4 +2883,152 @@ fn test_editor_mouse_click_in_gutter() {
     };
     let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::EditorMoveTo(1, 0)));
+}
+
+// ---- Help scroll tests ----
+
+#[test]
+fn test_help_scroll_offset_initial_is_zero() {
+    let model = create_test_model();
+    assert_eq!(model.help_scroll_offset, 0);
+}
+
+#[test]
+fn test_toggle_help_resets_scroll_offset() {
+    let mut model = create_test_model();
+    model.help_scroll_offset = 5;
+    let model = update(model, Message::ToggleHelp);
+    assert!(model.help_visible);
+    assert_eq!(model.help_scroll_offset, 0);
+}
+
+#[test]
+fn test_help_scroll_down_increments_offset() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let model = update(model, Message::HelpScrollDown(1));
+    assert_eq!(model.help_scroll_offset, 1);
+}
+
+#[test]
+fn test_help_scroll_up_floors_at_zero() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    model.help_scroll_offset = 0;
+    let model = update(model, Message::HelpScrollUp(1));
+    assert_eq!(model.help_scroll_offset, 0);
+}
+
+#[test]
+fn test_help_scroll_up_decrements_offset() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    model.help_scroll_offset = 5;
+    let model = update(model, Message::HelpScrollUp(2));
+    assert_eq!(model.help_scroll_offset, 3);
+}
+
+#[test]
+fn test_help_mode_j_scrolls_down() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollDown(1)));
+}
+
+#[test]
+fn test_help_mode_k_scrolls_up() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollUp(1)));
+}
+
+#[test]
+fn test_help_mode_space_page_down() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollDown(10)));
+}
+
+#[test]
+fn test_help_mode_q_closes() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HideHelp));
+}
+
+#[test]
+fn test_help_mode_arbitrary_key_ignored() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, None);
+}
+
+#[test]
+fn test_help_mode_g_goes_to_top() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollUp(usize::MAX)));
+}
+
+#[test]
+fn test_help_mode_shift_g_goes_to_bottom() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollDown(usize::MAX)));
+}
+
+#[test]
+fn test_help_mode_mouse_scroll_down() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::HelpScrollDown(3)));
+}
+
+#[test]
+fn test_help_mode_mouse_scroll_up() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::HelpScrollUp(3)));
 }

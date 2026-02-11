@@ -60,6 +60,10 @@ pub enum Message {
     ToggleHelp,
     /// Hide help overlay
     HideHelp,
+    /// Scroll help overlay down by n lines
+    HelpScrollDown(usize),
+    /// Scroll help overlay up by n lines
+    HelpScrollUp(usize),
     /// File changed externally, reload
     FileChanged,
     /// Force reload file
@@ -300,9 +304,16 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         }
         Message::ToggleHelp => {
             model.help_visible = !model.help_visible;
+            model.help_scroll_offset = 0;
         }
         Message::HideHelp => {
             model.help_visible = false;
+        }
+        Message::HelpScrollDown(n) => {
+            model.help_scroll_offset = model.help_scroll_offset.saturating_add(n);
+        }
+        Message::HelpScrollUp(n) => {
+            model.help_scroll_offset = model.help_scroll_offset.saturating_sub(n);
         }
         // TocCollapse/TocExpand: handled in effects (browse mode navigation)
         // FileChanged/ForceReload: handled in event loop (side effect)

@@ -97,6 +97,8 @@ pub struct Model {
     pub config_local_path: Option<PathBuf>,
     /// Whether help overlay is visible
     pub help_visible: bool,
+    /// Scroll offset for the help overlay
+    pub help_scroll_offset: usize,
     /// URL currently hovered in the document pane (mouse capture mode)
     pub hovered_link_url: Option<String>,
     /// Pending visible-link picker items for quick follow (`o`)
@@ -196,6 +198,7 @@ impl Model {
             config_global_path: None,
             config_local_path: None,
             help_visible: false,
+            help_scroll_offset: 0,
             hovered_link_url: None,
             link_picker_items: Vec::new(),
             toast: None,
@@ -861,6 +864,7 @@ impl Default for Model {
             config_global_path: None,
             config_local_path: None,
             help_visible: false,
+            help_scroll_offset: 0,
             hovered_link_url: None,
             link_picker_items: Vec::new(),
             toast: None,

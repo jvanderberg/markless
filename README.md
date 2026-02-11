@@ -1,6 +1,6 @@
 # Markless
 
-Markless is a terminal markdown viewer with image support. It is focused on fast navigation, clear rendering, and sensible defaults for long documents.
+Markless is a terminal markdown viewer and editor with image support. It is focused on fast navigation, clear rendering, and sensible defaults for long documents.
 
 ## Screenshots
 
@@ -9,12 +9,14 @@ Markless is a terminal markdown viewer with image support. It is focused on fast
 ![Inline image support using Kitty](<images/image support.png>)
 ![Code syntax highlighting](<images/code highlighting.png>)
 ![Table Support](images/tables.png)
+![Editor mode](images/editmode.png)
 
 ## Features
 
 - Markdown rendering with headings, lists, tables, block quotes, code blocks, and footnotes
 - Syntax-highlighted code blocks with lazy highlighting for performance
 - Inline images (Kitty, Sixel, iTerm2, and half-block fallback)
+- Built-in editor mode with save, undo-friendly exit, and conflict detection
 - Directory browse mode with file preview
 - Table of contents sidebar with keyboard and mouse support
 - Search with match navigation and highlight
@@ -85,18 +87,30 @@ TOC
 - `T`: toggle + focus TOC
 - `Tab`: switch focus
 - `j` / `k`, arrows, `Enter` / `Space`: navigate + jump
+- `h` / `Left`: collapse (parent directory in browse mode)
+- `l` / `Right`: expand (enter directory in browse mode)
 
 Browse
 - `B`: enter directory browse mode
 - `F`: return to file-only mode (heading TOC)
 - `Backspace`: navigate to parent directory (in TOC)
 
+Editor
+- `e`: enter edit mode
+- `Ctrl-e`: toggle edit mode (enter or exit)
+- `Esc`: return to view mode
+- `Ctrl-s`: save file
+- Arrows, Home/End: navigate
+- `Ctrl+Left` / `Ctrl+Right`: word movement
+- `Ctrl+Home` / `Ctrl+End`: buffer start / end
+- PageUp/PageDown: scroll editor
+
 Other
 - `w`: toggle watch
 - `r` / `R`: reload file
 - `o`: open visible links (1-9)
 - `?` / `F1`: toggle help
-- `q` / `Ctrl-c`: quit
+- `q` / `Ctrl-c` / `Ctrl-q`: quit
 
 Mouse
 - Scroll wheel: scroll
