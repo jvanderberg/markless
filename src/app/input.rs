@@ -142,7 +142,7 @@ impl App {
                 model.viewport.height().saturating_add(1),
             );
             let chunks = crate::ui::split_main_columns(total_area);
-            let toc_area = chunks[0];
+            let toc_area = chunks.first().copied().unwrap_or(total_area);
             let toc_hit = mouse.column >= toc_area.x
                 && mouse.column < toc_area.x + toc_area.width
                 && mouse.row >= toc_area.y
@@ -440,7 +440,10 @@ impl App {
                     break;
                 };
                 let start_byte = search + rel;
-                let start_col = UnicodeWidthStr::width(&line_text[..start_byte]);
+                let Some(prefix) = line_text.get(..start_byte) else {
+                    break;
+                };
+                let start_col = UnicodeWidthStr::width(prefix);
                 let end_col = start_col + UnicodeWidthStr::width(link.text.as_str());
                 if content_col >= start_col && content_col < end_col {
                     return Some(link);
@@ -460,7 +463,10 @@ fn document_mouse_area(model: &Model) -> Rect {
         model.viewport.height().saturating_add(1),
     );
     let content_area = if model.toc_visible {
-        crate::ui::split_main_columns(total_area)[1]
+        crate::ui::split_main_columns(total_area)
+            .get(1)
+            .copied()
+            .unwrap_or(total_area)
     } else {
         total_area
     };

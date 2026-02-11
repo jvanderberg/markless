@@ -1762,11 +1762,14 @@ fn parse_mindmap_diagram(input: &str) -> Result<ParseOutput> {
         } else if let Some(parent_id) = parent_id.as_ref() {
             let parent_idx = node_index.get(parent_id).copied();
             if let Some(parent_idx) = parent_idx {
-                let parent = &graph.mindmap.nodes[parent_idx];
-                if parent.level == 0 {
-                    Some(parent.children.len())
+                if let Some(parent) = graph.mindmap.nodes.get(parent_idx) {
+                    if parent.level == 0 {
+                        Some(parent.children.len())
+                    } else {
+                        parent.section
+                    }
                 } else {
-                    parent.section
+                    None
                 }
             } else {
                 None
@@ -1792,7 +1795,9 @@ fn parse_mindmap_diagram(input: &str) -> Result<ParseOutput> {
 
         if let Some(parent_id) = parent_id {
             if let Some(parent_idx) = node_index.get(&parent_id).copied() {
-                graph.mindmap.nodes[parent_idx].children.push(id.clone());
+                if let Some(parent_node) = graph.mindmap.nodes.get_mut(parent_idx) {
+                    parent_node.children.push(id.clone());
+                }
             }
             graph.edges.push(crate::mermaid_renderer::ir::Edge {
                 from: parent_id,

@@ -88,10 +88,20 @@ All public items must have doc comments with examples where appropriate.
 
 ## Code Style
 
-### Error Handling
+### Error Handling & Panic Prevention
+
+Production code must never panic. A TUI panic leaves the terminal in raw mode, breaking the user's shell.
 
 - Use `anyhow` for application errors
-- Avoid `unwrap()` in library code (ok in tests)
+- **No `unwrap()` or `expect()` in non-test code.** Use fallible alternatives instead:
+  - `slice.get(i)` / `slice.first()` / `slice.get(i).copied()` instead of `slice[i]`
+  - `map.get(&key)` with `let Some(v) = … else { continue/return }` instead of `map[&key]` or `.expect()`
+  - `str.get(..n)` instead of `&str[..n]` (byte slicing can panic on non-UTF-8 boundaries)
+  - `Option::unwrap_or()` / `unwrap_or_default()` / `unwrap_or_else()` for defaults
+- **Poisoned mutexes:** use `lock().unwrap_or_else(PoisonError::into_inner)` — don't propagate the panic
+- **Fallible init:** prefer `try_init()` over `init()` (e.g. `ratatui::try_init()`) and add `.context()` for a user-friendly message
+- **Bounds checks:** always guard index/slice access on vectors, `HashMap` lookups, and `Layout::split` results — especially when the data comes from parsed input or external state
+- When a missing value means "skip this item" (e.g. a missing node in a graph edge), log with `tracing::warn!` and `continue` rather than panicking
 
 ### Naming Conventions
 

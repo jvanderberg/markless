@@ -159,8 +159,10 @@ Config
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(main_area);
-    frame.render_widget(Paragraph::new(left_text), cols[0]);
-    frame.render_widget(Paragraph::new(right_text), cols[1]);
+    if let (Some(&left_area), Some(&right_area)) = (cols.first(), cols.get(1)) {
+        frame.render_widget(Paragraph::new(left_text), left_area);
+        frame.render_widget(Paragraph::new(right_text), right_area);
+    }
     frame.render_widget(Paragraph::new(config_text), config_area);
 }
 
