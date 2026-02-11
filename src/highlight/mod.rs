@@ -223,7 +223,9 @@ fn leak_str(s: &str) -> &'static str {
 
     static INTERNED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
     let lock = INTERNED.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut set = lock.lock().expect("intern lock");
+    let mut set = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(existing) = set.get(s) {
         return existing;
     }
@@ -335,12 +337,11 @@ static BACKGROUND_OVERRIDE: OnceLock<Mutex<Option<HighlightBackground>>> = OnceL
 
 /// Sets the background mode override for syntax highlighting.
 ///
-/// # Panics
-///
-/// Panics if the internal background-mode mutex is poisoned.
 pub fn set_background_mode(mode: Option<HighlightBackground>) {
     let lock = BACKGROUND_OVERRIDE.get_or_init(|| Mutex::new(None));
-    let mut guard = lock.lock().expect("highlight background lock");
+    let mut guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = mode;
 }
 

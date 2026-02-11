@@ -46,15 +46,16 @@ pub struct EdgeLayout {
     pub override_style: crate::mermaid_renderer::ir::EdgeStyleOverride,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 enum EdgeSide {
     Left,
     Right,
+    #[default]
     Top,
     Bottom,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct EdgePortInfo {
     start_side: EdgeSide,
     end_side: EdgeSide,
@@ -6078,8 +6079,16 @@ fn compute_flowchart_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig)
     let mut edge_ports: Vec<EdgePortInfo> = Vec::with_capacity(graph.edges.len());
     let mut port_candidates: HashMap<(String, EdgeSide), Vec<PortCandidate>> = HashMap::new();
     for (idx, edge) in graph.edges.iter().enumerate() {
-        let from_layout = nodes.get(&edge.from).expect("from node missing");
-        let to_layout = nodes.get(&edge.to).expect("to node missing");
+        let (Some(from_layout), Some(to_layout)) = (nodes.get(&edge.from), nodes.get(&edge.to))
+        else {
+            tracing::warn!(
+                "skipping edge: missing node '{}' or '{}'",
+                edge.from,
+                edge.to
+            );
+            edge_ports.push(EdgePortInfo::default());
+            continue;
+        };
         let temp_from = from_layout.anchor_subgraph.and_then(|anchor_idx| {
             subgraphs
                 .get(anchor_idx)
@@ -6256,8 +6265,15 @@ fn compute_flowchart_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig)
 
     let mut route_order: Vec<(u8, f32, f32, usize)> = Vec::with_capacity(graph.edges.len());
     for (idx, edge) in graph.edges.iter().enumerate() {
-        let from_layout = nodes.get(&edge.from).expect("from node missing");
-        let to_layout = nodes.get(&edge.to).expect("to node missing");
+        let (Some(from_layout), Some(to_layout)) = (nodes.get(&edge.from), nodes.get(&edge.to))
+        else {
+            tracing::warn!(
+                "skipping edge routing: missing node '{}' or '{}'",
+                edge.from,
+                edge.to
+            );
+            continue;
+        };
         let temp_from = from_layout.anchor_subgraph.and_then(|idx| {
             subgraphs
                 .get(idx)
@@ -6343,8 +6359,15 @@ fn compute_flowchart_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig)
         } else {
             0.0
         };
-        let from_layout = nodes.get(&edge.from).expect("from node missing");
-        let to_layout = nodes.get(&edge.to).expect("to node missing");
+        let (Some(from_layout), Some(to_layout)) = (nodes.get(&edge.from), nodes.get(&edge.to))
+        else {
+            tracing::warn!(
+                "skipping edge render: missing node '{}' or '{}'",
+                edge.from,
+                edge.to
+            );
+            continue;
+        };
         let temp_from = from_layout.anchor_subgraph.and_then(|idx| {
             subgraphs
                 .get(idx)
@@ -6357,10 +6380,9 @@ fn compute_flowchart_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig)
         });
         let from = temp_from.as_ref().unwrap_or(from_layout);
         let to = temp_to.as_ref().unwrap_or(to_layout);
-        let port_info = edge_ports
-            .get(*idx)
-            .copied()
-            .expect("edge port info missing");
+        let Some(port_info) = edge_ports.get(*idx).copied() else {
+            continue;
+        };
         let route_ctx = RouteContext {
             from_id: &edge.from,
             to_id: &edge.to,
@@ -7093,7 +7115,9 @@ fn compute_sequence_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig) 
     let mut max_label_width: f32 = 0.0;
     let mut max_label_height: f32 = 0.0;
     for id in &participants {
-        let node = graph.nodes.get(id).expect("participant missing");
+        let Some(node) = graph.nodes.get(id) else {
+            continue;
+        };
         let label = measure_label(&node.label, theme, config);
         max_label_width = max_label_width.max(label.width);
         max_label_height = max_label_height.max(label.height);
@@ -7108,7 +7132,9 @@ fn compute_sequence_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig) 
     let margin = 8.0;
     let mut cursor_x = margin;
     for id in &participants {
-        let node = graph.nodes.get(id).expect("participant missing");
+        let Some(node) = graph.nodes.get(id) else {
+            continue;
+        };
         let label = label_blocks.get(id).cloned().unwrap_or_else(|| TextBlock {
             lines: vec![id.clone()],
             width: 0.0,
@@ -7224,8 +7250,14 @@ fn compute_sequence_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig) 
     }
 
     for (idx, edge) in graph.edges.iter().enumerate() {
-        let from = nodes.get(&edge.from).expect("from node missing");
-        let to = nodes.get(&edge.to).expect("to node missing");
+        let (Some(from), Some(to)) = (nodes.get(&edge.from), nodes.get(&edge.to)) else {
+            tracing::warn!(
+                "skipping sequence edge: missing node '{}' or '{}'",
+                edge.from,
+                edge.to
+            );
+            continue;
+        };
         let y = message_ys.get(idx).copied().unwrap_or(message_cursor);
         let label = edge.label.as_ref().map(|l| measure_label(l, theme, config));
         let start_label = edge
@@ -7379,7 +7411,7 @@ fn compute_sequence_layout(graph: &Graph, theme: &Theme, config: &LayoutConfig) 
                         frame_y + label_offset
                     } else {
                         dividers
-                            .get(section_idx - 1)
+                            .get(section_idx.saturating_sub(1))
                             .copied()
                             .unwrap_or(frame_y + label_offset)
                             + label_offset

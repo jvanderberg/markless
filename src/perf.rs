@@ -63,11 +63,10 @@ pub fn is_enabled() -> bool {
 ///
 /// # Errors
 /// Returns an error if the log file cannot be created or written to.
-///
-/// # Panics
-/// Panics if the debug logger mutex is poisoned.
 pub fn set_debug_log_path(path: Option<&Path>) -> std::io::Result<()> {
-    let mut logger = DEBUG_LOGGER.lock().expect("debug logger lock poisoned");
+    let mut logger = DEBUG_LOGGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(path) = path {
         let file = File::create(path)?;
         logger.enabled = true;
@@ -86,22 +85,18 @@ pub fn set_debug_log_path(path: Option<&Path>) -> std::io::Result<()> {
 }
 
 /// Check whether debug logging is currently enabled.
-///
-/// # Panics
-/// Panics if the debug logger mutex is poisoned.
 pub fn is_debug_log_enabled() -> bool {
     DEBUG_LOGGER
         .lock()
-        .expect("debug logger lock poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .enabled
 }
 
 /// Write a timestamped event to the debug log.
-///
-/// # Panics
-/// Panics if the debug logger mutex is poisoned.
 pub fn log_event(name: &str, detail: impl AsRef<str>) {
-    let mut logger = DEBUG_LOGGER.lock().expect("debug logger lock poisoned");
+    let mut logger = DEBUG_LOGGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !logger.enabled {
         return;
     }
