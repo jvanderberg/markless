@@ -252,10 +252,6 @@ impl Document {
     /// Generates hex dump lines for the viewport plus a buffer on each side.
     /// The range is in terms of overall document line indices (including headers).
     ///
-    /// # Panics
-    ///
-    /// Panics if called on a non-hex document (should only be called when
-    /// `is_hex_mode()` returns true).
     pub fn ensure_hex_lines_for_range(&mut self, range: Range<usize>) {
         let Some(hex) = &self.hex_data else { return };
         let header = hex.header_line_count;
@@ -283,19 +279,22 @@ impl Document {
         {
             return;
         }
+        // NLL ends the immutable borrow of `hex` above here.
 
         // Generate the cached lines
         let mut cached = Vec::with_capacity(cache_end - cache_start);
-        let bytes = &self.hex_data.as_ref().unwrap().bytes;
+        let Some(hex) = &self.hex_data else { return };
         for hex_idx in cache_start..cache_end {
             let byte_offset = hex_idx * 16;
-            let byte_end = (byte_offset + 16).min(bytes.len());
-            let chunk = &bytes[byte_offset..byte_end];
+            let byte_end = (byte_offset + 16).min(hex.bytes.len());
+            let chunk = &hex.bytes[byte_offset..byte_end];
             let text = super::format_single_hex_line(chunk, byte_offset);
             cached.push(RenderedLine::new(text, LineType::CodeBlock));
         }
 
-        self.hex_data.as_mut().unwrap().cached_range = Some((cache_start, cached));
+        if let Some(hex) = &mut self.hex_data {
+            hex.cached_range = Some((cache_start, cached));
+        }
     }
 
     /// Lazily apply syntax highlighting to code blocks intersecting `range`.

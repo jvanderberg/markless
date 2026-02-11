@@ -107,7 +107,7 @@ impl App {
 
         // Initialize terminal
         let init_scope = crate::perf::scope("app.ratatui_init");
-        let mut terminal = ratatui::init();
+        let mut terminal = ratatui::try_init()?;
         let size = terminal.size()?;
         drop(init_scope);
 
