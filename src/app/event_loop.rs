@@ -1,7 +1,7 @@
 use std::io::{Write, stdout};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
@@ -107,7 +107,8 @@ impl App {
 
         // Initialize terminal
         let init_scope = crate::perf::scope("app.ratatui_init");
-        let mut terminal = ratatui::try_init()?;
+        let mut terminal = ratatui::try_init()
+            .context("Failed to initialize terminal — markless requires an interactive terminal")?;
         let size = terminal.size()?;
         drop(init_scope);
 
