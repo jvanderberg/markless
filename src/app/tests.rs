@@ -104,12 +104,11 @@ fn test_force_reload_message_triggers_reload_side_effect() {
     std::fs::write(&file_path, "# One\n\nalpha").unwrap();
     let doc = Document::parse_with_layout("# One\n\nalpha", 80).unwrap();
     let mut model = Model::new(file_path.clone(), doc, (80, 24));
-    let app = App::new(file_path.clone());
     let mut watcher = None;
 
     std::fs::write(&file_path, "# Updated\n\nbeta").unwrap();
     model = update(model, Message::ForceReload);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::ForceReload);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::ForceReload);
 
     assert!(model.document.source().contains("# Updated"));
 }
@@ -189,7 +188,6 @@ fn test_selected_text_strips_code_block_borders() {
 fn test_selection_clears_after_mouse_up() {
     let doc = Document::parse("# Title\n\nLine one\n\nLine two").unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::StartSelection(2));
@@ -197,7 +195,7 @@ fn test_selection_clears_after_mouse_up() {
     model = update(model, Message::EndSelection(4));
     assert!(model.selection.is_some());
 
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EndSelection(4));
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EndSelection(4));
 
     assert!(model.selection.is_none());
 }
@@ -297,6 +295,38 @@ fn test_quit_sets_should_quit() {
     let model = create_test_model();
     let model = update(model, Message::Quit);
     assert!(model.should_quit);
+}
+
+#[test]
+fn test_ctrl_q_quits_in_normal_mode() {
+    let model = create_test_model();
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::Quit));
+}
+
+#[test]
+fn test_ctrl_q_quits_in_editor_mode() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::Quit));
+}
+
+#[test]
+fn test_ctrl_q_quits_in_search_mode() {
+    let model = create_test_model();
+    let model = update(model, Message::StartSearch);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::Quit));
 }
 
 #[test]
@@ -732,11 +762,10 @@ fn test_follow_link_jumps_to_internal_anchor() {
     let md = "[Go](#target)\n\n## Target";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::OpenVisibleLinks);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
 
     assert!(model.viewport.offset() > 0);
 }
@@ -746,11 +775,10 @@ fn test_follow_link_jumps_to_footnote_definition() {
     let md = "Alpha[^1]\n\n[^1]: Footnote text";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::OpenVisibleLinks);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
 
     assert!(model.viewport.offset() > 0);
 }
@@ -762,12 +790,11 @@ fn test_follow_link_on_image_line_uses_image_src() {
     heights.insert("#target".to_string(), 3);
     let doc = Document::parse_with_layout_and_image_heights(md, 80, &heights).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 6));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     let line = 1; // inside image body
     model = update(model, Message::FollowLinkAtLine(line, None));
-    app.handle_message_side_effects(
+    App::handle_message_side_effects(
         &mut model,
         &mut watcher,
         &Message::FollowLinkAtLine(line, None),
@@ -785,7 +812,6 @@ fn test_follow_link_at_column_picks_correct_link_on_same_line() {
               ## First\n\n## Second";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     let link_line = model.document.links()[0].line;
@@ -794,7 +820,7 @@ fn test_follow_link_at_column_picks_correct_link_on_same_line() {
 
     let msg = Message::FollowLinkAtLine(link_line, Some(col));
     model = update(model, msg.clone());
-    app.handle_message_side_effects(&mut model, &mut watcher, &msg);
+    App::handle_message_side_effects(&mut model, &mut watcher, &msg);
 
     let first_line = model.document.resolve_internal_anchor("first").unwrap();
     let second_line = model.document.resolve_internal_anchor("second").unwrap();
@@ -855,15 +881,14 @@ fn test_open_visible_links_shows_picker_when_multiple() {
     let md = "[A](#one)\n\n[B](#two)\n\n## One\n\n## Two";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 8));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::OpenVisibleLinks);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
     assert_eq!(model.link_picker_items.len(), 2);
 
     model = update(model, Message::SelectVisibleLink(2));
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::SelectVisibleLink(2));
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::SelectVisibleLink(2));
     assert!(model.link_picker_items.is_empty());
     assert!(model.viewport.offset() > 0);
 }
@@ -1353,7 +1378,6 @@ fn test_browse_toc_backspace_sends_toc_collapse() {
 
 #[test]
 fn test_browse_navigate_parent_at_root_is_noop() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model.browse_mode = true;
     model.toc_visible = true;
@@ -1367,7 +1391,7 @@ fn test_browse_navigate_parent_at_root_is_noop() {
 
     // TocCollapse in browse mode triggers browse_navigate_parent
     let mut watcher: Option<crate::watcher::FileWatcher> = None;
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::TocCollapse);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::TocCollapse);
 
     // Should stay at root without error
     assert_eq!(model.browse_dir, PathBuf::from("/"));
@@ -1910,14 +1934,14 @@ fn test_exit_edit_mode_after_save_keeps_changes() {
     let mut model = Model::new(file_path.clone(), doc, (80, 24));
     model.file_path = file_path.clone();
 
-    let model = update(model, Message::EnterEditMode);
-    let model = update(model, Message::EditorInsertChar('X'));
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
 
     // Save via side effect (marks buffer clean)
-    let app = App::new(file_path);
-    let mut model = model;
-    let mut watcher = None;
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
     assert!(!model.editor_buffer.as_ref().unwrap().is_dirty());
 
     // Now Esc exits immediately (buffer is clean) and re-parses
@@ -2072,6 +2096,20 @@ fn test_e_key_enters_edit_mode() {
 }
 
 #[test]
+fn test_e_key_enters_edit_mode_when_toc_focused() {
+    let model = create_test_model();
+    let model = update(model, Message::ToggleTocFocus);
+    assert!(model.toc_visible);
+    assert!(model.toc_focused);
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EnterEditMode));
+}
+
+#[test]
 fn test_editor_mode_esc_exits() {
     let model = create_test_model();
     let model = update(model, Message::EnterEditMode);
@@ -2217,17 +2255,18 @@ fn test_editor_save_writes_file() {
     let mut model = Model::new(file_path.clone(), doc, (80, 24));
     model.file_path = file_path.clone();
 
+    let mut watcher = None;
+
     // Enter edit mode
     model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
 
     // Type some text at the beginning
     model = update(model, Message::EditorInsertChar('X'));
     assert!(model.editor_buffer.as_ref().unwrap().is_dirty());
 
     // Save via side effect
-    let app = App::new(file_path.clone());
-    let mut watcher = None;
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
 
     // Buffer should be marked clean
     assert!(!model.editor_buffer.as_ref().unwrap().is_dirty());
@@ -2250,9 +2289,8 @@ fn test_editor_save_no_changes_shows_toast() {
     model = update(model, Message::EnterEditMode);
 
     // Save without any edits
-    let app = App::new(file_path);
     let mut watcher = None;
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
 
     // Should show "No changes" toast
     let toast = model.active_toast();
@@ -2272,6 +2310,38 @@ fn test_quit_with_dirty_editor_shows_warning() {
     let model = update(model, Message::Quit);
     assert!(!model.should_quit);
     assert!(model.quit_confirmed);
+}
+
+#[test]
+fn test_quit_dirty_editor_toast_says_ctrl_q() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    let model = update(model, Message::Quit);
+    let toast = model.active_toast().map(|(msg, _)| msg.to_string());
+    assert!(
+        toast
+            .as_deref()
+            .is_some_and(|t| t.contains("Ctrl+Q") || t.contains("ctrl+q")),
+        "dirty quit toast should mention Ctrl+Q, got: {:?}",
+        toast
+    );
+}
+
+#[test]
+fn test_ctrl_e_toggles_edit_mode() {
+    let model = create_test_model();
+    // Ctrl+E in normal mode should enter edit mode
+    let ctrl_e = event::KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+    let msg = App::handle_key(ctrl_e, &model);
+    assert_eq!(msg, Some(Message::EnterEditMode));
+
+    // Ctrl+E in editor mode should exit edit mode
+    let model = update(model, Message::EnterEditMode);
+    assert!(model.editor_mode);
+    let msg = App::handle_key(ctrl_e, &model);
+    assert_eq!(msg, Some(Message::ExitEditMode));
 }
 
 #[test]
@@ -2340,6 +2410,78 @@ fn test_exit_edit_mode_clean_exits_immediately() {
     // No edits — Esc should exit immediately
     let model = update(model, Message::ExitEditMode);
     assert!(!model.editor_mode);
+}
+
+#[test]
+fn test_save_during_quit_warning_quits_after_save() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path;
+
+    let mut watcher = None;
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Quit warns about dirty buffer
+    model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+    assert!(model.quit_confirmed);
+
+    // Ctrl+S saves and should auto-quit
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(
+        model.should_quit,
+        "save during quit warning should auto-quit"
+    );
+}
+
+#[test]
+fn test_save_during_exit_warning_exits_edit_mode() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path;
+
+    let mut watcher = None;
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Esc warns about dirty buffer
+    model = update(model, Message::ExitEditMode);
+    assert!(model.editor_mode);
+    assert!(model.exit_confirmed);
+
+    // Ctrl+S saves and should auto-exit edit mode
+    let file_path = model.file_path.clone();
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(
+        !model.editor_mode,
+        "save during exit warning should auto-exit edit mode"
+    );
+
+    // File must actually be saved to disk
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        on_disk.starts_with('X'),
+        "file should be saved to disk, got: {:?}",
+        &on_disk[..on_disk.len().min(40)]
+    );
+
+    // Document must reflect the saved content
+    assert!(
+        model.document.source().starts_with('X'),
+        "document should be updated with saved content, got: {:?}",
+        &model.document.source()[..model.document.source().len().min(40)]
+    );
 }
 
 // --- Scroll position sync tests ---
@@ -2420,6 +2562,232 @@ fn test_discard_edit_then_reenter_shows_original() {
         "Re-entered editor should show original text, not discarded edits"
     );
     assert_eq!(buf.text(), original_source);
+}
+
+// --- Editor disk conflict tests ---
+
+#[test]
+fn test_enter_edit_mode_stores_disk_hash() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Hello").unwrap();
+
+    let doc = Document::parse("# Hello").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+    assert!(model.editor_disk_hash.is_none());
+
+    let mut model = update(model, Message::EnterEditMode);
+    let mut watcher = None;
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+
+    assert!(
+        model.editor_disk_hash.is_some(),
+        "disk hash should be set on entering edit mode"
+    );
+}
+
+#[test]
+fn test_file_changed_during_edit_sets_conflict() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    assert!(!model.editor_disk_conflict);
+
+    // Simulate external file change
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    assert!(
+        model.editor_disk_conflict,
+        "conflict should be detected when file changes during edit"
+    );
+    assert!(model.editor_mode, "should remain in editor mode");
+}
+
+#[test]
+fn test_file_changed_during_edit_skips_reload() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    let original_doc_source = model.document.source().to_string();
+
+    // Simulate external file change
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    // Document should NOT have been reloaded
+    assert_eq!(
+        model.document.source(),
+        original_doc_source,
+        "document should not reload during edit"
+    );
+}
+
+#[test]
+fn test_save_with_disk_conflict_warns_first() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Change file on disk behind our back
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    // First save should detect conflict and warn
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    assert!(
+        model.save_confirmed,
+        "first save should set save_confirmed on conflict"
+    );
+    // File on disk should still be the external change
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert_eq!(
+        on_disk, "# Changed externally",
+        "file should not be overwritten on first save"
+    );
+}
+
+#[test]
+fn test_save_with_disk_conflict_second_save_forces() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Change file on disk behind our back
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    // First save: warns
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(model.save_confirmed);
+
+    // Second save: forces overwrite
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        on_disk.starts_with('X'),
+        "second save should force overwrite"
+    );
+    assert!(
+        !model.save_confirmed,
+        "save_confirmed should reset after successful save"
+    );
+}
+
+#[test]
+fn test_save_without_conflict_succeeds_immediately() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Save without any external change — should succeed immediately
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        on_disk.starts_with('X'),
+        "save should succeed immediately without conflict"
+    );
+    assert!(!model.save_confirmed);
+}
+
+#[test]
+fn test_file_changed_shows_reload_toast() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::FileChanged);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    let toast_msg = model.active_toast().map(|(msg, _)| msg.to_string());
+    assert!(
+        toast_msg.as_deref().is_some_and(|t| t.contains("reloaded")),
+        "FileChanged should show a 'reloaded' toast: got {:?}",
+        toast_msg
+    );
+}
+
+#[test]
+fn test_toggle_watch_watches_model_file_path_not_app_path() {
+    let dir = tempdir().unwrap();
+    let canonical_dir = dir.path().canonicalize().unwrap();
+    let file_path = canonical_dir.join("doc.md");
+    std::fs::write(&file_path, "# Hello").unwrap();
+
+    // Model points at the actual file (as if browse mode navigated to it)
+    let doc = Document::parse("# Hello").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.watch_enabled = true;
+
+    let mut watcher: Option<crate::watcher::FileWatcher> = None;
+
+    // ToggleWatch should create a watcher for model.file_path, not some other path
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::ToggleWatch);
+
+    let w = watcher.as_ref().expect("watcher should be created");
+    assert_eq!(
+        w.target_path(),
+        &file_path,
+        "watcher must target model.file_path, not the app's original CLI path"
+    );
 }
 
 // --- Editor mouse click tests ---

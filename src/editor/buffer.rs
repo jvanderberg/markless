@@ -1,3 +1,5 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use ropey::Rope;
 
 /// Cursor position in the editor buffer.
@@ -59,16 +61,19 @@ pub enum Direction {
 pub struct EditorBuffer {
     rope: Rope,
     cursor: Cursor,
-    dirty: bool,
+    /// Hash of the text content at the last save point (or initial load).
+    clean_hash: u64,
 }
 
 impl EditorBuffer {
     /// Create a new buffer from a string.
     pub fn from_text(text: &str) -> Self {
+        let rope = Rope::from_str(text);
+        let clean_hash = Self::rope_hash(&rope);
         Self {
-            rope: Rope::from_str(text),
+            rope,
             cursor: Cursor::new(),
-            dirty: false,
+            clean_hash,
         }
     }
 
@@ -82,14 +87,14 @@ impl EditorBuffer {
         self.cursor
     }
 
-    /// Whether the buffer has been modified since creation or last save.
-    pub const fn is_dirty(&self) -> bool {
-        self.dirty
+    /// Whether the buffer content differs from the last save point.
+    pub fn is_dirty(&self) -> bool {
+        Self::rope_hash(&self.rope) != self.clean_hash
     }
 
     /// Mark the buffer as clean (e.g., after saving).
-    pub const fn mark_clean(&mut self) {
-        self.dirty = false;
+    pub fn mark_clean(&mut self) {
+        self.clean_hash = Self::rope_hash(&self.rope);
     }
 
     /// Total number of lines in the buffer.
@@ -123,7 +128,6 @@ impl EditorBuffer {
         let char_idx = self.cursor_char_idx();
         self.rope.insert_char(char_idx, ch);
         self.cursor.set_col(self.cursor.col + ch.len_utf8());
-        self.dirty = true;
     }
 
     /// Insert a string at the cursor position.
@@ -142,7 +146,6 @@ impl EditorBuffer {
         } else {
             self.cursor.set_col(self.cursor.col + s.len());
         }
-        self.dirty = true;
     }
 
     /// Split the current line at the cursor (Enter key).
@@ -151,7 +154,6 @@ impl EditorBuffer {
         self.rope.insert_char(char_idx, '\n');
         self.cursor.line += 1;
         self.cursor.set_col(0);
-        self.dirty = true;
     }
 
     /// Delete the character before the cursor (Backspace).
@@ -176,12 +178,12 @@ impl EditorBuffer {
             // Find the byte length of the character before cursor
             let line = self.rope.line(self.cursor.line);
             let line_str = line.to_string();
-            let before = &line_str[..self.cursor.col];
+            let before = line_str.get(..self.cursor.col).unwrap_or(&line_str);
             let prev_char_len = before.chars().next_back().map_or(1, char::len_utf8);
             self.rope.remove(char_idx - 1..char_idx);
             self.cursor.set_col(self.cursor.col - prev_char_len);
         }
-        self.dirty = true;
+
         true
     }
 
@@ -197,7 +199,7 @@ impl EditorBuffer {
 
         let char_idx = self.cursor_char_idx();
         self.rope.remove(char_idx..=char_idx);
-        self.dirty = true;
+
         true
     }
 
@@ -233,7 +235,7 @@ impl EditorBuffer {
         }
 
         let line = self.line_at(self.cursor.line).unwrap_or_default();
-        let before = &line[..self.cursor.col];
+        let before = line.get(..self.cursor.col).unwrap_or(&line);
         let trimmed = before.trim_end();
 
         if trimmed.is_empty() {
@@ -261,7 +263,7 @@ impl EditorBuffer {
         }
 
         let line = self.line_at(self.cursor.line).unwrap_or_default();
-        let after = &line[self.cursor.col..];
+        let after = line.get(self.cursor.col..).unwrap_or_default();
 
         // Skip current word characters
         let word_end = after
@@ -269,7 +271,7 @@ impl EditorBuffer {
             .unwrap_or(after.len());
 
         // Skip whitespace/punctuation after word
-        let rest = &after[word_end..];
+        let rest = after.get(word_end..).unwrap_or_default();
         let space_end = rest
             .find(|c: char| c.is_alphanumeric() || c == '_')
             .unwrap_or(rest.len());
@@ -300,6 +302,15 @@ impl EditorBuffer {
 
     // --- Private helpers ---
 
+    /// Hash the rope content for dirty-checking.
+    fn rope_hash(rope: &Rope) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for chunk in rope.chunks() {
+            chunk.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// Convert cursor position to a ropey char index.
     fn cursor_char_idx(&self) -> usize {
         let line_start = self.rope.line_to_char(self.cursor.line);
@@ -307,14 +318,18 @@ impl EditorBuffer {
         let line_str: String = line.chars().collect();
         // Convert byte offset to char offset within the line
         let byte_col = self.cursor.col.min(line_str.len());
-        let char_offset = line_str[..byte_col].chars().count();
+        let char_offset = line_str
+            .get(..byte_col)
+            .unwrap_or(&line_str)
+            .chars()
+            .count();
         line_start + char_offset
     }
 
     fn move_left(&mut self) {
         if self.cursor.col > 0 {
             let line = self.line_at(self.cursor.line).unwrap_or_default();
-            let before = &line[..self.cursor.col];
+            let before = line.get(..self.cursor.col).unwrap_or(&line);
             let prev_char_len = before.chars().next_back().map_or(1, char::len_utf8);
             self.cursor.set_col(self.cursor.col - prev_char_len);
         } else if self.cursor.line > 0 {
@@ -327,7 +342,9 @@ impl EditorBuffer {
         let line_len = self.line_len(self.cursor.line);
         if self.cursor.col < line_len {
             let line = self.line_at(self.cursor.line).unwrap_or_default();
-            let next_char_len = line[self.cursor.col..]
+            let next_char_len = line
+                .get(self.cursor.col..)
+                .unwrap_or_default()
                 .chars()
                 .next()
                 .map_or(1, char::len_utf8);
@@ -363,8 +380,8 @@ impl std::fmt::Debug for EditorBuffer {
                 &format_args!("Rope({} lines)", self.rope.len_lines()),
             )
             .field("cursor", &self.cursor)
-            .field("dirty", &self.dirty)
-            .finish()
+            .field("dirty", &self.is_dirty())
+            .finish_non_exhaustive()
     }
 }
 
@@ -445,6 +462,30 @@ mod tests {
         let mut buf = EditorBuffer::from_text("hello");
         buf.insert_char('!');
         buf.mark_clean();
+        assert!(!buf.is_dirty());
+    }
+
+    #[test]
+    fn test_undo_to_original_is_not_dirty() {
+        let mut buf = EditorBuffer::from_text("hello");
+        buf.insert_char('!');
+        assert!(buf.is_dirty());
+        buf.delete_back();
+        assert!(
+            !buf.is_dirty(),
+            "buffer should be clean after undoing to original content"
+        );
+    }
+
+    #[test]
+    fn test_mark_clean_updates_baseline() {
+        let mut buf = EditorBuffer::from_text("hello");
+        buf.insert_char('!');
+        buf.mark_clean();
+        // After saving, the new content is the baseline
+        buf.insert_char('?');
+        assert!(buf.is_dirty());
+        buf.delete_back();
         assert!(!buf.is_dirty());
     }
 

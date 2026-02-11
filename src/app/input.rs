@@ -250,6 +250,22 @@ impl App {
             };
         }
 
+        // Ctrl+C / Ctrl+Q quit from any mode
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c' | 'q'))
+        {
+            return Some(Message::Quit);
+        }
+
+        // Ctrl+E toggles edit mode from any mode
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('e')) {
+            return if model.editor_mode {
+                Some(Message::ExitEditMode)
+            } else {
+                Some(Message::EnterEditMode)
+            };
+        }
+
         if model.editor_mode {
             return Self::handle_editor_key(key);
         }
@@ -320,6 +336,7 @@ impl App {
                 KeyCode::Char('t') => Some(Message::ToggleToc),
                 KeyCode::Char('B') => Some(Message::EnterBrowseMode),
                 KeyCode::Char('F') => Some(Message::EnterFileMode),
+                KeyCode::Char('e') => Some(Message::EnterEditMode),
                 KeyCode::Char('q') => Some(Message::Quit),
                 _ => None,
             };
@@ -362,9 +379,6 @@ impl App {
 
             // Quit
             KeyCode::Char('q') => Some(Message::Quit),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(Message::Quit)
-            }
 
             _ => None,
         }

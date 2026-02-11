@@ -182,7 +182,7 @@ impl App {
         model.ensure_highlight_overscan();
 
         // Main loop
-        let result = self.event_loop(&mut terminal, &mut model);
+        let result = Self::event_loop(&mut terminal, &mut model);
 
         // Restore terminal
         let _ = execute!(stdout(), DisableMouseCapture);
@@ -237,11 +237,11 @@ impl App {
         }
     }
 
-    fn event_loop(&self, terminal: &mut DefaultTerminal, model: &mut Model) -> Result<()> {
+    fn event_loop(terminal: &mut DefaultTerminal, model: &mut Model) -> Result<()> {
         let start = Instant::now();
         let mut resize_debouncer = ResizeDebouncer::new(100);
         let mut file_watcher = if model.watch_enabled {
-            match self.make_file_watcher() {
+            match Self::make_file_watcher(&model.file_path) {
                 Ok(watcher) => Some(watcher),
                 Err(err) => {
                     model.watch_enabled = false;
@@ -256,12 +256,26 @@ impl App {
         } else {
             None
         };
+        let mut watched_path = model.file_path.clone();
         let mut browse_debouncer = BrowseDebouncer::new(400);
         let mut frame_idx: u64 = 0;
         let mut needs_render = true;
         let mut mouse_capture_enabled = false;
 
         loop {
+            // Recreate watcher if the viewed file changed (e.g. browse mode navigation)
+            if model.watch_enabled && model.file_path != watched_path {
+                match Self::make_file_watcher(&model.file_path) {
+                    Ok(w) => file_watcher = Some(w),
+                    Err(err) => {
+                        crate::perf::log_event(
+                            "watcher.rewatch.error",
+                            format!("path={} err={err}", model.file_path.display()),
+                        );
+                    }
+                }
+                watched_path.clone_from(&model.file_path);
+            }
             let should_enable_mouse = true;
             if should_enable_mouse != mouse_capture_enabled {
                 if should_enable_mouse {
@@ -315,15 +329,7 @@ impl App {
                     .is_some_and(FileWatcher::take_change_ready)
             {
                 *model = update(std::mem::take(model), Message::FileChanged);
-                if let Err(err) = model.reload_from_disk() {
-                    model.show_toast(ToastLevel::Error, format!("Reload failed: {err}"));
-                    crate::perf::log_event(
-                        "reload.error",
-                        format!("failed path={} err={err}", model.file_path.display()),
-                    );
-                } else {
-                    model.show_toast(ToastLevel::Info, "File changed, reloaded");
-                }
+                Self::handle_message_side_effects(model, &mut file_watcher, &Message::FileChanged);
                 needs_render = true;
             }
 
@@ -349,7 +355,7 @@ impl App {
                     );
                     let side_msg = msg.clone();
                     *model = update(std::mem::take(model), msg);
-                    self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
+                    Self::handle_message_side_effects(model, &mut file_watcher, &side_msg);
                     Self::update_browse_debouncer(
                         model,
                         &side_msg,
@@ -369,7 +375,7 @@ impl App {
                         drained += 1;
                         let side_msg = msg.clone();
                         *model = update(std::mem::take(model), msg);
-                        self.handle_message_side_effects(model, &mut file_watcher, &side_msg);
+                        Self::handle_message_side_effects(model, &mut file_watcher, &side_msg);
                         Self::update_browse_debouncer(
                             model,
                             &side_msg,

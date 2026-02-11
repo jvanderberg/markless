@@ -262,6 +262,23 @@ mod tests {
     }
 
     #[test]
+    fn test_plain_text_document_preserves_line_breaks() {
+        let source = "MIT License\n\nCopyright (c) 2024\n\nPermission is hereby granted";
+        let doc = Document::from_plain_text(source);
+        // Each source line should become its own rendered line
+        let source_lines: Vec<&str> = source.lines().collect();
+        assert_eq!(
+            doc.line_count(),
+            source_lines.len(),
+            "plain text document should have one rendered line per source line"
+        );
+        for (i, expected) in source_lines.iter().enumerate() {
+            let rendered = doc.line_at(i).expect("line should exist");
+            assert_eq!(rendered.content(), *expected, "line {i} mismatch");
+        }
+    }
+
+    #[test]
     fn test_prepare_content_wraps_png_as_image() {
         let content = "binary data".to_string();
         let result = prepare_content(Path::new("photo.png"), content);

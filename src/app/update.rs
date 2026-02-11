@@ -167,12 +167,16 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             | Message::TocExpand
             | Message::HoverLink(_)
     );
-    // Reset confirmation flags on any action other than the confirmed one
-    if !matches!(msg, Message::Quit) {
+    // Reset confirmation flags on any action other than the confirmed one.
+    // EditorSave preserves quit/exit flags so Ctrl+S can complete a pending quit/exit.
+    if !matches!(msg, Message::Quit | Message::EditorSave) {
         model.quit_confirmed = false;
     }
-    if !matches!(msg, Message::ExitEditMode) {
+    if !matches!(msg, Message::ExitEditMode | Message::EditorSave) {
         model.exit_confirmed = false;
+    }
+    if !matches!(msg, Message::EditorSave) {
+        model.save_confirmed = false;
     }
 
     match msg {
@@ -448,12 +452,19 @@ pub fn update(mut model: Model, msg: Message) -> Model {
                 let is_clean = model.editor_buffer.as_ref().is_some_and(|b| !b.is_dirty());
                 if is_clean && let Some(buf) = &model.editor_buffer {
                     let text = buf.text();
-                    if let Ok(doc) = crate::document::Document::parse_with_all_options(
-                        &text,
-                        model.layout_width(),
-                        &std::collections::HashMap::new(),
-                        model.should_render_mermaid_as_images(),
-                    ) {
+                    let is_md = super::model::is_markdown_ext(&model.file_path.to_string_lossy());
+                    let doc = if is_md {
+                        crate::document::Document::parse_with_all_options(
+                            &text,
+                            model.layout_width(),
+                            &std::collections::HashMap::new(),
+                            model.should_render_mermaid_as_images(),
+                        )
+                        .ok()
+                    } else {
+                        Some(crate::document::Document::from_plain_text(&text))
+                    };
+                    if let Some(doc) = doc {
                         model.document = doc;
                         model.viewport.set_total_lines(model.document.line_count());
                     }
@@ -461,6 +472,9 @@ pub fn update(mut model: Model, msg: Message) -> Model {
                 model.editor_mode = false;
                 model.editor_buffer = None;
                 model.editor_scroll_offset = 0;
+                model.editor_disk_hash = None;
+                model.editor_disk_conflict = false;
+                model.save_confirmed = false;
 
                 // Map source scroll position to rendered line position
                 if let Some((src_offset, src_total)) = scroll_ratio
@@ -578,7 +592,7 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             if model.editor_is_dirty() && !model.quit_confirmed {
                 model.show_toast(
                     crate::app::ToastLevel::Warning,
-                    "Unsaved changes! Press q again to quit, or Ctrl+S to save",
+                    "Unsaved changes! Press Ctrl+Q again to quit, or Ctrl+S to save",
                 );
                 model.quit_confirmed = true;
             } else {
