@@ -34,6 +34,11 @@ pub fn document_content_width(total_width: u16, toc_visible: bool) -> u16 {
 pub fn render(model: &mut Model, frame: &mut Frame) {
     let area = frame.area();
 
+    if model.editor_mode {
+        render_editor(model, frame, area);
+        return;
+    }
+
     if model.toc_visible {
         // Split into TOC and document (always yields exactly 2 chunks)
         let chunks = split_main_columns(area);
@@ -274,6 +279,127 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
         status::render_search_bar(model, frame, search_area);
     }
     status::render_status_bar(model, frame, status_area);
+}
+
+fn render_editor(model: &Model, frame: &mut Frame, area: Rect) {
+    let Some(buf) = &model.editor_buffer else {
+        return;
+    };
+
+    let toast_active = model.active_toast().is_some();
+    let footer_rows = 1 + u16::from(toast_active);
+    let editor_area = Rect {
+        height: area.height.saturating_sub(footer_rows),
+        ..area
+    };
+    let toast_area = Rect {
+        y: area.y + area.height.saturating_sub(1 + u16::from(toast_active)),
+        height: 1,
+        ..area
+    };
+    let status_area = Rect {
+        y: area.y + area.height.saturating_sub(1),
+        height: 1,
+        ..area
+    };
+
+    // Line number gutter width
+    let total_lines = buf.line_count();
+    let gutter_width = line_number_width(total_lines);
+
+    let visible_height = editor_area.height as usize;
+    let start = model.editor_scroll_offset;
+    let end = (start + visible_height).min(total_lines);
+    let cursor = buf.cursor();
+
+    let mut content: Vec<Line> = Vec::new();
+    for line_idx in start..end {
+        let line_text = buf.line_at(line_idx).unwrap_or_default();
+        let line_num = format!("{:>width$} ", line_idx + 1, width = gutter_width as usize);
+
+        let mut spans = vec![Span::styled(line_num, Style::default().fg(Color::DarkGray))];
+
+        if line_idx == cursor.line {
+            // Split line at cursor position for cursor rendering
+            let col = cursor.col.min(line_text.len());
+            let before = &line_text[..col];
+            let cursor_char = line_text.get(col..col + 1).unwrap_or(" ");
+            let after = if col < line_text.len() {
+                &line_text[col + 1..]
+            } else {
+                ""
+            };
+
+            if !before.is_empty() {
+                spans.push(Span::raw(before.to_string()));
+            }
+            spans.push(Span::styled(
+                cursor_char.to_string(),
+                Style::default().bg(Color::White).fg(Color::Black),
+            ));
+            if !after.is_empty() {
+                spans.push(Span::raw(after.to_string()));
+            }
+        } else {
+            spans.push(Span::raw(line_text));
+        }
+
+        content.push(Line::from(spans));
+    }
+
+    let doc = Paragraph::new(content);
+    frame.render_widget(Clear, editor_area);
+    frame.render_widget(doc, editor_area);
+
+    // Render toast if active
+    if toast_active {
+        status::render_toast_bar(model, frame, toast_area);
+    }
+
+    // Render editor status bar
+    render_editor_status_bar(model, frame, status_area);
+}
+
+fn render_editor_status_bar(model: &Model, frame: &mut Frame, area: Rect) {
+    let filename = model.file_path.file_name().map_or_else(
+        || "untitled".to_string(),
+        |s| s.to_string_lossy().to_string(),
+    );
+
+    let dirty = model
+        .editor_buffer
+        .as_ref()
+        .is_some_and(crate::editor::EditorBuffer::is_dirty);
+    let dirty_indicator = if dirty { " [modified]" } else { "" };
+
+    let cursor_info = model.editor_buffer.as_ref().map_or_else(String::new, |b| {
+        let c = b.cursor();
+        format!("  Ln {}, Col {}", c.line + 1, c.col + 1)
+    });
+
+    let status = format!(" EDIT  {filename}{dirty_indicator}{cursor_info}  Esc:view  Ctrl+S:save");
+
+    let status_bar =
+        Paragraph::new(status).style(Style::default().bg(Color::Magenta).fg(Color::White));
+
+    frame.render_widget(status_bar, area);
+}
+
+/// Calculate the width needed for line numbers.
+pub const fn line_number_width(total_lines: usize) -> u16 {
+    if total_lines < 10 {
+        1
+    } else if total_lines < 100 {
+        2
+    } else if total_lines < 1_000 {
+        3
+    } else if total_lines < 10_000 {
+        4
+    } else if total_lines < 100_000 {
+        5
+    } else {
+        6
+    }
 }
 
 fn highlight_spans(spans: &[Span<'_>], query: &str) -> Vec<Span<'static>> {

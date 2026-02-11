@@ -15,6 +15,7 @@ mod render;
 mod status;
 
 pub use overlays::{link_picker_content_top, link_picker_rect};
+pub use render::line_number_width;
 pub use render::{document_content_width, render, split_main_columns};
 
 pub const DOCUMENT_LEFT_PADDING: u16 = 2;

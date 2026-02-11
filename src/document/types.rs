@@ -72,6 +72,28 @@ impl Document {
         }
     }
 
+    /// Create a document from plain text, rendering each line verbatim.
+    ///
+    /// Used for non-markdown files where line breaks should be preserved
+    /// exactly as they appear in the source.
+    pub fn from_plain_text(source: &str) -> Self {
+        let lines: Vec<RenderedLine> = source
+            .lines()
+            .map(|line| RenderedLine::new(line.to_string(), LineType::Paragraph))
+            .collect();
+        Self {
+            source: source.to_string(),
+            lines,
+            headings: Vec::new(),
+            images: Vec::new(),
+            links: Vec::new(),
+            footnotes: HashMap::new(),
+            code_blocks: Vec::new(),
+            mermaid_sources: HashMap::new(),
+            hex_data: None,
+        }
+    }
+
     /// Create a new document from parsed results.
     pub(crate) fn from_parsed(source: String, result: ParsedDocument) -> Self {
         Self {

@@ -1,6 +1,6 @@
 [package]
 name = "markless"
-version = "0.9.8"
+version = "0.9.9"
 edition = "2024"
 authors = ["Josh V"]
 description = "A terminal markdown viewer with image support"
@@ -57,6 +57,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Unicode handling
 unicode-width = "0.2"
+ropey = "1.6.1"
 
 [dev-dependencies]
 # Testing

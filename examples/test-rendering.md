@@ -176,9 +176,6 @@ Escape backticks with double backticks: ``code with ` backtick``
     - [x] Level 3
 
 
----
-
-
 # Code Blocks
 
 ## Indented Code Block

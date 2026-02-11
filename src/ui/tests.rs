@@ -145,16 +145,18 @@ fn test_load_nearby_images_uses_protocol_render_height() {
 
 #[test]
 fn test_help_overlay_shows_config_paths_full_width() {
+    // Use a tall terminal so all help content (including Config at the bottom) is visible
     let mut model = Model::new(
         PathBuf::from("test.md"),
         Document::parse("# Title").unwrap(),
-        (80, 24),
+        (80, 60),
     );
     model.help_visible = true;
     model.config_global_path = Some(PathBuf::from("/path/that/should/be/visible/in/help/config"));
     model.config_local_path = Some(PathBuf::from("/local/override/path/visible/in/help/config"));
 
-    let mut terminal = create_test_terminal();
+    let backend = TestBackend::new(80, 60);
+    let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| render(&mut model, frame)).unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -932,5 +934,154 @@ fn test_image_rescales_on_viewport_resize() {
         new_width, 78,
         "After resize to 120 wide, image width should be 65% = 78, but got {}",
         new_width
+    );
+}
+
+#[test]
+fn test_editor_mode_renders_source_text() {
+    let md = "# Hello\n\nSome paragraph text";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    // Should show the raw source text, not rendered markdown
+    assert!(
+        content.contains("# Hello"),
+        "Editor should show raw markdown source"
+    );
+}
+
+#[test]
+fn test_editor_mode_shows_line_numbers() {
+    let md = "line one\nline two\nline three";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let first_row: String = (0..buffer.area.width)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol().to_string())
+        .collect();
+    // First row should contain line number "1"
+    assert!(
+        first_row.starts_with("1 "),
+        "Should show line number: got '{first_row}'"
+    );
+}
+
+#[test]
+fn test_editor_status_bar_shows_edit_indicator() {
+    let md = "# Test";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    // Last row should be the status bar
+    let last_row: String = (0..buffer.area.width)
+        .map(|x| {
+            buffer
+                .cell((x, buffer.area.height - 1))
+                .unwrap()
+                .symbol()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        last_row.contains("EDIT"),
+        "Status bar should show EDIT: got '{last_row}'"
+    );
+}
+
+#[test]
+fn test_editor_status_bar_shows_modified_after_edit() {
+    let md = "# Test";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    model = crate::app::update(model, crate::app::Message::EditorInsertChar('X'));
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let last_row: String = (0..buffer.area.width)
+        .map(|x| {
+            buffer
+                .cell((x, buffer.area.height - 1))
+                .unwrap()
+                .symbol()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        last_row.contains("modified"),
+        "Status bar should show modified: got '{last_row}'"
+    );
+}
+
+#[test]
+fn test_help_overlay_single_column() {
+    let doc = Document::parse("# Test\n\nHello world").unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 40));
+    model.help_visible = true;
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let mut nav_row = None;
+    let mut toc_row = None;
+    for y in 0..buffer.area.height {
+        let row_text: String = (0..buffer.area.width)
+            .map(|x| buffer.cell((x, y)).unwrap().symbol().to_string())
+            .collect();
+        if row_text.contains("Navigation") && nav_row.is_none() {
+            nav_row = Some(y);
+        }
+        if row_text.contains("TOC") && toc_row.is_none() {
+            toc_row = Some(y);
+        }
+    }
+    let nav_row = nav_row.expect("Navigation section not found");
+    let toc_row = toc_row.expect("TOC section not found");
+    assert!(
+        toc_row > nav_row,
+        "TOC ({toc_row}) should appear below Navigation ({nav_row}) in single-column layout"
+    );
+}
+
+#[test]
+fn test_help_overlay_scroll_clamps() {
+    let doc = Document::parse("# Test\n\nHello world").unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 40));
+    model.help_visible = true;
+    model.help_scroll_offset = 9999;
+
+    let mut terminal = create_test_terminal();
+    // Should not panic
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let all_text: String = (0..buffer.area.height)
+        .flat_map(|y| {
+            (0..buffer.area.width).map(move |x| buffer.cell((x, y)).unwrap().symbol().to_string())
+        })
+        .collect();
+    // At max scroll, the last section "Config" should be visible
+    assert!(
+        all_text.contains("Config"),
+        "Config section should be visible at max scroll"
     );
 }

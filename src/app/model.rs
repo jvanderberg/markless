@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -10,8 +11,16 @@ use crate::config::ImageMode;
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::document::Document;
+use crate::editor::EditorBuffer;
 use crate::image::ImageLoader;
 use crate::ui::viewport::Viewport;
+
+/// Hash a byte slice for content comparison.
+pub(super) fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Mermaid diagram display width as a percentage of the image target width.
 ///
@@ -88,6 +97,8 @@ pub struct Model {
     pub config_local_path: Option<PathBuf>,
     /// Whether help overlay is visible
     pub help_visible: bool,
+    /// Scroll offset for the help overlay
+    pub help_scroll_offset: usize,
     /// URL currently hovered in the document pane (mouse capture mode)
     pub hovered_link_url: Option<String>,
     /// Pending visible-link picker items for quick follow (`o`)
@@ -134,6 +145,22 @@ pub struct Model {
     pub browse_dir: PathBuf,
     /// Directory entries shown in browse-mode TOC
     pub browse_entries: Vec<DirEntry>,
+    /// Whether the editor is active (edit mode vs view mode)
+    pub editor_mode: bool,
+    /// The editor text buffer (populated when entering edit mode)
+    pub editor_buffer: Option<EditorBuffer>,
+    /// Scroll offset for the editor viewport (line index of first visible line)
+    pub editor_scroll_offset: usize,
+    /// Hash of the file on disk when edit mode was entered (for conflict detection)
+    pub editor_disk_hash: Option<u64>,
+    /// Whether the file on disk has changed since edit mode was entered
+    pub editor_disk_conflict: bool,
+    /// Set after first save attempt when disk conflict detected; allows second save to force
+    pub save_confirmed: bool,
+    /// Set after first quit attempt with unsaved editor changes; allows second quit to proceed
+    pub quit_confirmed: bool,
+    /// Set after first Esc press with unsaved editor changes; allows second Esc to discard
+    pub exit_confirmed: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -142,6 +169,7 @@ impl std::fmt::Debug for Model {
             .field("file_path", &self.file_path)
             .field("toc_visible", &self.toc_visible)
             .field("watch_enabled", &self.watch_enabled)
+            .field("editor_mode", &self.editor_mode)
             .finish_non_exhaustive()
     }
 }
@@ -170,6 +198,7 @@ impl Model {
             config_global_path: None,
             config_local_path: None,
             help_visible: false,
+            help_scroll_offset: 0,
             hovered_link_url: None,
             link_picker_items: Vec::new(),
             toast: None,
@@ -193,6 +222,14 @@ impl Model {
             browse_mode: false,
             browse_dir: base_dir,
             browse_entries: Vec::new(),
+            editor_mode: false,
+            editor_buffer: None,
+            editor_scroll_offset: 0,
+            editor_disk_hash: None,
+            editor_disk_conflict: false,
+            save_confirmed: false,
+            quit_confirmed: false,
+            exit_confirmed: false,
         }
     }
 
@@ -534,16 +571,26 @@ impl Model {
                 self.layout_width(),
             ));
         }
-        let content = match String::from_utf8(raw_bytes) {
-            Ok(s) => crate::document::prepare_content(path, s),
-            Err(e) => crate::document::prepare_content(path, e.to_string()),
+        let text = match String::from_utf8(raw_bytes) {
+            Ok(s) => s,
+            Err(e) => e.to_string(),
         };
-        Document::parse_with_all_options(
-            &content,
-            self.layout_width(),
-            &self.image_layout_heights,
-            self.should_render_mermaid_as_images(),
-        )
+        let is_md = is_markdown_ext(&path.to_string_lossy());
+        let content = crate::document::prepare_content(path, text.clone());
+        let was_wrapped = content != text;
+        // Use the markdown parser for .md files and for files that
+        // prepare_content wrapped in code fences (code/csv/image).
+        // Everything else is plain text — render verbatim.
+        if is_md || was_wrapped {
+            Document::parse_with_all_options(
+                &content,
+                self.layout_width(),
+                &self.image_layout_heights,
+                self.should_render_mermaid_as_images(),
+            )
+        } else {
+            Ok(Document::from_plain_text(&content))
+        }
     }
 
     /// Load a file into the document area.
@@ -593,6 +640,21 @@ impl Model {
             .enumerate()
             .find(|(_, e)| !e.is_dir)
             .map(|(idx, e)| (idx, e.path.clone()))
+    }
+
+    /// Whether the editor has unsaved changes.
+    pub fn editor_is_dirty(&self) -> bool {
+        self.editor_mode
+            && self
+                .editor_buffer
+                .as_ref()
+                .is_some_and(crate::editor::EditorBuffer::is_dirty)
+    }
+
+    /// Hash the contents of a file on disk, returning `None` if the file can't be read.
+    pub fn file_disk_hash(&self) -> Option<u64> {
+        let bytes = std::fs::read(&self.file_path).ok()?;
+        Some(hash_bytes(&bytes))
     }
 
     pub(super) fn show_toast(&mut self, level: ToastLevel, message: impl Into<String>) {
@@ -781,7 +843,7 @@ fn clean_selected_line(
     Some(content.to_string())
 }
 
-fn is_markdown_ext(name: &str) -> bool {
+pub(super) fn is_markdown_ext(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, ext)| {
         ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
     })
@@ -802,6 +864,7 @@ impl Default for Model {
             config_global_path: None,
             config_local_path: None,
             help_visible: false,
+            help_scroll_offset: 0,
             hovered_link_url: None,
             link_picker_items: Vec::new(),
             toast: None,
@@ -825,6 +888,14 @@ impl Default for Model {
             browse_mode: false,
             browse_dir: PathBuf::from("."),
             browse_entries: Vec::new(),
+            editor_mode: false,
+            editor_buffer: None,
+            editor_scroll_offset: 0,
+            editor_disk_hash: None,
+            editor_disk_conflict: false,
+            save_confirmed: false,
+            quit_confirmed: false,
+            exit_confirmed: false,
         }
     }
 }

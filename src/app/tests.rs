@@ -104,12 +104,11 @@ fn test_force_reload_message_triggers_reload_side_effect() {
     std::fs::write(&file_path, "# One\n\nalpha").unwrap();
     let doc = Document::parse_with_layout("# One\n\nalpha", 80).unwrap();
     let mut model = Model::new(file_path.clone(), doc, (80, 24));
-    let app = App::new(file_path.clone());
     let mut watcher = None;
 
     std::fs::write(&file_path, "# Updated\n\nbeta").unwrap();
     model = update(model, Message::ForceReload);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::ForceReload);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::ForceReload);
 
     assert!(model.document.source().contains("# Updated"));
 }
@@ -189,7 +188,6 @@ fn test_selected_text_strips_code_block_borders() {
 fn test_selection_clears_after_mouse_up() {
     let doc = Document::parse("# Title\n\nLine one\n\nLine two").unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::StartSelection(2));
@@ -197,7 +195,7 @@ fn test_selection_clears_after_mouse_up() {
     model = update(model, Message::EndSelection(4));
     assert!(model.selection.is_some());
 
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::EndSelection(4));
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EndSelection(4));
 
     assert!(model.selection.is_none());
 }
@@ -297,6 +295,38 @@ fn test_quit_sets_should_quit() {
     let model = create_test_model();
     let model = update(model, Message::Quit);
     assert!(model.should_quit);
+}
+
+#[test]
+fn test_ctrl_q_quits_in_normal_mode() {
+    let model = create_test_model();
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::Quit));
+}
+
+#[test]
+fn test_ctrl_q_quits_in_editor_mode() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::Quit));
+}
+
+#[test]
+fn test_ctrl_q_quits_in_search_mode() {
+    let model = create_test_model();
+    let model = update(model, Message::StartSearch);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::Quit));
 }
 
 #[test]
@@ -552,7 +582,7 @@ fn test_help_mode_esc_closes_help() {
 }
 
 #[test]
-fn test_help_mode_any_key_closes_help() {
+fn test_help_mode_unrecognized_key_ignored() {
     let mut model = create_test_model();
     model.help_visible = true;
 
@@ -560,7 +590,7 @@ fn test_help_mode_any_key_closes_help() {
         event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         &model,
     );
-    assert_eq!(msg, Some(Message::HideHelp));
+    assert_eq!(msg, None);
 }
 
 #[test]
@@ -732,11 +762,10 @@ fn test_follow_link_jumps_to_internal_anchor() {
     let md = "[Go](#target)\n\n## Target";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::OpenVisibleLinks);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
 
     assert!(model.viewport.offset() > 0);
 }
@@ -746,11 +775,10 @@ fn test_follow_link_jumps_to_footnote_definition() {
     let md = "Alpha[^1]\n\n[^1]: Footnote text";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::OpenVisibleLinks);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
 
     assert!(model.viewport.offset() > 0);
 }
@@ -762,12 +790,11 @@ fn test_follow_link_on_image_line_uses_image_src() {
     heights.insert("#target".to_string(), 3);
     let doc = Document::parse_with_layout_and_image_heights(md, 80, &heights).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 6));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     let line = 1; // inside image body
     model = update(model, Message::FollowLinkAtLine(line, None));
-    app.handle_message_side_effects(
+    App::handle_message_side_effects(
         &mut model,
         &mut watcher,
         &Message::FollowLinkAtLine(line, None),
@@ -785,7 +812,6 @@ fn test_follow_link_at_column_picks_correct_link_on_same_line() {
               ## First\n\n## Second";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 4));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     let link_line = model.document.links()[0].line;
@@ -794,7 +820,7 @@ fn test_follow_link_at_column_picks_correct_link_on_same_line() {
 
     let msg = Message::FollowLinkAtLine(link_line, Some(col));
     model = update(model, msg.clone());
-    app.handle_message_side_effects(&mut model, &mut watcher, &msg);
+    App::handle_message_side_effects(&mut model, &mut watcher, &msg);
 
     let first_line = model.document.resolve_internal_anchor("first").unwrap();
     let second_line = model.document.resolve_internal_anchor("second").unwrap();
@@ -855,15 +881,14 @@ fn test_open_visible_links_shows_picker_when_multiple() {
     let md = "[A](#one)\n\n[B](#two)\n\n## One\n\n## Two";
     let doc = Document::parse_with_layout(md, 80).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 8));
-    let app = App::new(PathBuf::from("test.md"));
     let mut watcher = None;
 
     model = update(model, Message::OpenVisibleLinks);
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
     assert_eq!(model.link_picker_items.len(), 2);
 
     model = update(model, Message::SelectVisibleLink(2));
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::SelectVisibleLink(2));
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::SelectVisibleLink(2));
     assert!(model.link_picker_items.is_empty());
     assert!(model.viewport.offset() > 0);
 }
@@ -1353,7 +1378,6 @@ fn test_browse_toc_backspace_sends_toc_collapse() {
 
 #[test]
 fn test_browse_navigate_parent_at_root_is_noop() {
-    let app = App::new(PathBuf::from("test.md"));
     let mut model = create_test_model();
     model.browse_mode = true;
     model.toc_visible = true;
@@ -1367,7 +1391,7 @@ fn test_browse_navigate_parent_at_root_is_noop() {
 
     // TocCollapse in browse mode triggers browse_navigate_parent
     let mut watcher: Option<crate::watcher::FileWatcher> = None;
-    app.handle_message_side_effects(&mut model, &mut watcher, &Message::TocCollapse);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::TocCollapse);
 
     // Should stay at root without error
     assert_eq!(model.browse_dir, PathBuf::from("/"));
@@ -1864,4 +1888,1147 @@ fn test_wrap_width_is_exact_target_not_smaller() {
              {terminal_width} — exceeds wrap_width 40"
         );
     }
+}
+
+// --- Editor mode tests ---
+
+#[test]
+fn test_enter_edit_mode_populates_buffer() {
+    let model = create_test_model();
+    assert!(!model.editor_mode);
+    assert!(model.editor_buffer.is_none());
+
+    let model = update(model, Message::EnterEditMode);
+    assert!(model.editor_mode);
+    assert!(model.editor_buffer.is_some());
+}
+
+#[test]
+fn test_enter_edit_mode_loads_source() {
+    let model = create_test_model();
+    let source = model.document.source().to_string();
+
+    let model = update(model, Message::EnterEditMode);
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert_eq!(buf.text(), source);
+}
+
+#[test]
+fn test_exit_edit_mode_clears_buffer() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    assert!(model.editor_mode);
+
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+    assert!(model.editor_buffer.is_none());
+}
+
+#[test]
+fn test_exit_edit_mode_after_save_keeps_changes() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Test\n\nHello world").unwrap();
+
+    let doc = Document::parse("# Test\n\nHello world").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Save via side effect (marks buffer clean)
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(!model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // Now Esc exits immediately (buffer is clean) and re-parses
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+    assert!(model.document.source().contains('X'));
+}
+
+#[test]
+fn test_exit_edit_mode_discard_reverts_document() {
+    let model = create_test_model();
+    let original_source = model.document.source().to_string();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // Discard: Esc twice
+    let model = update(model, Message::ExitEditMode);
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+    // Document should have original source, NOT the edited version
+    assert_eq!(model.document.source(), original_source);
+}
+
+#[test]
+fn test_editor_insert_char() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('Z'));
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.is_dirty());
+    assert!(buf.text().starts_with('Z'));
+}
+
+#[test]
+fn test_editor_delete_back() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('A'));
+    let model = update(model, Message::EditorInsertChar('B'));
+    let model = update(model, Message::EditorDeleteBack);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.text().starts_with('A'));
+    assert!(!buf.text().starts_with("AB"));
+}
+
+#[test]
+fn test_editor_split_line() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let line_count_before = model.editor_buffer.as_ref().unwrap().line_count();
+
+    let model = update(model, Message::EditorSplitLine);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert_eq!(buf.line_count(), line_count_before + 1);
+}
+
+#[test]
+fn test_editor_cursor_movement() {
+    use crate::editor::Direction;
+
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // Move right, then check cursor moved
+    let model = update(model, Message::EditorMoveCursor(Direction::Right));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert_eq!(cursor.col, 1);
+}
+
+#[test]
+fn test_editor_move_home_end() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let model = update(model, Message::EditorMoveEnd);
+    let end_col = model.editor_buffer.as_ref().unwrap().cursor().col;
+    assert!(end_col > 0);
+
+    let model = update(model, Message::EditorMoveHome);
+    let col = model.editor_buffer.as_ref().unwrap().cursor().col;
+    assert_eq!(col, 0);
+}
+
+#[test]
+fn test_editor_scroll_keeps_cursor_visible() {
+    let mut md = String::new();
+    for i in 1..=50 {
+        md.push_str(&format!("Line {i}\n"));
+    }
+    let doc = Document::parse(&md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 10));
+    let model = update(model, Message::EnterEditMode);
+    assert_eq!(model.editor_scroll_offset, 0);
+
+    // Move cursor down many lines
+    let mut model = model;
+    for _ in 0..20 {
+        model = update(
+            model,
+            Message::EditorMoveCursor(crate::editor::Direction::Down),
+        );
+    }
+    // Cursor should be visible — scroll offset should have adjusted
+    let cursor_line = model.editor_buffer.as_ref().unwrap().cursor().line;
+    assert_eq!(cursor_line, 20);
+    assert!(model.editor_scroll_offset > 0);
+    assert!(cursor_line >= model.editor_scroll_offset);
+}
+
+#[test]
+fn test_editor_scroll_up_down() {
+    // Use a long document so scrolling isn't clamped too early
+    let model = create_long_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let model = update(model, Message::EditorScrollDown(5));
+    assert_eq!(model.editor_scroll_offset, 5);
+
+    let model = update(model, Message::EditorScrollUp(3));
+    assert_eq!(model.editor_scroll_offset, 2);
+
+    let model = update(model, Message::EditorScrollUp(10));
+    assert_eq!(model.editor_scroll_offset, 0);
+}
+
+#[test]
+fn test_enter_edit_mode_is_idempotent() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // Entering edit mode again should not reset the buffer
+    let model = update(model, Message::EnterEditMode);
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.text().starts_with('X'));
+}
+
+// --- Editor input mapping tests ---
+
+#[test]
+fn test_e_key_enters_edit_mode() {
+    let model = create_test_model();
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EnterEditMode));
+}
+
+#[test]
+fn test_e_key_enters_edit_mode_when_toc_focused() {
+    let model = create_test_model();
+    let model = update(model, Message::ToggleTocFocus);
+    assert!(model.toc_visible);
+    assert!(model.toc_focused);
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EnterEditMode));
+}
+
+#[test]
+fn test_editor_mode_esc_exits() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::ExitEditMode));
+}
+
+#[test]
+fn test_editor_mode_char_inserts() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorInsertChar('a')));
+}
+
+#[test]
+fn test_editor_mode_arrows_move_cursor() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(
+        msg,
+        Some(Message::EditorMoveCursor(crate::editor::Direction::Left))
+    );
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(
+        msg,
+        Some(Message::EditorMoveCursor(crate::editor::Direction::Right))
+    );
+}
+
+#[test]
+fn test_editor_mode_ctrl_s_saves() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorSave));
+}
+
+#[test]
+fn test_editor_mode_enter_splits_line() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorSplitLine));
+}
+
+#[test]
+fn test_editor_mode_backspace_deletes_back() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorDeleteBack));
+}
+
+#[test]
+fn test_editor_mode_ctrl_left_moves_word_left() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorMoveWordLeft));
+}
+
+#[test]
+fn test_editor_mode_home_end() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorMoveHome));
+
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorMoveEnd));
+}
+
+#[test]
+fn test_editor_mode_mouse_scroll() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    let msg = App::handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        },
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorScrollDown(3)));
+
+    let msg = App::handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        },
+        &model,
+    );
+    assert_eq!(msg, Some(Message::EditorScrollUp(3)));
+}
+
+#[test]
+fn test_editor_save_writes_file() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Hello\n\nOriginal content").unwrap();
+
+    let doc = Document::parse("# Hello\n\nOriginal content").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    // Enter edit mode
+    model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+
+    // Type some text at the beginning
+    model = update(model, Message::EditorInsertChar('X'));
+    assert!(model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // Save via side effect
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    // Buffer should be marked clean
+    assert!(!model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // File should contain the modified content
+    let saved = std::fs::read_to_string(&file_path).unwrap();
+    assert!(saved.starts_with('X'));
+}
+
+#[test]
+fn test_editor_save_no_changes_shows_toast() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Hello").unwrap();
+
+    let doc = Document::parse("# Hello").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    model = update(model, Message::EnterEditMode);
+
+    // Save without any edits
+    let mut watcher = None;
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    // Should show "No changes" toast
+    let toast = model.active_toast();
+    assert!(toast.is_some());
+    assert!(toast.unwrap().0.contains("No changes"));
+}
+
+// --- Dirty buffer protection tests ---
+
+#[test]
+fn test_quit_with_dirty_editor_shows_warning() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // First quit should warn, not quit
+    let model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+    assert!(model.quit_confirmed);
+}
+
+#[test]
+fn test_quit_dirty_editor_toast_says_ctrl_q() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    let model = update(model, Message::Quit);
+    let toast = model.active_toast().map(|(msg, _)| msg.to_string());
+    assert!(
+        toast
+            .as_deref()
+            .is_some_and(|t| t.contains("Ctrl+Q") || t.contains("ctrl+q")),
+        "dirty quit toast should mention Ctrl+Q, got: {:?}",
+        toast
+    );
+}
+
+#[test]
+fn test_ctrl_e_toggles_edit_mode() {
+    let model = create_test_model();
+    // Ctrl+E in normal mode should enter edit mode
+    let ctrl_e = event::KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+    let msg = App::handle_key(ctrl_e, &model);
+    assert_eq!(msg, Some(Message::EnterEditMode));
+
+    // Ctrl+E in editor mode should exit edit mode
+    let model = update(model, Message::EnterEditMode);
+    assert!(model.editor_mode);
+    let msg = App::handle_key(ctrl_e, &model);
+    assert_eq!(msg, Some(Message::ExitEditMode));
+}
+
+#[test]
+fn test_quit_twice_with_dirty_editor_quits() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    let model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+
+    let model = update(model, Message::Quit);
+    assert!(model.should_quit);
+}
+
+#[test]
+fn test_quit_clean_editor_quits_immediately() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // No edits — quit should work immediately
+    let model = update(model, Message::Quit);
+    assert!(model.should_quit);
+}
+
+#[test]
+fn test_quit_confirmation_resets_on_other_action() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // First quit warns
+    let model = update(model, Message::Quit);
+    assert!(model.quit_confirmed);
+
+    // Typing resets the confirmation
+    let model = update(model, Message::EditorInsertChar('Y'));
+    assert!(!model.quit_confirmed);
+
+    // Must press q twice again
+    let model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+}
+
+#[test]
+fn test_exit_edit_mode_dirty_warns_first() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('X'));
+
+    // First Esc warns
+    let model = update(model, Message::ExitEditMode);
+    assert!(model.editor_mode);
+    assert!(model.exit_confirmed);
+
+    // Second Esc actually exits
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+}
+
+#[test]
+fn test_exit_edit_mode_clean_exits_immediately() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // No edits — Esc should exit immediately
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+}
+
+#[test]
+fn test_save_during_quit_warning_quits_after_save() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path;
+
+    let mut watcher = None;
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Quit warns about dirty buffer
+    model = update(model, Message::Quit);
+    assert!(!model.should_quit);
+    assert!(model.quit_confirmed);
+
+    // Ctrl+S saves and should auto-quit
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(
+        model.should_quit,
+        "save during quit warning should auto-quit"
+    );
+}
+
+#[test]
+fn test_save_during_exit_warning_exits_edit_mode() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path;
+
+    let mut watcher = None;
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Esc warns about dirty buffer
+    model = update(model, Message::ExitEditMode);
+    assert!(model.editor_mode);
+    assert!(model.exit_confirmed);
+
+    // Ctrl+S saves and should auto-exit edit mode
+    let file_path = model.file_path.clone();
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(
+        !model.editor_mode,
+        "save during exit warning should auto-exit edit mode"
+    );
+
+    // File must actually be saved to disk
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        on_disk.starts_with('X'),
+        "file should be saved to disk, got: {:?}",
+        &on_disk[..on_disk.len().min(40)]
+    );
+
+    // Document must reflect the saved content
+    assert!(
+        model.document.source().starts_with('X'),
+        "document should be updated with saved content, got: {:?}",
+        &model.document.source()[..model.document.source().len().min(40)]
+    );
+}
+
+// --- Scroll position sync tests ---
+
+#[test]
+fn test_enter_edit_mode_from_scrolled_position() {
+    let model = create_long_test_model();
+    // Scroll to middle
+    let model = update(model, Message::GoToBottom);
+    let vp_offset = model.viewport.offset();
+    assert!(vp_offset > 0, "Should be scrolled");
+
+    let model = update(model, Message::EnterEditMode);
+    // Editor should not start at line 0
+    assert!(
+        model.editor_scroll_offset > 0,
+        "Editor should scroll to approximate position, got {}",
+        model.editor_scroll_offset
+    );
+}
+
+#[test]
+fn test_enter_edit_mode_from_top_stays_at_top() {
+    let model = create_test_model();
+    assert_eq!(model.viewport.offset(), 0);
+
+    let model = update(model, Message::EnterEditMode);
+    assert_eq!(model.editor_scroll_offset, 0);
+    assert_eq!(model.editor_buffer.as_ref().unwrap().cursor().line, 0);
+}
+
+#[test]
+fn test_exit_edit_mode_restores_scroll_position() {
+    let model = create_long_test_model();
+    let model = update(model, Message::EnterEditMode);
+
+    // Scroll editor to the middle
+    let mut model = model;
+    for _ in 0..30 {
+        model = update(
+            model,
+            Message::EditorMoveCursor(crate::editor::Direction::Down),
+        );
+    }
+    assert!(model.editor_scroll_offset > 0);
+
+    // Exit edit mode
+    let model = update(model, Message::ExitEditMode);
+    // View should be scrolled to approximately the same position
+    assert!(
+        model.viewport.offset() > 0,
+        "Viewport should be scrolled after exiting editor"
+    );
+}
+
+#[test]
+fn test_discard_edit_then_reenter_shows_original() {
+    let model = create_test_model();
+    let original_source = model.document.source().to_string();
+
+    // Enter edit, make a change
+    let model = update(model, Message::EnterEditMode);
+    let model = update(model, Message::EditorInsertChar('Z'));
+
+    // Discard: Esc twice (first warns, second discards)
+    let model = update(model, Message::ExitEditMode);
+    let model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode);
+
+    // Document should have the ORIGINAL source, not the edited version
+    assert_eq!(model.document.source(), original_source);
+
+    // Re-enter edit mode — buffer should also have the original source
+    let model = update(model, Message::EnterEditMode);
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(
+        !buf.text().starts_with('Z'),
+        "Re-entered editor should show original text, not discarded edits"
+    );
+    assert_eq!(buf.text(), original_source);
+}
+
+// --- Editor disk conflict tests ---
+
+#[test]
+fn test_enter_edit_mode_stores_disk_hash() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Hello").unwrap();
+
+    let doc = Document::parse("# Hello").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+    assert!(model.editor_disk_hash.is_none());
+
+    let mut model = update(model, Message::EnterEditMode);
+    let mut watcher = None;
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+
+    assert!(
+        model.editor_disk_hash.is_some(),
+        "disk hash should be set on entering edit mode"
+    );
+}
+
+#[test]
+fn test_file_changed_during_edit_sets_conflict() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    assert!(!model.editor_disk_conflict);
+
+    // Simulate external file change
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    assert!(
+        model.editor_disk_conflict,
+        "conflict should be detected when file changes during edit"
+    );
+    assert!(model.editor_mode, "should remain in editor mode");
+}
+
+#[test]
+fn test_file_changed_during_edit_skips_reload() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    let original_doc_source = model.document.source().to_string();
+
+    // Simulate external file change
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    // Document should NOT have been reloaded
+    assert_eq!(
+        model.document.source(),
+        original_doc_source,
+        "document should not reload during edit"
+    );
+}
+
+#[test]
+fn test_save_with_disk_conflict_warns_first() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Change file on disk behind our back
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    // First save should detect conflict and warn
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    assert!(
+        model.save_confirmed,
+        "first save should set save_confirmed on conflict"
+    );
+    // File on disk should still be the external change
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert_eq!(
+        on_disk, "# Changed externally",
+        "file should not be overwritten on first save"
+    );
+}
+
+#[test]
+fn test_save_with_disk_conflict_second_save_forces() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Change file on disk behind our back
+    std::fs::write(&file_path, "# Changed externally").unwrap();
+
+    // First save: warns
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(model.save_confirmed);
+
+    // Second save: forces overwrite
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        on_disk.starts_with('X'),
+        "second save should force overwrite"
+    );
+    assert!(
+        !model.save_confirmed,
+        "save_confirmed should reset after successful save"
+    );
+}
+
+#[test]
+fn test_save_without_conflict_succeeds_immediately() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    // Save without any external change — should succeed immediately
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        on_disk.starts_with('X'),
+        "save should succeed immediately without conflict"
+    );
+    assert!(!model.save_confirmed);
+}
+
+#[test]
+fn test_file_changed_shows_reload_toast() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "# Original").unwrap();
+
+    let doc = Document::parse("# Original").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    let mut model = update(model, Message::FileChanged);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    let toast_msg = model.active_toast().map(|(msg, _)| msg.to_string());
+    assert!(
+        toast_msg.as_deref().is_some_and(|t| t.contains("reloaded")),
+        "FileChanged should show a 'reloaded' toast: got {:?}",
+        toast_msg
+    );
+}
+
+#[test]
+fn test_toggle_watch_watches_model_file_path_not_app_path() {
+    let dir = tempdir().unwrap();
+    let canonical_dir = dir.path().canonicalize().unwrap();
+    let file_path = canonical_dir.join("doc.md");
+    std::fs::write(&file_path, "# Hello").unwrap();
+
+    // Model points at the actual file (as if browse mode navigated to it)
+    let doc = Document::parse("# Hello").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.watch_enabled = true;
+
+    let mut watcher: Option<crate::watcher::FileWatcher> = None;
+
+    // ToggleWatch should create a watcher for model.file_path, not some other path
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::ToggleWatch);
+
+    let w = watcher.as_ref().expect("watcher should be created");
+    assert_eq!(
+        w.target_path(),
+        &file_path,
+        "watcher must target model.file_path, not the app's original CLI path"
+    );
+}
+
+// --- Editor mouse click tests ---
+
+#[test]
+fn test_editor_mouse_click_positions_cursor() {
+    let md = "Hello world\nSecond line\nThird line\n";
+    let doc = Document::parse(md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    let gutter_width = crate::ui::line_number_width(buf.line_count()) as u16 + 1; // +1 space
+
+    // Click on line 1 (0-indexed), col 3
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: gutter_width + 3,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::EditorMoveTo(1, 3)));
+
+    // Apply and verify cursor position
+    let model = update(model, Message::EditorMoveTo(1, 3));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert_eq!(cursor.line, 1);
+    assert_eq!(cursor.col, 3);
+}
+
+#[test]
+fn test_editor_mouse_click_with_scroll_offset() {
+    let mut md = String::new();
+    for i in 1..=50 {
+        md.push_str(&format!("Line {i}\n"));
+    }
+    let doc = Document::parse(&md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    // Scroll down 10 lines
+    let model = update(model, Message::EditorScrollDown(10));
+    assert_eq!(model.editor_scroll_offset, 10);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    let gutter_width = crate::ui::line_number_width(buf.line_count()) as u16 + 1;
+
+    // Click on row 5 of the viewport — should map to line 15 (scroll_offset=10 + row=5)
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: gutter_width + 2,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::EditorMoveTo(15, 2)));
+}
+
+#[test]
+fn test_editor_mouse_click_clamps_past_end() {
+    let md = "Short\n";
+    let doc = Document::parse(md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    // Click at a column past the end of the line — move_to should clamp
+    let model = update(model, Message::EditorMoveTo(0, 999));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert_eq!(cursor.line, 0);
+    // Should be clamped to line length
+    assert!(cursor.col <= 5);
+
+    // Click past the last line — move_to should clamp
+    let model = update(model, Message::EditorMoveTo(999, 0));
+    let cursor = model.editor_buffer.as_ref().unwrap().cursor();
+    assert!(cursor.line < 999);
+}
+
+#[test]
+fn test_editor_mouse_click_in_gutter() {
+    let md = "Hello world\nSecond line\n";
+    let doc = Document::parse(md).unwrap();
+    let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    let model = update(model, Message::EnterEditMode);
+
+    // Click in the gutter area (column 0) — should set col to 0
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 0,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::EditorMoveTo(1, 0)));
+}
+
+// ---- Help scroll tests ----
+
+#[test]
+fn test_help_scroll_offset_initial_is_zero() {
+    let model = create_test_model();
+    assert_eq!(model.help_scroll_offset, 0);
+}
+
+#[test]
+fn test_toggle_help_resets_scroll_offset() {
+    let mut model = create_test_model();
+    model.help_scroll_offset = 5;
+    let model = update(model, Message::ToggleHelp);
+    assert!(model.help_visible);
+    assert_eq!(model.help_scroll_offset, 0);
+}
+
+#[test]
+fn test_help_scroll_down_increments_offset() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let model = update(model, Message::HelpScrollDown(1));
+    assert_eq!(model.help_scroll_offset, 1);
+}
+
+#[test]
+fn test_help_scroll_up_floors_at_zero() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    model.help_scroll_offset = 0;
+    let model = update(model, Message::HelpScrollUp(1));
+    assert_eq!(model.help_scroll_offset, 0);
+}
+
+#[test]
+fn test_help_scroll_up_decrements_offset() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    model.help_scroll_offset = 5;
+    let model = update(model, Message::HelpScrollUp(2));
+    assert_eq!(model.help_scroll_offset, 3);
+}
+
+#[test]
+fn test_help_mode_j_scrolls_down() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollDown(1)));
+}
+
+#[test]
+fn test_help_mode_k_scrolls_up() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollUp(1)));
+}
+
+#[test]
+fn test_help_mode_space_page_down() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollDown(10)));
+}
+
+#[test]
+fn test_help_mode_q_closes() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HideHelp));
+}
+
+#[test]
+fn test_help_mode_arbitrary_key_ignored() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, None);
+}
+
+#[test]
+fn test_help_mode_g_goes_to_top() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollUp(usize::MAX)));
+}
+
+#[test]
+fn test_help_mode_shift_g_goes_to_bottom() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let msg = App::handle_key(
+        event::KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+        &model,
+    );
+    assert_eq!(msg, Some(Message::HelpScrollDown(usize::MAX)));
+}
+
+#[test]
+fn test_help_mode_mouse_scroll_down() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::HelpScrollDown(3)));
+}
+
+#[test]
+fn test_help_mode_mouse_scroll_up() {
+    let mut model = create_test_model();
+    model.help_visible = true;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    };
+    let msg = App::handle_mouse(mouse, &model);
+    assert_eq!(msg, Some(Message::HelpScrollUp(3)));
 }

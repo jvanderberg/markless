@@ -7,12 +7,11 @@ use crate::watcher::FileWatcher;
 use base64::Engine;
 
 impl App {
-    pub(super) fn make_file_watcher(&self) -> notify::Result<FileWatcher> {
-        FileWatcher::new(&self.file_path, Duration::from_millis(200))
+    pub(super) fn make_file_watcher(path: &std::path::Path) -> notify::Result<FileWatcher> {
+        FileWatcher::new(path, Duration::from_millis(200))
     }
 
     pub(super) fn handle_message_side_effects(
-        &self,
         model: &mut Model,
         file_watcher: &mut Option<FileWatcher>,
         msg: &Message,
@@ -20,7 +19,7 @@ impl App {
         match msg {
             Message::ToggleWatch => {
                 if model.watch_enabled {
-                    match self.make_file_watcher() {
+                    match Self::make_file_watcher(&model.file_path) {
                         Ok(watcher) => {
                             *file_watcher = Some(watcher);
                             model.show_toast(ToastLevel::Info, "Watching file changes");
@@ -44,7 +43,15 @@ impl App {
                 }
             }
             Message::ForceReload | Message::FileChanged => {
-                if let Err(err) = model.reload_from_disk() {
+                if model.editor_mode {
+                    // Don't reload while editing — check for conflict instead
+                    if let Some(new_hash) = model.file_disk_hash()
+                        && model.editor_disk_hash != Some(new_hash)
+                    {
+                        model.editor_disk_conflict = true;
+                        model.show_toast(ToastLevel::Warning, "File changed on disk while editing");
+                    }
+                } else if let Err(err) = model.reload_from_disk() {
                     model.show_toast(ToastLevel::Error, format!("Reload failed: {err}"));
                     crate::perf::log_event(
                         "reload.error",
@@ -52,6 +59,8 @@ impl App {
                     );
                 } else if matches!(msg, Message::ForceReload) {
                     model.show_toast(ToastLevel::Info, "Reloaded");
+                } else {
+                    model.show_toast(ToastLevel::Info, "File changed, reloaded");
                 }
             }
             Message::OpenVisibleLinks => {
@@ -72,6 +81,12 @@ impl App {
             }
             Message::TocCollapse if model.browse_mode => {
                 Self::browse_navigate_parent(model);
+            }
+            Message::EnterEditMode => {
+                model.editor_disk_hash = model.file_disk_hash();
+            }
+            Message::EditorSave => {
+                Self::save_editor_buffer(model);
             }
             Message::EnterBrowseMode => {
                 let dir = model
@@ -281,6 +296,91 @@ impl App {
                 model.show_toast(ToastLevel::Error, format!("Open failed: {err}"));
             } else {
                 model.toc_selected = Some(idx);
+            }
+        }
+    }
+
+    fn save_editor_buffer(model: &mut Model) {
+        let is_dirty = model
+            .editor_buffer
+            .as_ref()
+            .is_some_and(crate::editor::EditorBuffer::is_dirty);
+        if model.editor_buffer.is_none() {
+            return;
+        }
+        if !is_dirty {
+            model.show_toast(ToastLevel::Info, "No changes to save");
+            return;
+        }
+
+        // Check if the file changed on disk since we started editing
+        if !model.save_confirmed
+            && let Some(current_hash) = model.file_disk_hash()
+            && model.editor_disk_hash != Some(current_hash)
+        {
+            model.editor_disk_conflict = true;
+            model.save_confirmed = true;
+            model.show_toast(
+                ToastLevel::Warning,
+                "File changed on disk! Press Ctrl+S again to overwrite",
+            );
+            return;
+        }
+
+        let text = model
+            .editor_buffer
+            .as_ref()
+            .map(crate::editor::EditorBuffer::text)
+            .unwrap_or_default();
+        let path = model.file_path.clone();
+        match std::fs::write(&path, &text) {
+            Ok(()) => {
+                if let Some(buf) = &mut model.editor_buffer {
+                    buf.mark_clean();
+                }
+                model.editor_disk_hash = model.file_disk_hash();
+                model.editor_disk_conflict = false;
+                model.save_confirmed = false;
+
+                // If save was triggered during a quit/exit warning, complete that action
+                if model.quit_confirmed {
+                    model.should_quit = true;
+                } else if model.exit_confirmed {
+                    // Re-parse saved text into the document before leaving edit mode
+                    let is_md =
+                        crate::app::model::is_markdown_ext(&model.file_path.to_string_lossy());
+                    let doc = if is_md {
+                        crate::document::Document::parse_with_all_options(
+                            &text,
+                            model.layout_width(),
+                            &std::collections::HashMap::new(),
+                            model.should_render_mermaid_as_images(),
+                        )
+                        .ok()
+                    } else {
+                        Some(crate::document::Document::from_plain_text(&text))
+                    };
+                    if let Some(doc) = doc {
+                        model.document = doc;
+                        model.viewport.set_total_lines(model.document.line_count());
+                    }
+
+                    // Exit edit mode now that the buffer is saved
+                    model.editor_mode = false;
+                    model.editor_buffer = None;
+                    model.editor_scroll_offset = 0;
+                    model.editor_disk_hash = None;
+                    model.exit_confirmed = false;
+                    model.show_toast(
+                        ToastLevel::Info,
+                        format!("Saved {} and exited editor", path.display()),
+                    );
+                } else {
+                    model.show_toast(ToastLevel::Info, format!("Saved {}", path.display()));
+                }
+            }
+            Err(err) => {
+                model.show_toast(ToastLevel::Error, format!("Save failed: {err}"));
             }
         }
     }
