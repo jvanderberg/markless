@@ -342,29 +342,30 @@ impl App {
                 model.editor_disk_conflict = false;
                 model.save_confirmed = false;
 
+                // Always re-parse saved text into the document so it stays
+                // in sync with what's on disk (needed when the user later
+                // discards further edits after a mid-session save).
+                let is_md = crate::app::model::is_markdown_ext(&model.file_path.to_string_lossy());
+                let doc = if is_md {
+                    crate::document::Document::parse_with_all_options(
+                        &text,
+                        model.layout_width(),
+                        &std::collections::HashMap::new(),
+                        model.should_render_mermaid_as_images(),
+                    )
+                    .ok()
+                } else {
+                    Some(crate::document::Document::from_plain_text(&text))
+                };
+                if let Some(doc) = doc {
+                    model.document = doc;
+                    model.viewport.set_total_lines(model.document.line_count());
+                }
+
                 // If save was triggered during a quit/exit warning, complete that action
                 if model.quit_confirmed {
                     model.should_quit = true;
                 } else if model.exit_confirmed {
-                    // Re-parse saved text into the document before leaving edit mode
-                    let is_md =
-                        crate::app::model::is_markdown_ext(&model.file_path.to_string_lossy());
-                    let doc = if is_md {
-                        crate::document::Document::parse_with_all_options(
-                            &text,
-                            model.layout_width(),
-                            &std::collections::HashMap::new(),
-                            model.should_render_mermaid_as_images(),
-                        )
-                        .ok()
-                    } else {
-                        Some(crate::document::Document::from_plain_text(&text))
-                    };
-                    if let Some(doc) = doc {
-                        model.document = doc;
-                        model.viewport.set_total_lines(model.document.line_count());
-                    }
-
                     // Exit edit mode now that the buffer is saved
                     model.editor_mode = false;
                     model.editor_buffer = None;

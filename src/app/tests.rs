@@ -3032,3 +3032,47 @@ fn test_help_mode_mouse_scroll_up() {
     let msg = App::handle_mouse(mouse, &model);
     assert_eq!(msg, Some(Message::HelpScrollUp(3)));
 }
+
+#[test]
+fn test_discard_after_save_shows_saved_content() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    std::fs::write(&file_path, "Original content").unwrap();
+
+    let doc = Document::parse("Original content").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path.clone();
+
+    let mut watcher = None;
+
+    // Enter edit mode
+    model = update(model, Message::EnterEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+
+    // Type a character and save
+    model = update(model, Message::EditorInsertChar('X'));
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+    assert!(!model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // Type another character (buffer is dirty again)
+    model = update(model, Message::EditorInsertChar('Y'));
+    assert!(model.editor_buffer.as_ref().unwrap().is_dirty());
+
+    // Discard: Esc twice (first warns, second discards)
+    model = update(model, Message::ExitEditMode);
+    assert!(model.editor_mode, "first Esc should warn, not exit");
+    model = update(model, Message::ExitEditMode);
+    assert!(!model.editor_mode, "second Esc should exit");
+
+    // Document should reflect the SAVED state (with 'X'), not the original
+    assert!(
+        model.document.source().contains('X'),
+        "Document should contain saved content, got: {}",
+        model.document.source()
+    );
+    // And should NOT contain the unsaved 'Y'
+    assert!(
+        !model.document.source().contains('Y'),
+        "Document should not contain unsaved edits"
+    );
+}
