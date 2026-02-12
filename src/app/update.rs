@@ -1,6 +1,6 @@
 use crate::app::Model;
 use crate::app::model::{LineSelection, SelectionState};
-use crate::editor::{Direction, EditorBuffer};
+use crate::editor::Direction;
 
 /// All possible events and actions in the application.
 ///
@@ -419,24 +419,11 @@ pub fn update(mut model: Model, msg: Message) -> Model {
 
         // Editor
         Message::EnterEditMode => {
-            if !model.editor_mode {
-                let source = model.document.source().to_string();
-                let mut buf = EditorBuffer::from_text(&source);
-
-                // Approximate editor scroll from viewport position
-                let vp_offset = model.viewport.offset();
-                let rendered_total = model.document.line_count().max(1);
-                let source_lines = buf.line_count();
-                // Map rendered-line offset to source-line offset proportionally
-                let target_line = if rendered_total > 1 && vp_offset > 0 {
-                    (vp_offset * source_lines.saturating_sub(1)) / rendered_total.saturating_sub(1)
-                } else {
-                    0
-                };
-                buf.move_to(target_line, 0);
-                model.editor_scroll_offset = target_line;
-
-                model.editor_buffer = Some(buf);
+            // External editor: skip built-in editor entirely.
+            // Built-in editor: set editor_mode, effects populates the buffer
+            // from the raw file on disk (not from document.source() which may
+            // contain code-fence wrapping for non-markdown files).
+            if model.external_editor.is_none() && !model.editor_mode {
                 model.editor_mode = true;
             }
         }
@@ -458,28 +445,6 @@ pub fn update(mut model: Model, msg: Message) -> Model {
                     (model.editor_scroll_offset, source_total)
                 });
 
-                // Only update the document if the buffer was saved (clean).
-                // If dirty, the user is discarding — keep the original document.
-                let is_clean = model.editor_buffer.as_ref().is_some_and(|b| !b.is_dirty());
-                if is_clean && let Some(buf) = &model.editor_buffer {
-                    let text = buf.text();
-                    let is_md = super::model::is_markdown_ext(&model.file_path.to_string_lossy());
-                    let doc = if is_md {
-                        crate::document::Document::parse_with_all_options(
-                            &text,
-                            model.layout_width(),
-                            &std::collections::HashMap::new(),
-                            model.should_render_mermaid_as_images(),
-                        )
-                        .ok()
-                    } else {
-                        Some(crate::document::Document::from_plain_text(&text))
-                    };
-                    if let Some(doc) = doc {
-                        model.document = doc;
-                        model.viewport.set_total_lines(model.document.line_count());
-                    }
-                }
                 model.editor_mode = false;
                 model.editor_buffer = None;
                 model.editor_scroll_offset = 0;
@@ -495,6 +460,8 @@ pub fn update(mut model: Model, msg: Message) -> Model {
                     let target = (src_offset * rendered_total) / src_total;
                     model.viewport.go_to_line(target);
                 }
+                // Document reload from disk happens in effects (ExitEditMode)
+                // to properly re-apply code-fence wrapping for non-markdown files.
             }
         }
         Message::EditorInsertChar(ch) => {

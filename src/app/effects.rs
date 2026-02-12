@@ -1,8 +1,18 @@
 use std::io::{Write, stdout};
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+
+use super::event_loop::set_mouse_motion_tracking;
+
 use crate::app::{App, Message, Model, ToastLevel};
+use crate::config::shell_split_tokens;
 use crate::watcher::FileWatcher;
 use base64::Engine;
 
@@ -11,7 +21,7 @@ impl App {
         FileWatcher::new(path, Duration::from_millis(200))
     }
 
-    pub(super) fn handle_message_side_effects(
+    pub(crate) fn handle_message_side_effects(
         model: &mut Model,
         file_watcher: &mut Option<FileWatcher>,
         msg: &Message,
@@ -83,7 +93,15 @@ impl App {
                 Self::browse_navigate_parent(model);
             }
             Message::EnterEditMode => {
-                model.editor_disk_hash = model.file_disk_hash();
+                if let Some(cmd) = model.external_editor.clone() {
+                    Self::launch_external_editor(model, &cmd);
+                } else {
+                    Self::enter_builtin_editor(model);
+                }
+            }
+            Message::ExitEditMode => {
+                // Reload from disk to restore proper wrapping (code fences, etc.)
+                let _ = model.reload_from_disk();
             }
             Message::EditorSave => {
                 Self::save_editor_buffer(model);
@@ -300,6 +318,93 @@ impl App {
         }
     }
 
+    fn enter_builtin_editor(model: &mut Model) {
+        model.editor_disk_hash = model.file_disk_hash();
+
+        // Read raw file from disk — NOT from document.source() which may
+        // contain code-fence wrapping for non-markdown files.
+        // Falls back to document source if the file can't be read.
+        let source = std::fs::read_to_string(&model.file_path)
+            .unwrap_or_else(|_| model.document.source().to_string());
+
+        let mut buf = crate::editor::EditorBuffer::from_text(&source);
+
+        // Approximate editor scroll from viewport position
+        let vp_offset = model.viewport.offset();
+        let rendered_total = model.document.line_count().max(1);
+        let source_lines = buf.line_count();
+        let target_line = if rendered_total > 1 && vp_offset > 0 {
+            (vp_offset * source_lines.saturating_sub(1)) / rendered_total.saturating_sub(1)
+        } else {
+            0
+        };
+        buf.move_to(target_line, 0);
+        model.editor_scroll_offset = target_line;
+
+        model.editor_buffer = Some(buf);
+    }
+
+    fn launch_external_editor(model: &mut Model, editor_cmd: &str) {
+        // Record the file hash before editing
+        model.editor_disk_hash = model.file_disk_hash();
+
+        // Parse the editor command
+        let tokens = shell_split_tokens(editor_cmd);
+        let Some(program) = tokens.first().filter(|s| !s.is_empty()) else {
+            model.show_toast(ToastLevel::Error, "Editor command is empty");
+            model.editor_disk_hash = None;
+            return;
+        };
+        let extra_args = tokens.get(1..).unwrap_or_default();
+
+        // Suspend TUI: disable mouse, leave alternate screen, disable raw mode
+        let _ = set_mouse_motion_tracking(false);
+        let _ = execute!(stdout(), DisableMouseCapture);
+        let _ = execute!(stdout(), LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+
+        // Spawn the editor process with the file path as the last argument
+        let result = Command::new(program)
+            .args(extra_args)
+            .arg(&model.file_path)
+            .status();
+
+        // Restore TUI (always, even on error)
+        let _ = enable_raw_mode();
+        let _ = execute!(stdout(), EnterAlternateScreen);
+        let _ = execute!(stdout(), EnableMouseCapture);
+        let _ = set_mouse_motion_tracking(true);
+        model.needs_full_redraw = true;
+
+        match result {
+            Ok(status) if status.success() => {
+                // Check if the file changed
+                let new_hash = model.file_disk_hash();
+                if new_hash == model.editor_disk_hash {
+                    model.show_toast(ToastLevel::Info, "No changes");
+                } else {
+                    match model.reload_from_disk() {
+                        Ok(()) => model.show_toast(ToastLevel::Info, "File updated"),
+                        Err(err) => {
+                            model.show_toast(ToastLevel::Error, format!("Reload failed: {err}"));
+                        }
+                    }
+                }
+            }
+            Ok(status) => {
+                let code = status
+                    .code()
+                    .map_or_else(|| "signal".to_string(), |c| c.to_string());
+                model.show_toast(ToastLevel::Warning, format!("Editor exited with {code}"));
+            }
+            Err(err) => {
+                model.show_toast(ToastLevel::Error, format!("Failed to launch editor: {err}"));
+            }
+        }
+
+        model.editor_disk_hash = None;
+    }
+
     fn save_editor_buffer(model: &mut Model) {
         let is_dirty = model
             .editor_buffer
@@ -342,25 +447,10 @@ impl App {
                 model.editor_disk_conflict = false;
                 model.save_confirmed = false;
 
-                // Always re-parse saved text into the document so it stays
-                // in sync with what's on disk (needed when the user later
-                // discards further edits after a mid-session save).
-                let is_md = crate::app::model::is_markdown_ext(&model.file_path.to_string_lossy());
-                let doc = if is_md {
-                    crate::document::Document::parse_with_all_options(
-                        &text,
-                        model.layout_width(),
-                        &std::collections::HashMap::new(),
-                        model.should_render_mermaid_as_images(),
-                    )
-                    .ok()
-                } else {
-                    Some(crate::document::Document::from_plain_text(&text))
-                };
-                if let Some(doc) = doc {
-                    model.document = doc;
-                    model.viewport.set_total_lines(model.document.line_count());
-                }
+                // Reload from disk so the document stays in sync with what
+                // was saved, including proper code-fence wrapping for
+                // non-markdown files.
+                let _ = model.reload_from_disk();
 
                 // If save was triggered during a quit/exit warning, complete that action
                 if model.quit_confirmed {

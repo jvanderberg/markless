@@ -12,6 +12,15 @@ use crate::document::Document;
 use super::event_loop::{BrowseDebouncer, ResizeDebouncer};
 use super::{App, Message, Model, ToastLevel, update};
 
+/// Enter edit mode: runs pure update then side effects (which reads
+/// the file from disk to populate the buffer).
+fn enter_edit_mode(mut model: Model) -> Model {
+    model = update(model, Message::EnterEditMode);
+    let mut watcher = None;
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    model
+}
+
 fn create_test_model() -> Model {
     let doc = Document::parse("# Test\n\nHello world").unwrap();
     Model::new(PathBuf::from("test.md"), doc, (80, 24))
@@ -310,7 +319,7 @@ fn test_ctrl_q_quits_in_normal_mode() {
 #[test]
 fn test_ctrl_q_quits_in_editor_mode() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
         &model,
@@ -1898,7 +1907,7 @@ fn test_enter_edit_mode_populates_buffer() {
     assert!(!model.editor_mode);
     assert!(model.editor_buffer.is_none());
 
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     assert!(model.editor_mode);
     assert!(model.editor_buffer.is_some());
 }
@@ -1908,7 +1917,7 @@ fn test_enter_edit_mode_loads_source() {
     let model = create_test_model();
     let source = model.document.source().to_string();
 
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let buf = model.editor_buffer.as_ref().unwrap();
     assert_eq!(buf.text(), source);
 }
@@ -1916,7 +1925,7 @@ fn test_enter_edit_mode_loads_source() {
 #[test]
 fn test_exit_edit_mode_clears_buffer() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     assert!(model.editor_mode);
 
     let model = update(model, Message::ExitEditMode);
@@ -1954,7 +1963,7 @@ fn test_exit_edit_mode_after_save_keeps_changes() {
 fn test_exit_edit_mode_discard_reverts_document() {
     let model = create_test_model();
     let original_source = model.document.source().to_string();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('X'));
 
     // Discard: Esc twice
@@ -1968,7 +1977,7 @@ fn test_exit_edit_mode_discard_reverts_document() {
 #[test]
 fn test_editor_insert_char() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('Z'));
 
     let buf = model.editor_buffer.as_ref().unwrap();
@@ -1979,7 +1988,7 @@ fn test_editor_insert_char() {
 #[test]
 fn test_editor_delete_back() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('A'));
     let model = update(model, Message::EditorInsertChar('B'));
     let model = update(model, Message::EditorDeleteBack);
@@ -1992,7 +2001,7 @@ fn test_editor_delete_back() {
 #[test]
 fn test_editor_split_line() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     let line_count_before = model.editor_buffer.as_ref().unwrap().line_count();
 
@@ -2007,7 +2016,7 @@ fn test_editor_cursor_movement() {
     use crate::editor::Direction;
 
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     // Move right, then check cursor moved
     let model = update(model, Message::EditorMoveCursor(Direction::Right));
@@ -2018,7 +2027,7 @@ fn test_editor_cursor_movement() {
 #[test]
 fn test_editor_move_home_end() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     let model = update(model, Message::EditorMoveEnd);
     let end_col = model.editor_buffer.as_ref().unwrap().cursor().col;
@@ -2037,7 +2046,7 @@ fn test_editor_scroll_keeps_cursor_visible() {
     }
     let doc = Document::parse(&md).unwrap();
     let model = Model::new(PathBuf::from("test.md"), doc, (80, 10));
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     assert_eq!(model.editor_scroll_offset, 0);
 
     // Move cursor down many lines
@@ -2059,7 +2068,7 @@ fn test_editor_scroll_keeps_cursor_visible() {
 fn test_editor_scroll_up_down() {
     // Use a long document so scrolling isn't clamped too early
     let model = create_long_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     let model = update(model, Message::EditorScrollDown(5));
     assert_eq!(model.editor_scroll_offset, 5);
@@ -2074,7 +2083,7 @@ fn test_editor_scroll_up_down() {
 #[test]
 fn test_enter_edit_mode_is_idempotent() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('X'));
 
     // Entering edit mode again should not reset the buffer
@@ -2112,7 +2121,7 @@ fn test_e_key_enters_edit_mode_when_toc_focused() {
 #[test]
 fn test_editor_mode_esc_exits() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         &model,
@@ -2123,7 +2132,7 @@ fn test_editor_mode_esc_exits() {
 #[test]
 fn test_editor_mode_char_inserts() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
         &model,
@@ -2134,7 +2143,7 @@ fn test_editor_mode_char_inserts() {
 #[test]
 fn test_editor_mode_arrows_move_cursor() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
@@ -2158,7 +2167,7 @@ fn test_editor_mode_arrows_move_cursor() {
 #[test]
 fn test_editor_mode_ctrl_s_saves() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
         &model,
@@ -2169,7 +2178,7 @@ fn test_editor_mode_ctrl_s_saves() {
 #[test]
 fn test_editor_mode_enter_splits_line() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         &model,
@@ -2180,7 +2189,7 @@ fn test_editor_mode_enter_splits_line() {
 #[test]
 fn test_editor_mode_backspace_deletes_back() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
         &model,
@@ -2191,7 +2200,7 @@ fn test_editor_mode_backspace_deletes_back() {
 #[test]
 fn test_editor_mode_ctrl_left_moves_word_left() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
         &model,
@@ -2202,7 +2211,7 @@ fn test_editor_mode_ctrl_left_moves_word_left() {
 #[test]
 fn test_editor_mode_home_end() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     let msg = App::handle_key(
         event::KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
@@ -2220,7 +2229,7 @@ fn test_editor_mode_home_end() {
 #[test]
 fn test_editor_mode_mouse_scroll() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     let msg = App::handle_mouse(
         MouseEvent {
@@ -2286,7 +2295,7 @@ fn test_editor_save_no_changes_shows_toast() {
     let mut model = Model::new(file_path.clone(), doc, (80, 24));
     model.file_path = file_path.clone();
 
-    model = update(model, Message::EnterEditMode);
+    model = enter_edit_mode(model);
 
     // Save without any edits
     let mut watcher = None;
@@ -2303,7 +2312,7 @@ fn test_editor_save_no_changes_shows_toast() {
 #[test]
 fn test_quit_with_dirty_editor_shows_warning() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('X'));
 
     // First quit should warn, not quit
@@ -2315,7 +2324,7 @@ fn test_quit_with_dirty_editor_shows_warning() {
 #[test]
 fn test_quit_dirty_editor_toast_says_ctrl_q() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('X'));
 
     let model = update(model, Message::Quit);
@@ -2338,7 +2347,7 @@ fn test_ctrl_e_toggles_edit_mode() {
     assert_eq!(msg, Some(Message::EnterEditMode));
 
     // Ctrl+E in editor mode should exit edit mode
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     assert!(model.editor_mode);
     let msg = App::handle_key(ctrl_e, &model);
     assert_eq!(msg, Some(Message::ExitEditMode));
@@ -2347,7 +2356,7 @@ fn test_ctrl_e_toggles_edit_mode() {
 #[test]
 fn test_quit_twice_with_dirty_editor_quits() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('X'));
 
     let model = update(model, Message::Quit);
@@ -2360,7 +2369,7 @@ fn test_quit_twice_with_dirty_editor_quits() {
 #[test]
 fn test_quit_clean_editor_quits_immediately() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     // No edits — quit should work immediately
     let model = update(model, Message::Quit);
@@ -2370,7 +2379,7 @@ fn test_quit_clean_editor_quits_immediately() {
 #[test]
 fn test_quit_confirmation_resets_on_other_action() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('X'));
 
     // First quit warns
@@ -2389,7 +2398,7 @@ fn test_quit_confirmation_resets_on_other_action() {
 #[test]
 fn test_exit_edit_mode_dirty_warns_first() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('X'));
 
     // First Esc warns
@@ -2405,7 +2414,7 @@ fn test_exit_edit_mode_dirty_warns_first() {
 #[test]
 fn test_exit_edit_mode_clean_exits_immediately() {
     let model = create_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     // No edits — Esc should exit immediately
     let model = update(model, Message::ExitEditMode);
@@ -2494,7 +2503,7 @@ fn test_enter_edit_mode_from_scrolled_position() {
     let vp_offset = model.viewport.offset();
     assert!(vp_offset > 0, "Should be scrolled");
 
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     // Editor should not start at line 0
     assert!(
         model.editor_scroll_offset > 0,
@@ -2508,7 +2517,7 @@ fn test_enter_edit_mode_from_top_stays_at_top() {
     let model = create_test_model();
     assert_eq!(model.viewport.offset(), 0);
 
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     assert_eq!(model.editor_scroll_offset, 0);
     assert_eq!(model.editor_buffer.as_ref().unwrap().cursor().line, 0);
 }
@@ -2516,7 +2525,7 @@ fn test_enter_edit_mode_from_top_stays_at_top() {
 #[test]
 fn test_exit_edit_mode_restores_scroll_position() {
     let model = create_long_test_model();
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     // Scroll editor to the middle
     let mut model = model;
@@ -2543,7 +2552,7 @@ fn test_discard_edit_then_reenter_shows_original() {
     let original_source = model.document.source().to_string();
 
     // Enter edit, make a change
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let model = update(model, Message::EditorInsertChar('Z'));
 
     // Discard: Esc twice (first warns, second discards)
@@ -2555,7 +2564,7 @@ fn test_discard_edit_then_reenter_shows_original() {
     assert_eq!(model.document.source(), original_source);
 
     // Re-enter edit mode — buffer should also have the original source
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
     let buf = model.editor_buffer.as_ref().unwrap();
     assert!(
         !buf.text().starts_with('Z'),
@@ -2797,7 +2806,7 @@ fn test_editor_mouse_click_positions_cursor() {
     let md = "Hello world\nSecond line\nThird line\n";
     let doc = Document::parse(md).unwrap();
     let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     let buf = model.editor_buffer.as_ref().unwrap();
     let gutter_width = crate::ui::line_number_width(buf.line_count()) as u16 + 1; // +1 space
@@ -2827,7 +2836,7 @@ fn test_editor_mouse_click_with_scroll_offset() {
     }
     let doc = Document::parse(&md).unwrap();
     let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     // Scroll down 10 lines
     let model = update(model, Message::EditorScrollDown(10));
@@ -2852,7 +2861,7 @@ fn test_editor_mouse_click_clamps_past_end() {
     let md = "Short\n";
     let doc = Document::parse(md).unwrap();
     let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     // Click at a column past the end of the line — move_to should clamp
     let model = update(model, Message::EditorMoveTo(0, 999));
@@ -2872,7 +2881,7 @@ fn test_editor_mouse_click_in_gutter() {
     let md = "Hello world\nSecond line\n";
     let doc = Document::parse(md).unwrap();
     let model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
-    let model = update(model, Message::EnterEditMode);
+    let model = enter_edit_mode(model);
 
     // Click in the gutter area (column 0) — should set col to 0
     let mouse = MouseEvent {
@@ -3074,5 +3083,98 @@ fn test_discard_after_save_shows_saved_content() {
     assert!(
         !model.document.source().contains('Y'),
         "Document should not contain unsaved edits"
+    );
+}
+
+// --- External editor tests ---
+
+#[test]
+fn test_enter_edit_mode_with_external_editor_skips_builtin() {
+    let mut model = create_test_model();
+    model.external_editor = Some("hx".to_string());
+    let model = update(model, Message::EnterEditMode);
+    // External editor path: model should NOT enter built-in editor mode
+    assert!(!model.editor_mode);
+    assert!(model.editor_buffer.is_none());
+}
+
+#[test]
+fn test_enter_edit_mode_with_external_editor_preserves_external_editor_field() {
+    let mut model = create_test_model();
+    model.external_editor = Some("hx".to_string());
+    let model = update(model, Message::EnterEditMode);
+    // The external_editor field should be preserved through update
+    assert_eq!(model.external_editor, Some("hx".to_string()));
+}
+
+#[test]
+fn test_enter_edit_mode_without_external_editor_enters_builtin() {
+    let mut model = create_test_model();
+    model.external_editor = None;
+    let model = update(model, Message::EnterEditMode);
+    // No external editor: should enter built-in editor as usual
+    assert!(model.editor_mode);
+    // Buffer is populated by effects, not by update
+}
+
+#[test]
+fn test_builtin_editor_loads_raw_file_not_wrapped_source() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.py");
+    std::fs::write(&file_path, "print('hello')").unwrap();
+
+    // Load the file — markless wraps .py files in code fences
+    let doc = Document::parse("```python\nprint('hello')\n```").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path;
+
+    // Enter edit mode + run side effects
+    let mut model = update(model, Message::EnterEditMode);
+    let mut watcher = None;
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+
+    // The editor buffer should contain the RAW file content, not the wrapped source
+    let buf_text = model
+        .editor_buffer
+        .as_ref()
+        .map(|b| b.text())
+        .unwrap_or_default();
+    assert!(
+        !buf_text.contains("```python"),
+        "Editor buffer should not contain code fences, got: {buf_text}"
+    );
+    assert!(
+        buf_text.contains("print('hello')"),
+        "Editor buffer should contain raw file content, got: {buf_text}"
+    );
+}
+
+#[test]
+fn test_exit_edit_mode_preserves_wrapping_for_non_md_files() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.py");
+    std::fs::write(&file_path, "print('hello')").unwrap();
+
+    // Load the file — markless wraps .py files in code fences
+    let doc = Document::parse("```python\nprint('hello')\n```").unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 24));
+    model.file_path = file_path;
+
+    // Enter edit mode
+    let mut model = update(model, Message::EnterEditMode);
+    let mut watcher = None;
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EnterEditMode);
+    assert!(model.editor_mode);
+
+    // Exit edit mode (no changes — buffer is clean)
+    model = update(model, Message::ExitEditMode);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::ExitEditMode);
+    assert!(!model.editor_mode);
+
+    // Document should still have the code fence wrapping for syntax highlighting
+    let source = model.document.source().to_string();
+    assert!(
+        source.contains("```"),
+        "Document should preserve code fence wrapping after exit, got: {source}"
     );
 }

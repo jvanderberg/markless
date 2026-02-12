@@ -1,5 +1,4 @@
 # Markless - Claude Code Instructions
-
 **Follow Strict RED/GREEN TDD in all development.**
 
 1. Write a failing test FIRST that describes the behavior you want

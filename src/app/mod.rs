@@ -30,6 +30,7 @@ pub struct App {
     config_local_path: Option<PathBuf>,
     browse_mode: bool,
     wrap_width: Option<u16>,
+    editor: Option<String>,
 }
 
 impl App {
@@ -45,6 +46,7 @@ impl App {
             config_local_path: None,
             browse_mode: false,
             wrap_width: None,
+            editor: None,
         }
     }
 
@@ -87,6 +89,13 @@ impl App {
     #[must_use]
     pub const fn with_wrap_width(mut self, width: Option<u16>) -> Self {
         self.wrap_width = width;
+        self
+    }
+
+    /// Set the external editor command.
+    #[must_use]
+    pub fn with_editor(mut self, editor: Option<String>) -> Self {
+        self.editor = editor;
         self
     }
 

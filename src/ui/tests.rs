@@ -943,6 +943,12 @@ fn test_editor_mode_renders_source_text() {
     let doc = Document::parse(md).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    let mut watcher = None;
+    crate::app::App::handle_message_side_effects(
+        &mut model,
+        &mut watcher,
+        &crate::app::Message::EnterEditMode,
+    );
 
     let mut terminal = create_test_terminal();
     terminal.draw(|frame| render(&mut model, frame)).unwrap();
@@ -962,6 +968,12 @@ fn test_editor_mode_shows_line_numbers() {
     let doc = Document::parse(md).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    let mut watcher = None;
+    crate::app::App::handle_message_side_effects(
+        &mut model,
+        &mut watcher,
+        &crate::app::Message::EnterEditMode,
+    );
 
     let mut terminal = create_test_terminal();
     terminal.draw(|frame| render(&mut model, frame)).unwrap();
@@ -983,6 +995,12 @@ fn test_editor_status_bar_shows_edit_indicator() {
     let doc = Document::parse(md).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    let mut watcher = None;
+    crate::app::App::handle_message_side_effects(
+        &mut model,
+        &mut watcher,
+        &crate::app::Message::EnterEditMode,
+    );
 
     let mut terminal = create_test_terminal();
     terminal.draw(|frame| render(&mut model, frame)).unwrap();
@@ -1010,6 +1028,12 @@ fn test_editor_status_bar_shows_modified_after_edit() {
     let doc = Document::parse(md).unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
     model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    let mut watcher = None;
+    crate::app::App::handle_message_side_effects(
+        &mut model,
+        &mut watcher,
+        &crate::app::Message::EnterEditMode,
+    );
     model = crate::app::update(model, crate::app::Message::EditorInsertChar('X'));
 
     let mut terminal = create_test_terminal();

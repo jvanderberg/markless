@@ -74,6 +74,14 @@ struct Cli {
     #[arg(long, value_name = "COLS")]
     wrap_width: Option<u16>,
 
+    /// External editor command (e.g. hx, vim, "emacsclient -t")
+    #[arg(long, value_name = "COMMAND")]
+    editor: Option<String>,
+
+    /// Clear external editor setting (revert to built-in editor)
+    #[arg(long, conflicts_with = "editor")]
+    no_editor: bool,
+
     /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
     save: bool,
@@ -323,6 +331,9 @@ fn main() -> Result<()> {
     let is_directory = cli.path.is_dir();
 
     // Run the application
+    // Normalize editor: empty string from --no-editor becomes None
+    let editor = effective.editor.filter(|e| !e.is_empty());
+
     let mut app = App::new(cli.path)
         .with_watch(effective.watch)
         .with_toc_visible(effective.toc && !effective.no_toc)
@@ -330,6 +341,7 @@ fn main() -> Result<()> {
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
         .with_wrap_width(effective.wrap_width)
+        .with_editor(editor)
         .with_config_paths(
             Some(global_path),
             if local_path.exists() {
