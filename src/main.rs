@@ -74,6 +74,10 @@ struct Cli {
     #[arg(long, value_name = "COLS")]
     wrap_width: Option<u16>,
 
+    /// External editor to use instead of built-in editor (e.g., hx, vim, nano)
+    #[arg(long, value_name = "COMMAND")]
+    editor: Option<String>,
+
     /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
     save: bool,
@@ -330,6 +334,7 @@ fn main() -> Result<()> {
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
         .with_wrap_width(effective.wrap_width)
+        .with_editor(effective.editor)
         .with_config_paths(
             Some(global_path),
             if local_path.exists() {

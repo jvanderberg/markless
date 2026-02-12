@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::app::{App, Message, Model, ToastLevel};
 use crate::watcher::FileWatcher;
+
 use base64::Engine;
 
 impl App {
@@ -83,7 +84,18 @@ impl App {
                 Self::browse_navigate_parent(model);
             }
             Message::EnterEditMode => {
-                model.editor_disk_hash = model.file_disk_hash();
+                if let Some(editor_cmd) = model.external_editor.clone() {
+                    // Launch external editor
+                    if let Err(err) = Self::launch_external_editor(model, &editor_cmd) {
+                        model.show_toast(
+                            ToastLevel::Error,
+                            format!("Failed to launch editor: {err}"),
+                        );
+                    }
+                } else {
+                    // Use built-in editor
+                    model.editor_disk_hash = model.file_disk_hash();
+                }
             }
             Message::EditorSave => {
                 Self::save_editor_buffer(model);
@@ -397,6 +409,83 @@ impl App {
             Ok(()) => model.show_toast(ToastLevel::Info, format!("Copied {lines} line(s)")),
             Err(err) => model.show_toast(ToastLevel::Error, format!("Copy failed: {err}")),
         }
+    }
+
+    /// Launch an external editor to edit the current file.
+    ///
+    /// This function:
+    /// 1. Saves the current file hash for conflict detection
+    /// 2. Suspends the TUI (raw mode, alternate screen)
+    /// 3. Launches the external editor
+    /// 4. Restores the TUI after the editor exits
+    /// 5. Reloads the file if it changed
+    fn launch_external_editor(model: &mut Model, editor_cmd: &str) -> anyhow::Result<()> {
+        use crossterm::execute;
+        use crossterm::terminal::{
+            EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        };
+        use std::process::Command;
+
+        // Remember the file hash before editing
+        model.editor_disk_hash = model.file_disk_hash();
+
+        // Exit TUI mode temporarily
+        let _ = execute!(stdout(), LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+
+        let mut parts = editor_cmd.split_whitespace();
+        let program = parts.next().unwrap_or(editor_cmd);
+        let result = Command::new(program)
+            .args(parts)
+            .arg(&model.file_path)
+            .status()
+            .map_err(|e| anyhow::anyhow!("Failed to launch editor '{editor_cmd}': {e}"));
+
+        // Re-enter TUI mode
+        let _ = enable_raw_mode();
+        let _ = execute!(stdout(), EnterAlternateScreen);
+
+        // The alternate screen buffer is blank after re-entry; tell the
+        // event loop to clear ratatui's internal state so every cell is
+        // repainted on the next frame.
+        model.needs_full_redraw = true;
+
+        match result {
+            Ok(status) if status.success() => {
+                // Check if file changed after editing
+                if let Some(new_hash) = model.file_disk_hash() {
+                    if model.editor_disk_hash == Some(new_hash) {
+                        model.show_toast(ToastLevel::Info, "No changes made in external editor");
+                    } else {
+                        // File changed, reload it
+                        if let Err(err) = model.reload_from_disk() {
+                            model.show_toast(
+                                ToastLevel::Error,
+                                format!("Failed to reload after editing: {err}"),
+                            );
+                        } else {
+                            model.show_toast(
+                                ToastLevel::Info,
+                                "File reloaded after external editing",
+                            );
+                        }
+                    }
+                }
+                model.editor_disk_hash = None;
+            }
+            Ok(status) => {
+                model.show_toast(
+                    ToastLevel::Warning,
+                    format!("Editor exited with non-zero status: {status}"),
+                );
+                model.editor_disk_hash = None;
+            }
+            Err(err) => {
+                return Err(anyhow::anyhow!("Editor process error: {err}"));
+            }
+        }
+
+        Ok(())
     }
 }
 

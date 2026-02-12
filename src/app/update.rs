@@ -420,24 +420,30 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // Editor
         Message::EnterEditMode => {
             if !model.editor_mode {
-                let source = model.document.source().to_string();
-                let mut buf = EditorBuffer::from_text(&source);
+                // Only enter built-in editor mode if no external editor is configured
+                if model.external_editor.is_none() {
+                    let source = model.document.source().to_string();
+                    let mut buf = EditorBuffer::from_text(&source);
 
-                // Approximate editor scroll from viewport position
-                let vp_offset = model.viewport.offset();
-                let rendered_total = model.document.line_count().max(1);
-                let source_lines = buf.line_count();
-                // Map rendered-line offset to source-line offset proportionally
-                let target_line = if rendered_total > 1 && vp_offset > 0 {
-                    (vp_offset * source_lines.saturating_sub(1)) / rendered_total.saturating_sub(1)
-                } else {
-                    0
-                };
-                buf.move_to(target_line, 0);
-                model.editor_scroll_offset = target_line;
+                    // Approximate editor scroll from viewport position
+                    let vp_offset = model.viewport.offset();
+                    let rendered_total = model.document.line_count().max(1);
+                    let source_lines = buf.line_count();
+                    // Map rendered-line offset to source-line offset proportionally
+                    let target_line = if rendered_total > 1 && vp_offset > 0 {
+                        (vp_offset * source_lines.saturating_sub(1))
+                            / rendered_total.saturating_sub(1)
+                    } else {
+                        0
+                    };
+                    buf.move_to(target_line, 0);
+                    model.editor_scroll_offset = target_line;
 
-                model.editor_buffer = Some(buf);
-                model.editor_mode = true;
+                    model.editor_buffer = Some(buf);
+                    model.editor_mode = true;
+                }
+                // When external editor is configured, the actual launch happens in side effects
+                // We don't set editor_mode = true for external editors
             }
         }
         Message::ExitEditMode => {

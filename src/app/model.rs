@@ -161,6 +161,11 @@ pub struct Model {
     pub quit_confirmed: bool,
     /// Set after first Esc press with unsaved editor changes; allows second Esc to discard
     pub exit_confirmed: bool,
+    /// External editor command (e.g., "hx", "vim", "nano")
+    pub external_editor: Option<String>,
+    /// Set when the terminal buffer has been invalidated (e.g. after returning
+    /// from an external editor) and ratatui must repaint every cell.
+    pub needs_full_redraw: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -230,6 +235,8 @@ impl Model {
             save_confirmed: false,
             quit_confirmed: false,
             exit_confirmed: false,
+            external_editor: None,
+            needs_full_redraw: false,
         }
     }
 
@@ -551,8 +558,8 @@ impl Model {
             }
         }
 
-        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        dirs.sort_by_key(|a| a.name.to_lowercase());
+        files.sort_by_key(|a| a.name.to_lowercase());
 
         self.browse_entries.extend(dirs);
         self.browse_entries.extend(files);
@@ -896,6 +903,8 @@ impl Default for Model {
             save_confirmed: false,
             quit_confirmed: false,
             exit_confirmed: false,
+            external_editor: None,
+            needs_full_redraw: false,
         }
     }
 }

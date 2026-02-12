@@ -3076,3 +3076,60 @@ fn test_discard_after_save_shows_saved_content() {
         "Document should not contain unsaved edits"
     );
 }
+
+#[test]
+fn test_enter_edit_mode_with_external_editor_does_not_enter_builtin_mode() {
+    let mut model = create_test_model();
+    model.external_editor = Some("hx".to_string());
+
+    // EnterEditMode with external editor should NOT set editor_mode
+    let model = update(model, Message::EnterEditMode);
+    assert!(
+        !model.editor_mode,
+        "Should not enter built-in editor mode when external editor is configured"
+    );
+    assert!(
+        model.editor_buffer.is_none(),
+        "Should not create editor buffer for external editor"
+    );
+    assert_eq!(model.external_editor, Some("hx".to_string()));
+}
+
+#[test]
+fn test_enter_edit_mode_without_external_editor_enters_builtin_mode() {
+    let model = create_test_model();
+
+    // EnterEditMode without external editor should set editor_mode
+    let model = update(model, Message::EnterEditMode);
+    assert!(
+        model.editor_mode,
+        "Should enter built-in editor mode when no external editor is configured"
+    );
+    assert!(
+        model.editor_buffer.is_some(),
+        "Should create editor buffer for built-in editor"
+    );
+    assert_eq!(model.external_editor, None);
+}
+
+#[test]
+fn test_external_editor_field_preserved_in_update() {
+    let mut model = create_test_model();
+    model.external_editor = Some("vim".to_string());
+
+    // Update with unrelated message should preserve external_editor
+    let model = update(model, Message::ScrollDown(1));
+    assert_eq!(model.external_editor, Some("vim".to_string()));
+}
+
+#[test]
+fn test_external_editor_stores_command_correctly() {
+    let mut model = create_test_model();
+
+    // Test various editor commands
+    let editors = vec!["hx", "vim", "nano", "code", "emacs"];
+    for editor in editors {
+        model.external_editor = Some(editor.to_string());
+        assert_eq!(model.external_editor, Some(editor.to_string()));
+    }
+}

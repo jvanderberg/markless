@@ -153,7 +153,7 @@ fn parse_with_all_options<S: BuildHasher>(
     )
 }
 
-fn create_options() -> Options {
+fn create_options() -> Options<'static> {
     let mut options = Options::default();
 
     // Enable GFM extensions
@@ -451,7 +451,11 @@ fn process_node<'a, S: BuildHasher>(
 
         NodeValue::TaskItem(symbol) => {
             let indent = "  ".repeat(depth.saturating_sub(1));
-            let task_marker = if symbol.is_some() { "✓" } else { "□" };
+            let task_marker = if symbol.symbol.is_some() {
+                "✓"
+            } else {
+                "□"
+            };
             let marker = format!("{task_marker} ");
             let prefix_first = format!("{indent}{marker}");
             let prefix_next = format!("{}{}", indent, " ".repeat(marker.len()));
@@ -1290,7 +1294,11 @@ fn find_task_marker<'a>(node: &'a AstNode<'a>) -> Option<&'static str> {
     for child in node.children() {
         match &child.data.borrow().value {
             NodeValue::TaskItem(symbol) => {
-                return Some(if symbol.is_some() { "✓" } else { "□" });
+                return Some(if symbol.symbol.is_some() {
+                    "✓"
+                } else {
+                    "□"
+                });
             }
             _ => {
                 if let Some(found) = find_task_marker(child) {

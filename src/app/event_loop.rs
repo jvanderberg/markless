@@ -150,6 +150,7 @@ impl App {
         model.image_mode = self.image_mode;
         model.images_enabled = self.images_enabled;
         model.wrap_width = self.wrap_width;
+        model.external_editor.clone_from(&self.editor);
         model
             .config_global_path
             .clone_from(&self.config_global_path);
@@ -395,6 +396,14 @@ impl App {
 
             if needs_render {
                 frame_idx += 1;
+
+                // After returning from an external editor the alternate screen
+                // buffer is blank but ratatui still thinks the old frame is
+                // painted.  Force a full repaint so every cell is redrawn.
+                if model.needs_full_redraw {
+                    terminal.clear()?;
+                    model.needs_full_redraw = false;
+                }
 
                 // Load images near viewport before rendering (skip during active resize)
                 let load_start = Instant::now();

@@ -47,6 +47,7 @@ pub struct ConfigFlags {
     pub theme: Option<ThemeMode>,
     pub render_debug_log: Option<PathBuf>,
     pub wrap_width: Option<u16>,
+    pub editor: Option<String>,
 }
 
 impl ConfigFlags {
@@ -66,6 +67,7 @@ impl ConfigFlags {
                 .clone()
                 .or_else(|| self.render_debug_log.clone()),
             wrap_width: other.wrap_width.or(self.wrap_width),
+            editor: other.editor.clone().or_else(|| self.editor.clone()),
         }
     }
 }
@@ -123,7 +125,7 @@ pub fn load_config_flags(path: &Path) -> Result<ConfigFlags> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .flat_map(|line| line.split_whitespace().map(ToOwned::to_owned))
+        .flat_map(shell_split_tokens)
         .collect::<Vec<_>>();
     Ok(parse_flag_tokens(&tokens))
 }
@@ -175,6 +177,13 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     if let Some(width) = flags.wrap_width {
         lines.push(format!("--wrap-width {width}"));
     }
+    if let Some(editor) = &flags.editor {
+        if editor.contains(' ') {
+            lines.push(format!("--editor \"{editor}\""));
+        } else {
+            lines.push(format!("--editor {editor}"));
+        }
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create config dir {}", parent.display()))?;
@@ -192,6 +201,32 @@ pub fn clear_config_flags(path: &Path) -> Result<()> {
         fs::remove_file(path).with_context(|| format!("Failed to remove {}", path.display()))?;
     }
     Ok(())
+}
+
+/// Split a line into tokens, respecting double-quoted strings.
+///
+/// Unquoted regions are split on whitespace. Double-quoted regions preserve
+/// inner whitespace as a single token. Quotes are stripped from the result.
+fn shell_split_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in line.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
@@ -240,6 +275,13 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
             }
         } else if let Some(value) = token.strip_prefix("--wrap-width=") {
             flags.wrap_width = value.parse::<u16>().ok();
+        } else if token == "--editor" {
+            if let Some(next) = tokens.get(i + 1) {
+                flags.editor = Some(next.clone());
+                i += 1;
+            }
+        } else if let Some(value) = token.strip_prefix("--editor=") {
+            flags.editor = Some(value.to_string());
         }
         i += 1;
     }
@@ -304,6 +346,27 @@ mod tests {
         let args = vec!["--image-mode=sixel".to_string()];
         let flags = parse_flag_tokens(&args);
         assert_eq!(flags.image_mode, Some(ImageMode::Sixel));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_editor_with_space() {
+        let args = vec!["--editor".to_string(), "hx".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.editor, Some("hx".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_editor_with_equals() {
+        let args = vec!["--editor=vim".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.editor, Some("vim".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_no_editor() {
+        let args = vec!["--watch".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.editor, None);
     }
 
     #[test]
@@ -427,6 +490,90 @@ mod tests {
         assert!(merged.watch);
         assert!(merged.toc);
         assert_eq!(merged.theme, Some(ThemeMode::Dark));
+    }
+
+    #[test]
+    fn test_config_union_editor_cli_overrides_file() {
+        let file = ConfigFlags {
+            editor: Some("vim".to_string()),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags {
+            editor: Some("hx".to_string()),
+            ..ConfigFlags::default()
+        };
+        let merged = file.union(&cli);
+        assert_eq!(merged.editor, Some("hx".to_string()));
+    }
+
+    #[test]
+    fn test_config_union_editor_file_preserved_when_cli_none() {
+        let file = ConfigFlags {
+            editor: Some("nano".to_string()),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags::default();
+        let merged = file.union(&cli);
+        assert_eq!(merged.editor, Some("nano".to_string()));
+    }
+
+    #[test]
+    fn test_save_load_editor_hx() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            editor: Some("hx".to_string()),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.editor, Some("hx".to_string()));
+    }
+
+    #[test]
+    fn test_save_load_editor_vim() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            editor: Some("vim".to_string()),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.editor, Some("vim".to_string()));
+    }
+
+    #[test]
+    fn test_save_load_editor_multiword() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            editor: Some("emacsclient -t".to_string()),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.editor, Some("emacsclient -t".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_editor_multiword_quoted() {
+        // Simulates what load_config_flags produces after tokenizing a quoted value
+        let args = vec!["--editor".to_string(), "emacsclient -t".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.editor, Some("emacsclient -t".to_string()));
+    }
+
+    #[test]
+    fn test_shell_split_tokens_respects_double_quotes() {
+        let tokens = shell_split_tokens(r#"--editor "emacsclient -t""#);
+        assert_eq!(tokens, vec!["--editor", "emacsclient -t"]);
+    }
+
+    #[test]
+    fn test_shell_split_tokens_unquoted_splits_on_whitespace() {
+        let tokens = shell_split_tokens("--watch --toc --editor hx");
+        assert_eq!(tokens, vec!["--watch", "--toc", "--editor", "hx"]);
     }
 
     #[test]
