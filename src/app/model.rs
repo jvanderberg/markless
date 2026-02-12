@@ -161,6 +161,11 @@ pub struct Model {
     pub quit_confirmed: bool,
     /// Set after first Esc press with unsaved editor changes; allows second Esc to discard
     pub exit_confirmed: bool,
+    /// External editor command (e.g. "hx", "vim", "emacsclient -t")
+    pub external_editor: Option<String>,
+    /// Signals that ratatui's internal buffer is stale and `terminal.clear()` must
+    /// be called before the next draw (e.g. after returning from an external process).
+    pub needs_full_redraw: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -170,6 +175,7 @@ impl std::fmt::Debug for Model {
             .field("toc_visible", &self.toc_visible)
             .field("watch_enabled", &self.watch_enabled)
             .field("editor_mode", &self.editor_mode)
+            .field("external_editor", &self.external_editor)
             .finish_non_exhaustive()
     }
 }
@@ -230,6 +236,8 @@ impl Model {
             save_confirmed: false,
             quit_confirmed: false,
             exit_confirmed: false,
+            external_editor: None,
+            needs_full_redraw: false,
         }
     }
 
@@ -896,6 +904,8 @@ impl Default for Model {
             save_confirmed: false,
             quit_confirmed: false,
             exit_confirmed: false,
+            external_editor: None,
+            needs_full_redraw: false,
         }
     }
 }

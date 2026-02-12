@@ -47,6 +47,9 @@ pub struct ConfigFlags {
     pub theme: Option<ThemeMode>,
     pub render_debug_log: Option<PathBuf>,
     pub wrap_width: Option<u16>,
+    /// External editor command (e.g. "hx", "vim", "emacsclient -t").
+    /// `Some("")` means explicitly cleared via `--no-editor`.
+    pub editor: Option<String>,
 }
 
 impl ConfigFlags {
@@ -66,6 +69,7 @@ impl ConfigFlags {
                 .clone()
                 .or_else(|| self.render_debug_log.clone()),
             wrap_width: other.wrap_width.or(self.wrap_width),
+            editor: other.editor.clone().or_else(|| self.editor.clone()),
         }
     }
 }
@@ -109,6 +113,40 @@ pub fn local_override_path() -> PathBuf {
     PathBuf::from(".marklessrc")
 }
 
+/// Split a string into tokens, respecting double-quoted segments.
+///
+/// Unquoted segments are split on whitespace. Double-quoted segments
+/// preserve interior spaces. Single quotes are not special.
+///
+/// # Examples
+///
+/// ```
+/// # use markless::config::shell_split_tokens;
+/// assert_eq!(shell_split_tokens(r#"--editor "emacsclient -t""#),
+///            vec!["--editor", "emacsclient -t"]);
+/// ```
+pub fn shell_split_tokens(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in input.chars() {
+        if ch == '"' {
+            in_quotes = !in_quotes;
+        } else if ch.is_whitespace() && !in_quotes {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 /// Load configuration flags from a file at the given path.
 ///
 /// # Errors
@@ -123,7 +161,7 @@ pub fn load_config_flags(path: &Path) -> Result<ConfigFlags> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .flat_map(|line| line.split_whitespace().map(ToOwned::to_owned))
+        .flat_map(shell_split_tokens)
         .collect::<Vec<_>>();
     Ok(parse_flag_tokens(&tokens))
 }
@@ -174,6 +212,15 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     }
     if let Some(width) = flags.wrap_width {
         lines.push(format!("--wrap-width {width}"));
+    }
+    if let Some(ref editor) = flags.editor {
+        if editor.is_empty() {
+            lines.push("--no-editor".to_string());
+        } else if editor.contains(' ') {
+            lines.push(format!("--editor \"{editor}\""));
+        } else {
+            lines.push(format!("--editor {editor}"));
+        }
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -240,6 +287,15 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
             }
         } else if let Some(value) = token.strip_prefix("--wrap-width=") {
             flags.wrap_width = value.parse::<u16>().ok();
+        } else if token == "--editor" {
+            if let Some(next) = tokens.get(i + 1) {
+                flags.editor = Some(next.clone());
+                i += 1;
+            }
+        } else if let Some(value) = token.strip_prefix("--editor=") {
+            flags.editor = Some(value.to_string());
+        } else if token == "--no-editor" {
+            flags.editor = Some(String::new());
         }
         i += 1;
     }
@@ -515,5 +571,171 @@ mod tests {
         save_config_flags(&path, &flags).unwrap();
         let loaded = load_config_flags(&path).unwrap();
         assert_eq!(loaded.wrap_width, Some(72));
+    }
+
+    // --- shell_split_tokens tests ---
+
+    #[test]
+    fn test_shell_split_tokens_simple_words() {
+        let tokens = shell_split_tokens("hello world");
+        assert_eq!(tokens, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_shell_split_tokens_double_quoted_preserves_spaces() {
+        let tokens = shell_split_tokens(r#""emacsclient -t""#);
+        assert_eq!(tokens, vec!["emacsclient -t"]);
+    }
+
+    #[test]
+    fn test_shell_split_tokens_mixed_quoted_and_unquoted() {
+        let tokens = shell_split_tokens(r#"--editor "emacsclient -t" --watch"#);
+        assert_eq!(tokens, vec!["--editor", "emacsclient -t", "--watch"]);
+    }
+
+    #[test]
+    fn test_shell_split_tokens_empty_input() {
+        let tokens = shell_split_tokens("");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_shell_split_tokens_whitespace_only() {
+        let tokens = shell_split_tokens("   ");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_shell_split_tokens_adjacent_quotes() {
+        let tokens = shell_split_tokens(r#""hello""world""#);
+        assert_eq!(tokens, vec!["helloworld"]);
+    }
+
+    #[test]
+    fn test_shell_split_tokens_single_token() {
+        let tokens = shell_split_tokens("hx");
+        assert_eq!(tokens, vec!["hx"]);
+    }
+
+    // --- editor flag parsing tests ---
+
+    #[test]
+    fn test_parse_flag_tokens_editor_space() {
+        let args = vec!["--editor".to_string(), "hx".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.editor, Some("hx".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_editor_equals() {
+        let args = vec!["--editor=vim".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.editor, Some("vim".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_no_editor() {
+        let args = vec!["--no-editor".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert_eq!(flags.editor, Some(String::new()));
+    }
+
+    #[test]
+    fn test_config_union_editor_cli_overrides_file() {
+        let file = ConfigFlags {
+            editor: Some("hx".to_string()),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags {
+            editor: Some("vim".to_string()),
+            ..ConfigFlags::default()
+        };
+        let merged = file.union(&cli);
+        assert_eq!(merged.editor, Some("vim".to_string()));
+    }
+
+    #[test]
+    fn test_config_union_editor_file_preserved_when_cli_none() {
+        let file = ConfigFlags {
+            editor: Some("hx".to_string()),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags::default();
+        let merged = file.union(&cli);
+        assert_eq!(merged.editor, Some("hx".to_string()));
+    }
+
+    #[test]
+    fn test_config_union_no_editor_clears_file_setting() {
+        let file = ConfigFlags {
+            editor: Some("hx".to_string()),
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags {
+            editor: Some(String::new()),
+            ..ConfigFlags::default()
+        };
+        let merged = file.union(&cli);
+        assert_eq!(merged.editor, Some(String::new()));
+    }
+
+    #[test]
+    fn test_save_load_editor_single_word() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            editor: Some("hx".to_string()),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.editor, Some("hx".to_string()));
+    }
+
+    #[test]
+    fn test_save_load_editor_multi_word() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            editor: Some("emacsclient -t".to_string()),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.editor, Some("emacsclient -t".to_string()));
+    }
+
+    #[test]
+    fn test_save_load_no_editor_round_trip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            editor: Some(String::new()),
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert_eq!(loaded.editor, Some(String::new()));
+    }
+
+    #[test]
+    fn test_shell_split_tokens_unclosed_quote_treats_rest_as_one_token() {
+        let tokens = shell_split_tokens(r#"hello "world foo"#);
+        assert_eq!(tokens, vec!["hello", "world foo"]);
+    }
+
+    #[test]
+    fn test_shell_split_tokens_empty_string_guard() {
+        let tokens = shell_split_tokens("");
+        assert!(tokens.is_empty());
+        // Simulates what launch_external_editor does: first token would be None
+        assert!(tokens.first().is_none());
+    }
+
+    #[test]
+    fn test_shell_split_tokens_whitespace_only_guard() {
+        let tokens = shell_split_tokens("   ");
+        assert!(tokens.is_empty());
+        assert!(tokens.first().is_none());
     }
 }

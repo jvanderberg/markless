@@ -150,6 +150,7 @@ impl App {
         model.image_mode = self.image_mode;
         model.images_enabled = self.images_enabled;
         model.wrap_width = self.wrap_width;
+        model.external_editor.clone_from(&self.editor);
         model
             .config_global_path
             .clone_from(&self.config_global_path);
@@ -413,6 +414,12 @@ impl App {
                     ),
                 );
 
+                // Clear stale terminal buffer after returning from external process
+                if model.needs_full_redraw {
+                    terminal.clear()?;
+                    model.needs_full_redraw = false;
+                }
+
                 // Render
                 let draw_start = Instant::now();
                 terminal.draw(|frame| Self::view(model, frame))?;
@@ -439,7 +446,7 @@ impl App {
     }
 }
 
-fn set_mouse_motion_tracking(enable: bool) -> std::io::Result<()> {
+pub(super) fn set_mouse_motion_tracking(enable: bool) -> std::io::Result<()> {
     // Request any-event mouse motion reporting (1003) with SGR encoding (1006).
     // This improves hover support in terminals like Ghostty.
     let mut out = stdout();

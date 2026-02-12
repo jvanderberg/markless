@@ -1,4 +1,5 @@
 #!/bin/sh
+
 # Local pre-push check: formatting, linting, and tests.
 # Run this before pushing to catch issues early.
 set -e
