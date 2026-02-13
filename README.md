@@ -61,6 +61,8 @@ When given a directory, markless opens in browse mode: the sidebar shows the fil
 - `--theme <auto|light|dark>`  Force highlight theme background
 - `--perf`  Enable startup performance logging
 - `--render-debug-log <PATH>`  Write render/image debug events to a file
+- `--editor <cmd>`  Use an external editor instead of the built-in one (e.g. `--editor vim`, `--editor "emacsclient -t"`)
+- `--no-editor`  Disable the external editor (use the built-in editor)
 - `--save`  Save current flags as defaults in the global config
 - `--clear`  Clear saved defaults in the global config
 
