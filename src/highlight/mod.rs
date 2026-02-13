@@ -49,6 +49,37 @@ mod tests {
     }
 
     #[test]
+    fn test_highlight_continues_after_line_comment() {
+        // Regression: highlighting stopped after the first // comment because
+        // syntect's newlines-mode parser never saw the \n that ends the
+        // comment scope, leaving all subsequent lines inside the comment.
+        let code = "#include <stdio.h>\n// comment\nint main() {}\n";
+        let lines = highlight_code(Some("c"), code);
+
+        assert_eq!(lines.len(), 3, "expected 3 lines");
+        // The third line ("int main() {}") must have coloured spans,
+        // not plain comment grey.
+        let has_color_after_comment = lines[2].iter().any(|span| {
+            let fg = span.style().fg;
+            // A real keyword like "int" should have a distinct colour;
+            // if everything is the same grey as the comment, the bug is back.
+            fg.is_some()
+                && fg
+                    != lines[1]
+                        .first()
+                        .and_then(|s| s.style().fg)
+                        .as_ref()
+                        .copied()
+        });
+        assert!(
+            has_color_after_comment,
+            "Code after a // comment must have different highlighting than the comment itself.\n\
+             Line 2 (comment) spans: {:?}\nLine 3 (code) spans: {:?}",
+            lines[1], lines[2]
+        );
+    }
+
+    #[test]
     fn test_highlight_does_not_set_background_color() {
         let code = "fn main() {}";
         let lines = highlight_code(Some("rust"), code);
@@ -255,11 +286,23 @@ pub fn highlight_code(language: Option<&str>, code: &str) -> Vec<Vec<InlineSpan>
 
     let mut highlighter = HighlightLines::new(syntax, theme());
     for line in code.lines() {
+        // SyntaxSet::load_defaults_newlines() expects each line to end
+        // with '\n'.  str::lines() strips newlines, so we must re-add it;
+        // otherwise the parser never closes scopes that terminate at EOL
+        // (e.g. `//` comments), and the unclosed scope bleeds into every
+        // subsequent line.
+        let line_nl = format!("{line}\n");
         let ranges = highlighter
-            .highlight_line(line, syntax_set)
+            .highlight_line(&line_nl, syntax_set)
             .unwrap_or_default();
         let mut spans = Vec::new();
         for (style, text) in ranges {
+            // Strip the trailing '\n' we added — it must not appear in the
+            // rendered output.
+            let text = text.trim_end_matches('\n');
+            if text.is_empty() {
+                continue;
+            }
             let mut inline_style = InlineStyle {
                 code: true,
                 ..InlineStyle::default()
