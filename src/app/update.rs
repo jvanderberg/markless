@@ -420,10 +420,18 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // Editor
         Message::EnterEditMode => {
             if !model.can_edit() {
-                model.show_toast(
-                    crate::app::ToastLevel::Warning,
-                    "Cannot edit this file type",
-                );
+                let reason = if model.document.is_hex_mode() {
+                    "Cannot edit binary files".to_string()
+                } else {
+                    let ext = model
+                        .file_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| format!(" (.{e})"))
+                        .unwrap_or_default();
+                    format!("Cannot edit this file type{ext}")
+                };
+                model.show_toast(crate::app::ToastLevel::Warning, reason);
             } else if model.external_editor.is_none() && !model.editor_mode {
                 // Built-in editor: set editor_mode, effects populates the buffer
                 // from the raw file on disk (not from document.source() which may

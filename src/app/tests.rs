@@ -3197,11 +3197,8 @@ fn test_can_edit_returns_false_for_image_file() {
 #[test]
 fn test_can_edit_returns_false_for_binary_file() {
     let bytes = vec![0x00, 0x01, 0x02, 0xff];
-    let doc = crate::document::prepare_document_from_bytes(
-        std::path::Path::new("data.bin"),
-        bytes,
-        80,
-    );
+    let doc =
+        crate::document::prepare_document_from_bytes(std::path::Path::new("data.bin"), bytes, 80);
     let model = Model::new(PathBuf::from("data.bin"), doc, (80, 24));
     assert!(!model.can_edit());
 }
@@ -3212,7 +3209,10 @@ fn test_enter_edit_mode_blocked_for_image_file() {
     let model = Model::new(PathBuf::from("photo.png"), doc, (80, 24));
 
     let model = update(model, Message::EnterEditMode);
-    assert!(!model.editor_mode, "should not enter edit mode for image files");
+    assert!(
+        !model.editor_mode,
+        "should not enter edit mode for image files"
+    );
     assert!(
         model.active_toast().is_some(),
         "should show a toast explaining why editing is blocked"
@@ -3222,11 +3222,8 @@ fn test_enter_edit_mode_blocked_for_image_file() {
 #[test]
 fn test_enter_edit_mode_blocked_for_binary_file() {
     let bytes = vec![0x00, 0x01, 0x02, 0xff];
-    let doc = crate::document::prepare_document_from_bytes(
-        std::path::Path::new("data.bin"),
-        bytes,
-        80,
-    );
+    let doc =
+        crate::document::prepare_document_from_bytes(std::path::Path::new("data.bin"), bytes, 80);
     let model = Model::new(PathBuf::from("data.bin"), doc, (80, 24));
 
     let model = update(model, Message::EnterEditMode);
@@ -3241,11 +3238,40 @@ fn test_enter_edit_mode_blocked_for_binary_file() {
 }
 
 #[test]
+fn test_can_edit_returns_true_for_svg_file() {
+    // SVG is XML text — editable despite being rendered as an image
+    let doc = Document::parse("![logo](logo.svg)").unwrap();
+    let model = Model::new(PathBuf::from("logo.svg"), doc, (80, 24));
+    assert!(model.can_edit(), "SVG files should be editable");
+}
+
+#[test]
+fn test_can_edit_returns_false_for_unknown_extension() {
+    // Unknown extensions should not be editable (whitelist approach)
+    let doc = Document::parse("some content").unwrap();
+    let model = Model::new(PathBuf::from("data.xyz"), doc, (80, 24));
+    assert!(
+        !model.can_edit(),
+        "unknown extensions should not be editable"
+    );
+}
+
+#[test]
+fn test_enter_edit_mode_blocked_toast_includes_extension() {
+    let doc = Document::parse("![photo](photo.png)").unwrap();
+    let model = Model::new(PathBuf::from("photo.png"), doc, (80, 24));
+
+    let model = update(model, Message::EnterEditMode);
+    let (message, _level) = model.active_toast().expect("should show toast");
+    assert!(
+        message.contains(".png"),
+        "toast should mention the file extension, got: {message}"
+    );
+}
+
+#[test]
 fn test_enter_edit_mode_allowed_for_text_file() {
     let model = create_test_model();
     let model = update(model, Message::EnterEditMode);
-    assert!(
-        model.editor_mode,
-        "should enter edit mode for text files"
-    );
+    assert!(model.editor_mode, "should enter edit mode for text files");
 }
