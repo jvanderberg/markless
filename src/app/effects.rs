@@ -93,7 +93,9 @@ impl App {
                 Self::browse_navigate_parent(model);
             }
             Message::EnterEditMode => {
-                if let Some(cmd) = model.external_editor.clone() {
+                if !model.can_edit() {
+                    // Guard already handled in update(); skip side effects.
+                } else if let Some(cmd) = model.external_editor.clone() {
                     Self::launch_external_editor(model, &cmd);
                 } else {
                     Self::enter_builtin_editor(model);

@@ -45,6 +45,16 @@ fn is_csv_file(path: &std::path::Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
 }
 
+/// Returns true if the file is a type that can be edited in the built-in
+/// or external editor.
+///
+/// Image files cannot be meaningfully edited as text, so this returns
+/// `false` for recognized image extensions. Binary file detection happens
+/// at the model level via [`Document::is_hex_mode`].
+pub fn is_editable_file(path: &std::path::Path) -> bool {
+    !is_image_file(path)
+}
+
 /// Returns true if the file extension is a recognized image format.
 pub fn is_image_file(path: &std::path::Path) -> bool {
     path.extension()
@@ -506,6 +516,39 @@ mod tests {
         let doc = prepare_document_from_bytes(Path::new("photo.png"), bytes, 80);
         assert!(!doc.is_hex_mode());
         assert!(!doc.images().is_empty());
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_false_for_image_files() {
+        assert!(!is_editable_file(Path::new("photo.png")));
+        assert!(!is_editable_file(Path::new("pic.jpg")));
+        assert!(!is_editable_file(Path::new("pic.jpeg")));
+        assert!(!is_editable_file(Path::new("anim.gif")));
+        assert!(!is_editable_file(Path::new("photo.webp")));
+        assert!(!is_editable_file(Path::new("icon.bmp")));
+        assert!(!is_editable_file(Path::new("logo.svg")));
+        assert!(!is_editable_file(Path::new("photo.tiff")));
+        assert!(!is_editable_file(Path::new("photo.tif")));
+        assert!(!is_editable_file(Path::new("icon.ico")));
+        assert!(!is_editable_file(Path::new("photo.avif")));
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_false_for_image_case_insensitive() {
+        assert!(!is_editable_file(Path::new("photo.PNG")));
+        assert!(!is_editable_file(Path::new("photo.Jpg")));
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_true_for_text_files() {
+        assert!(is_editable_file(Path::new("README.md")));
+        assert!(is_editable_file(Path::new("main.rs")));
+        assert!(is_editable_file(Path::new("script.py")));
+        assert!(is_editable_file(Path::new("data.csv")));
+        assert!(is_editable_file(Path::new("notes.txt")));
+        assert!(is_editable_file(Path::new("config.toml")));
+        assert!(is_editable_file(Path::new("data.json")));
+        assert!(is_editable_file(Path::new("unknown.xyz")));
     }
 
     #[test]

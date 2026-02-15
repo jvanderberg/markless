@@ -3178,3 +3178,74 @@ fn test_exit_edit_mode_preserves_wrapping_for_non_md_files() {
         "Document should preserve code fence wrapping after exit, got: {source}"
     );
 }
+
+// --- Edit restriction tests ---
+
+#[test]
+fn test_can_edit_returns_true_for_markdown_file() {
+    let model = create_test_model();
+    assert!(model.can_edit());
+}
+
+#[test]
+fn test_can_edit_returns_false_for_image_file() {
+    let doc = Document::parse("![photo](photo.png)").unwrap();
+    let model = Model::new(PathBuf::from("photo.png"), doc, (80, 24));
+    assert!(!model.can_edit());
+}
+
+#[test]
+fn test_can_edit_returns_false_for_binary_file() {
+    let bytes = vec![0x00, 0x01, 0x02, 0xff];
+    let doc = crate::document::prepare_document_from_bytes(
+        std::path::Path::new("data.bin"),
+        bytes,
+        80,
+    );
+    let model = Model::new(PathBuf::from("data.bin"), doc, (80, 24));
+    assert!(!model.can_edit());
+}
+
+#[test]
+fn test_enter_edit_mode_blocked_for_image_file() {
+    let doc = Document::parse("![photo](photo.png)").unwrap();
+    let model = Model::new(PathBuf::from("photo.png"), doc, (80, 24));
+
+    let model = update(model, Message::EnterEditMode);
+    assert!(!model.editor_mode, "should not enter edit mode for image files");
+    assert!(
+        model.active_toast().is_some(),
+        "should show a toast explaining why editing is blocked"
+    );
+}
+
+#[test]
+fn test_enter_edit_mode_blocked_for_binary_file() {
+    let bytes = vec![0x00, 0x01, 0x02, 0xff];
+    let doc = crate::document::prepare_document_from_bytes(
+        std::path::Path::new("data.bin"),
+        bytes,
+        80,
+    );
+    let model = Model::new(PathBuf::from("data.bin"), doc, (80, 24));
+
+    let model = update(model, Message::EnterEditMode);
+    assert!(
+        !model.editor_mode,
+        "should not enter edit mode for binary files"
+    );
+    assert!(
+        model.active_toast().is_some(),
+        "should show a toast explaining why editing is blocked"
+    );
+}
+
+#[test]
+fn test_enter_edit_mode_allowed_for_text_file() {
+    let model = create_test_model();
+    let model = update(model, Message::EnterEditMode);
+    assert!(
+        model.editor_mode,
+        "should enter edit mode for text files"
+    );
+}

@@ -650,6 +650,15 @@ impl Model {
             .map(|(idx, e)| (idx, e.path.clone()))
     }
 
+    /// Whether the current file can be edited.
+    ///
+    /// Returns `false` for image files (by extension) and binary files
+    /// (detected via hex mode). These file types cannot be meaningfully
+    /// edited as text.
+    pub fn can_edit(&self) -> bool {
+        crate::document::is_editable_file(&self.file_path) && !self.document.is_hex_mode()
+    }
+
     /// Whether the editor has unsaved changes.
     pub fn editor_is_dirty(&self) -> bool {
         self.editor_mode

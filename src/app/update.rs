@@ -419,13 +419,18 @@ pub fn update(mut model: Model, msg: Message) -> Model {
 
         // Editor
         Message::EnterEditMode => {
-            // External editor: skip built-in editor entirely.
-            // Built-in editor: set editor_mode, effects populates the buffer
-            // from the raw file on disk (not from document.source() which may
-            // contain code-fence wrapping for non-markdown files).
-            if model.external_editor.is_none() && !model.editor_mode {
+            if !model.can_edit() {
+                model.show_toast(
+                    crate::app::ToastLevel::Warning,
+                    "Cannot edit this file type",
+                );
+            } else if model.external_editor.is_none() && !model.editor_mode {
+                // Built-in editor: set editor_mode, effects populates the buffer
+                // from the raw file on disk (not from document.source() which may
+                // contain code-fence wrapping for non-markdown files).
                 model.editor_mode = true;
             }
+            // External editor: skip built-in editor entirely (handled in effects).
         }
         Message::ExitEditMode => {
             if model.editor_mode {
