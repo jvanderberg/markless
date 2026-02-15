@@ -45,14 +45,32 @@ fn is_csv_file(path: &std::path::Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
 }
 
-/// Returns true if the file is a type that can be edited in the built-in
-/// or external editor.
+/// Returns true if the file extension indicates a text-editable format.
 ///
-/// Image files cannot be meaningfully edited as text, so this returns
-/// `false` for recognized image extensions. Binary file detection happens
-/// at the model level via [`Document::is_hex_mode`].
+/// Uses a whitelist approach: the file is editable if it is markdown, a
+/// code language recognized by syntect, CSV, or SVG (which is XML text
+/// despite being rendered as an image).  Files with unrecognized extensions
+/// are assumed editable — binary content is caught separately by
+/// [`Document::is_hex_mode`] at the model level.
 pub fn is_editable_file(path: &std::path::Path) -> bool {
-    !is_image_file(path)
+    // SVG is XML text and editable, even though we render it as an image
+    if is_svg_file(path) {
+        return true;
+    }
+    // Binary image formats (png, jpg, etc.) are not text-editable
+    if is_image_file(path) {
+        return false;
+    }
+    // Markdown, code files (syntect), CSV, plain text, unknown extensions
+    // are all text-editable. Binary content is caught by is_hex_mode().
+    true
+}
+
+/// Returns true if the file extension is `.svg` (case-insensitive).
+fn is_svg_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
 }
 
 /// Returns true if the file extension is a recognized image format.
@@ -519,14 +537,13 @@ mod tests {
     }
 
     #[test]
-    fn test_is_editable_file_returns_false_for_image_files() {
+    fn test_is_editable_file_returns_false_for_binary_image_formats() {
         assert!(!is_editable_file(Path::new("photo.png")));
         assert!(!is_editable_file(Path::new("pic.jpg")));
         assert!(!is_editable_file(Path::new("pic.jpeg")));
         assert!(!is_editable_file(Path::new("anim.gif")));
         assert!(!is_editable_file(Path::new("photo.webp")));
         assert!(!is_editable_file(Path::new("icon.bmp")));
-        assert!(!is_editable_file(Path::new("logo.svg")));
         assert!(!is_editable_file(Path::new("photo.tiff")));
         assert!(!is_editable_file(Path::new("photo.tif")));
         assert!(!is_editable_file(Path::new("icon.ico")));
@@ -537,6 +554,13 @@ mod tests {
     fn test_is_editable_file_returns_false_for_image_case_insensitive() {
         assert!(!is_editable_file(Path::new("photo.PNG")));
         assert!(!is_editable_file(Path::new("photo.Jpg")));
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_true_for_svg() {
+        // SVG is XML text, editable even though it renders as an image
+        assert!(is_editable_file(Path::new("logo.svg")));
+        assert!(is_editable_file(Path::new("diagram.SVG")));
     }
 
     #[test]
