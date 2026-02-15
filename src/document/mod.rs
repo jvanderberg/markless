@@ -136,6 +136,8 @@ const TEXT_EXTENSIONS: &[&str] = &[
     "patch",
     // Nix
     "nix",
+    // BASIC
+    "bas",
 ];
 
 /// Well-known filenames (no extension) that are text-editable.
@@ -714,6 +716,7 @@ mod tests {
         assert!(is_editable_file(Path::new("lib.h")));
         assert!(is_editable_file(Path::new("lib.cpp")));
         assert!(is_editable_file(Path::new("lib.sh")));
+        assert!(is_editable_file(Path::new("program.bas")));
     }
 
     #[test]
