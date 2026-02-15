@@ -652,9 +652,9 @@ impl Model {
 
     /// Whether the current file can be edited.
     ///
-    /// Returns `false` for image files (by extension) and binary files
-    /// (detected via hex mode). These file types cannot be meaningfully
-    /// edited as text.
+    /// Returns `true` only for files whose extension (or filename) is in
+    /// the text-editable whitelist or is recognized by syntect, AND whose
+    /// content is not binary (hex mode).  All other files are rejected.
     pub fn can_edit(&self) -> bool {
         crate::document::is_editable_file(&self.file_path) && !self.document.is_hex_mode()
     }
