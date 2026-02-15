@@ -650,6 +650,15 @@ impl Model {
             .map(|(idx, e)| (idx, e.path.clone()))
     }
 
+    /// Whether the current file can be edited.
+    ///
+    /// Returns `true` only for files whose extension (or filename) is in
+    /// the text-editable whitelist or is recognized by syntect, AND whose
+    /// content is not binary (hex mode).  All other files are rejected.
+    pub fn can_edit(&self) -> bool {
+        crate::document::is_editable_file(&self.file_path) && !self.document.is_hex_mode()
+    }
+
     /// Whether the editor has unsaved changes.
     pub fn editor_is_dirty(&self) -> bool {
         self.editor_mode

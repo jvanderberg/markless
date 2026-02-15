@@ -93,7 +93,9 @@ impl App {
                 Self::browse_navigate_parent(model);
             }
             Message::EnterEditMode => {
-                if let Some(cmd) = model.external_editor.clone() {
+                if !model.can_edit() {
+                    // Guard already handled in update(); skip side effects.
+                } else if let Some(cmd) = model.external_editor.clone() {
                     Self::launch_external_editor(model, &cmd);
                 } else {
                     Self::enter_builtin_editor(model);
@@ -322,7 +324,8 @@ impl App {
         model.editor_disk_hash = model.file_disk_hash();
 
         // Read raw file from disk — NOT from document.source() which may
-        // contain code-fence wrapping for non-markdown files.
+        // contain code-fence wrapping (for code files) or image-markdown
+        // wrapping (for SVG files rendered as images).
         // Falls back to document source if the file can't be read.
         let source = std::fs::read_to_string(&model.file_path)
             .unwrap_or_else(|_| model.document.source().to_string());

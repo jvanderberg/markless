@@ -45,6 +45,160 @@ fn is_csv_file(path: &std::path::Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
 }
 
+/// Text file extensions that are always editable regardless of syntect support.
+///
+/// Includes markdown, config formats, plain text, and other common text
+/// files that syntect may not recognize.
+const TEXT_EXTENSIONS: &[&str] = &[
+    // Markdown
+    "md",
+    "markdown",
+    "mdown",
+    "mkd",
+    // Config / data
+    "csv",
+    "tsv",
+    "json",
+    "jsonl",
+    "json5",
+    "yaml",
+    "yml",
+    "toml",
+    "ini",
+    "cfg",
+    "conf",
+    "properties",
+    "env",
+    // XML family (SVG is XML text, editable even though rendered as an image)
+    "xml",
+    "svg",
+    "xsl",
+    "xslt",
+    "xsd",
+    "dtd",
+    "plist",
+    // Web
+    "html",
+    "htm",
+    "xhtml",
+    "css",
+    "scss",
+    "sass",
+    "less",
+    // Plain text / docs
+    "txt",
+    "text",
+    "log",
+    "rst",
+    "adoc",
+    "asciidoc",
+    "tex",
+    "latex",
+    "bib",
+    // TypeScript / JSX
+    "ts",
+    "tsx",
+    "jsx",
+    "mjs",
+    "cjs",
+    "mts",
+    "cts",
+    // Shell / scripting
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "psm1",
+    "bat",
+    "cmd",
+    // Misc programming (not always in syntect)
+    "zig",
+    "nim",
+    "v",
+    "odin",
+    "jai",
+    // Build / CI
+    "cmake",
+    "mk",
+    "makefile",
+    "mak",
+    "gradle",
+    "sbt",
+    // Data / query
+    "sql",
+    "graphql",
+    "gql",
+    "proto",
+    "protobuf",
+    // Diff / patch
+    "diff",
+    "patch",
+    // Nix
+    "nix",
+    // BASIC
+    "bas",
+];
+
+/// Well-known filenames (no extension) that are text-editable.
+const TEXT_FILENAMES: &[&str] = &[
+    "Makefile",
+    "Dockerfile",
+    "Vagrantfile",
+    "Rakefile",
+    "Gemfile",
+    "Justfile",
+    "Taskfile",
+    "CMakeLists.txt",
+    "LICENSE",
+    "LICENCE",
+    "CHANGELOG",
+    "AUTHORS",
+    "CONTRIBUTORS",
+    "CODEOWNERS",
+];
+
+/// Returns true if the file is a known text-editable format.
+///
+/// Uses a true whitelist: the file is editable only if its extension is in
+/// [`TEXT_EXTENSIONS`], its filename is in [`TEXT_FILENAMES`], or it is
+/// recognized as a code language by syntect.  Files with unrecognized
+/// extensions return `false`.  Binary content within otherwise-text files
+/// is caught separately by [`Document::is_hex_mode`] at the model level.
+pub fn is_editable_file(path: &std::path::Path) -> bool {
+    // Check well-known filenames first (Makefile, Dockerfile, etc.)
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if TEXT_FILENAMES.iter().any(|f| f.eq_ignore_ascii_case(name)) {
+            return true;
+        }
+        // Dotfiles without extensions (e.g. .gitignore, .editorconfig)
+        // These have a leading dot but no further dots, so no extension.
+        if name.starts_with('.')
+            && name.len() > 1
+            && !name.get(1..).unwrap_or_default().contains('.')
+        {
+            return true;
+        }
+    }
+
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    let ext_lower = ext.to_ascii_lowercase();
+
+    // Check explicit text extension whitelist
+    if TEXT_EXTENSIONS.contains(&ext_lower.as_str()) {
+        return true;
+    }
+
+    // Check if syntect recognizes this as a code language
+    if crate::highlight::language_for_file(path).is_some() {
+        return true;
+    }
+
+    false
+}
+
 /// Returns true if the file extension is a recognized image format.
 pub fn is_image_file(path: &std::path::Path) -> bool {
     path.extension()
@@ -506,6 +660,73 @@ mod tests {
         let doc = prepare_document_from_bytes(Path::new("photo.png"), bytes, 80);
         assert!(!doc.is_hex_mode());
         assert!(!doc.images().is_empty());
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_false_for_binary_image_formats() {
+        assert!(!is_editable_file(Path::new("photo.png")));
+        assert!(!is_editable_file(Path::new("pic.jpg")));
+        assert!(!is_editable_file(Path::new("pic.jpeg")));
+        assert!(!is_editable_file(Path::new("anim.gif")));
+        assert!(!is_editable_file(Path::new("photo.webp")));
+        assert!(!is_editable_file(Path::new("icon.bmp")));
+        assert!(!is_editable_file(Path::new("photo.tiff")));
+        assert!(!is_editable_file(Path::new("photo.tif")));
+        assert!(!is_editable_file(Path::new("icon.ico")));
+        assert!(!is_editable_file(Path::new("photo.avif")));
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_false_for_image_case_insensitive() {
+        assert!(!is_editable_file(Path::new("photo.PNG")));
+        assert!(!is_editable_file(Path::new("photo.Jpg")));
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_true_for_svg() {
+        // SVG is XML text, editable even though it renders as an image
+        assert!(is_editable_file(Path::new("logo.svg")));
+        assert!(is_editable_file(Path::new("diagram.SVG")));
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_true_for_text_files() {
+        assert!(is_editable_file(Path::new("README.md")));
+        assert!(is_editable_file(Path::new("README.markdown")));
+        assert!(is_editable_file(Path::new("main.rs")));
+        assert!(is_editable_file(Path::new("script.py")));
+        assert!(is_editable_file(Path::new("data.csv")));
+        assert!(is_editable_file(Path::new("notes.txt")));
+        assert!(is_editable_file(Path::new("config.toml")));
+        assert!(is_editable_file(Path::new("data.json")));
+        assert!(is_editable_file(Path::new("data.xml")));
+        assert!(is_editable_file(Path::new("data.yaml")));
+        assert!(is_editable_file(Path::new("data.yml")));
+        assert!(is_editable_file(Path::new("Makefile")));
+        assert!(is_editable_file(Path::new("Dockerfile")));
+        assert!(is_editable_file(Path::new(".gitignore")));
+        assert!(is_editable_file(Path::new("config.ini")));
+        assert!(is_editable_file(Path::new("style.css")));
+        assert!(is_editable_file(Path::new("page.html")));
+        assert!(is_editable_file(Path::new("app.js")));
+        assert!(is_editable_file(Path::new("app.ts")));
+        assert!(is_editable_file(Path::new("lib.go")));
+        assert!(is_editable_file(Path::new("Main.java")));
+        assert!(is_editable_file(Path::new("lib.c")));
+        assert!(is_editable_file(Path::new("lib.h")));
+        assert!(is_editable_file(Path::new("lib.cpp")));
+        assert!(is_editable_file(Path::new("lib.sh")));
+        assert!(is_editable_file(Path::new("program.bas")));
+    }
+
+    #[test]
+    fn test_is_editable_file_returns_false_for_unknown_extensions() {
+        // Unknown extensions are NOT editable — true whitelist approach
+        assert!(!is_editable_file(Path::new("unknown.xyz")));
+        assert!(!is_editable_file(Path::new("data.dat")));
+        assert!(!is_editable_file(Path::new("archive.zip")));
+        assert!(!is_editable_file(Path::new("library.so")));
+        assert!(!is_editable_file(Path::new("program.exe")));
     }
 
     #[test]
