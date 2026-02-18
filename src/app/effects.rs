@@ -226,6 +226,7 @@ impl App {
         if let Some((path, anchor)) = resolve_local_file_link(model, url) {
             match model.load_file(&path) {
                 Ok(()) => {
+                    Self::sync_browse_state_to_loaded_file(model);
                     if let Some(anchor) = anchor {
                         if let Some(target) = model.document.resolve_internal_anchor(&anchor) {
                             model.viewport.go_to_line(target);
@@ -343,6 +344,32 @@ impl App {
             } else {
                 model.toc_selected = Some(idx);
             }
+        }
+    }
+
+    fn sync_browse_state_to_loaded_file(model: &mut Model) {
+        if !model.browse_mode {
+            return;
+        }
+        let file_path = model.file_path.clone();
+        let target_dir = file_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+
+        if !paths_equivalent(&model.browse_dir, &target_dir)
+            && model.load_directory(&target_dir).is_err()
+        {
+            return;
+        }
+
+        if let Some(name) = file_path.file_name().map(|n| n.to_string_lossy())
+            && let Some(idx) = model
+                .browse_entries
+                .iter()
+                .position(|e| !e.is_dir && e.name == *name)
+        {
+            model.toc_selected = Some(idx);
         }
     }
 
@@ -604,6 +631,16 @@ fn is_windows_drive_path(path: &str) -> bool {
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+fn paths_equivalent(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize().ok(), b.canonicalize().ok()) {
+        (Some(ca), Some(cb)) => ca == cb,
+        _ => false,
+    }
 }
 
 fn open_external_link(url: &str) -> std::io::Result<()> {

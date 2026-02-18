@@ -900,6 +900,61 @@ fn test_follow_missing_local_link_keeps_current_file() {
 }
 
 #[test]
+fn test_follow_local_link_updates_browse_selection_same_directory() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("next.md");
+    let current_md = "[Next](next.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Next").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+    model.toc_selected = model
+        .browse_entries
+        .iter()
+        .position(|e| e.name == "current.md");
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    let selected = model.toc_selected.expect("selection should be set");
+    assert_eq!(model.browse_entries[selected].name, "next.md");
+}
+
+#[test]
+fn test_follow_local_link_updates_browse_directory_for_subdir_target() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let subdir = dir.path().join("fixes");
+    let target_path = subdir.join("README.md");
+    std::fs::create_dir_all(&subdir).unwrap();
+    let current_md = "[Fixes](fixes/README.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Fixes").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert_eq!(model.browse_dir, subdir.canonicalize().unwrap());
+    let selected = model.toc_selected.expect("selection should be set");
+    assert_eq!(model.browse_entries[selected].name, "README.md");
+}
+
+#[test]
 fn test_follow_link_jumps_to_footnote_definition() {
     let md = "Alpha[^1]\n\n[^1]: Footnote text";
     let doc = Document::parse_with_layout(md, 80).unwrap();
