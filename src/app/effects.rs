@@ -1,4 +1,5 @@
 use std::io::{Write, stdout};
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -222,6 +223,32 @@ impl App {
             return;
         }
 
+        if let Some((path, anchor)) = resolve_local_file_link(model, url) {
+            match model.load_file(&path) {
+                Ok(()) => {
+                    Self::sync_browse_state_to_loaded_file(model);
+                    if let Some(anchor) = anchor {
+                        if let Some(target) = model.document.resolve_internal_anchor(&anchor) {
+                            model.viewport.go_to_line(target);
+                            model.show_toast(
+                                ToastLevel::Info,
+                                format!("Opened {}#{anchor}", path.display()),
+                            );
+                        } else {
+                            model.show_toast(
+                                ToastLevel::Warning,
+                                format!("Opened {}, anchor #{anchor} not found", path.display()),
+                            );
+                        }
+                    } else {
+                        model.show_toast(ToastLevel::Info, format!("Opened {}", path.display()));
+                    }
+                }
+                Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
+            }
+            return;
+        }
+
         match open_external_link(url) {
             Ok(()) => model.show_toast(ToastLevel::Info, format!("Opened {url}")),
             Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
@@ -317,6 +344,32 @@ impl App {
             } else {
                 model.toc_selected = Some(idx);
             }
+        }
+    }
+
+    fn sync_browse_state_to_loaded_file(model: &mut Model) {
+        if !model.browse_mode {
+            return;
+        }
+        let file_path = model.file_path.clone();
+        let target_dir = file_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+
+        if !paths_equivalent(&model.browse_dir, &target_dir)
+            && model.load_directory(&target_dir).is_err()
+        {
+            return;
+        }
+
+        if let Some(name) = file_path.file_name().map(|n| n.to_string_lossy())
+            && let Some(idx) = model
+                .browse_entries
+                .iter()
+                .position(|e| !e.is_dir && e.name == *name)
+        {
+            model.toc_selected = Some(idx);
         }
     }
 
@@ -490,6 +543,103 @@ impl App {
             Ok(()) => model.show_toast(ToastLevel::Info, format!("Copied {lines} line(s)")),
             Err(err) => model.show_toast(ToastLevel::Error, format!("Copy failed: {err}")),
         }
+    }
+}
+
+fn resolve_local_file_link(model: &Model, url: &str) -> Option<(PathBuf, Option<String>)> {
+    let (base, anchor) = split_link_fragment(url);
+    if base.is_empty() || base.starts_with("//") {
+        return None;
+    }
+
+    let (path, absolute_like) = if let Some(file_url_path) = parse_file_url_path(base) {
+        let absolute_like = file_url_path.is_absolute()
+            || is_windows_drive_path(file_url_path.to_string_lossy().as_ref());
+        (file_url_path, absolute_like)
+    } else {
+        if looks_like_external_url(base) {
+            return None;
+        }
+        let path = Path::new(base).to_path_buf();
+        let absolute_like = path.is_absolute() || is_windows_drive_path(base);
+        (path, absolute_like)
+    };
+
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+
+    let resolved = if absolute_like {
+        path
+    } else {
+        model.base_dir.join(path)
+    };
+
+    Some((resolved, anchor.map(str::to_string)))
+}
+
+fn split_link_fragment(url: &str) -> (&str, Option<&str>) {
+    let Some((base, fragment)) = url.split_once('#') else {
+        return (url, None);
+    };
+    if fragment.is_empty() {
+        (base, None)
+    } else {
+        (base, Some(fragment))
+    }
+}
+
+fn parse_file_url_path(url: &str) -> Option<PathBuf> {
+    let raw = url.strip_prefix("file://")?;
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with('/') {
+        let path = raw.strip_prefix('/').unwrap_or_default();
+        if is_windows_drive_path(path) {
+            return Some(PathBuf::from(path));
+        }
+        return Some(PathBuf::from(format!("/{path}")));
+    }
+    if let Some(path) = raw.strip_prefix("localhost/") {
+        return Some(PathBuf::from(format!("/{path}")));
+    }
+    if is_windows_drive_path(raw) {
+        return Some(PathBuf::from(raw));
+    }
+    None
+}
+
+fn looks_like_external_url(url: &str) -> bool {
+    let Some((scheme, _)) = url.split_once(':') else {
+        return false;
+    };
+    if scheme.is_empty() || is_windows_drive_path(url) {
+        return false;
+    }
+    let mut chars = scheme.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+}
+
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+fn paths_equivalent(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize().ok(), b.canonicalize().ok()) {
+        (Some(ca), Some(cb)) => ca == cb,
+        _ => false,
     }
 }
 

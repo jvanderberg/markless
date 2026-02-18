@@ -780,6 +780,181 @@ fn test_follow_link_jumps_to_internal_anchor() {
 }
 
 #[test]
+fn test_follow_local_markdown_link_loads_target_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("next.md");
+    let current_md = "[Next](next.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Next\n\nLoaded").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert!(model.document.source().contains("# Next"));
+}
+
+#[test]
+fn test_follow_local_markdown_link_with_code_styled_label_loads_target_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let fixes_dir = dir.path().join("fixes");
+    std::fs::create_dir_all(&fixes_dir).unwrap();
+    let target_path = fixes_dir.join("README.md");
+    let current_md = "See [`fixes/README.md`](fixes/README.md) for details.";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Fixes\n\nDetails").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert!(model.document.source().contains("# Fixes"));
+}
+
+#[test]
+fn test_follow_local_non_markdown_link_loads_readable_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("notes.txt");
+    let current_md = "[Notes](notes.txt)";
+    let target_text = "alpha\nbeta";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, target_text).unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert!(model.document.source().contains("alpha"));
+    assert!(model.document.source().contains("beta"));
+    let rendered: Vec<String> = (0..model.document.line_count())
+        .filter_map(|idx| {
+            model
+                .document
+                .line_at(idx)
+                .map(|line| line.content().to_string())
+        })
+        .collect();
+    assert!(rendered.iter().any(|line| line.contains("alpha")));
+    assert!(rendered.iter().any(|line| line.contains("beta")));
+}
+
+#[test]
+fn test_follow_file_url_with_anchor_loads_file_and_jumps() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("target.md");
+    std::fs::write(&target_path, "# Intro\n\n## Jump Here\n\nBody").unwrap();
+    let link = format!(
+        "[Jump](<file://{}#jump-here>)",
+        target_path.to_string_lossy()
+    );
+    std::fs::write(&current_path, &link).unwrap();
+
+    let doc = Document::parse_with_layout(&link, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 6));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    let target_line = model.document.resolve_internal_anchor("jump-here").unwrap();
+    assert_eq!(model.file_path, target_path);
+    assert!(model.viewport.offset() >= target_line.saturating_sub(1));
+}
+
+#[test]
+fn test_follow_missing_local_link_keeps_current_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let current_md = "[Missing](does-not-exist.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path.clone(), doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, current_path);
+    assert!(
+        model
+            .active_toast()
+            .is_some_and(|(msg, level)| level == ToastLevel::Error && msg.contains("Open failed"))
+    );
+}
+
+#[test]
+fn test_follow_local_link_updates_browse_selection_same_directory() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("next.md");
+    let current_md = "[Next](next.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Next").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+    model.toc_selected = model
+        .browse_entries
+        .iter()
+        .position(|e| e.name == "current.md");
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    let selected = model.toc_selected.expect("selection should be set");
+    assert_eq!(model.browse_entries[selected].name, "next.md");
+}
+
+#[test]
+fn test_follow_local_link_updates_browse_directory_for_subdir_target() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let subdir = dir.path().join("fixes");
+    let target_path = subdir.join("README.md");
+    std::fs::create_dir_all(&subdir).unwrap();
+    let current_md = "[Fixes](fixes/README.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Fixes").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    model.browse_mode = true;
+    model.toc_visible = true;
+    model.load_directory(dir.path()).unwrap();
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert_eq!(model.browse_dir, subdir.canonicalize().unwrap());
+    let selected = model.toc_selected.expect("selection should be set");
+    assert_eq!(model.browse_entries[selected].name, "README.md");
+}
+
+#[test]
 fn test_follow_link_jumps_to_footnote_definition() {
     let md = "Alpha[^1]\n\n[^1]: Footnote text";
     let doc = Document::parse_with_layout(md, 80).unwrap();

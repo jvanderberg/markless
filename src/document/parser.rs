@@ -1647,7 +1647,9 @@ fn collect_inline_elements<'a>(
             });
         }
         NodeValue::Link(link) => {
-            let text = extract_text(node);
+            // Use rendered inline text so code-style link labels (e.g. [`foo`])
+            // match what appears on screen for clickable line fixups.
+            let text = spans_to_string(&collect_inline_spans(node));
             let url = link.url.clone();
             links.push(LinkRef {
                 text,
@@ -2796,6 +2798,28 @@ mod tests {
             line_content.contains("link"),
             "link line {} should contain 'link', got: {line_content}",
             links[0].line
+        );
+    }
+
+    #[test]
+    fn test_code_styled_link_text_uses_rendered_label_for_line_fixup() {
+        let md = "See [`fixes/README.md`](fixes/README.md) for details.";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let link = doc
+            .links()
+            .iter()
+            .find(|l| l.url == "fixes/README.md")
+            .expect("link should be collected");
+
+        assert_eq!(
+            link.text, "fixes/README.md",
+            "link text should match rendered label without markdown backticks"
+        );
+        let line_content = doc.line_at(link.line).unwrap().content();
+        assert!(
+            line_content.contains("fixes/README.md"),
+            "link line {} should contain rendered text, got: {line_content}",
+            link.line
         );
     }
 
