@@ -780,6 +780,104 @@ fn test_follow_link_jumps_to_internal_anchor() {
 }
 
 #[test]
+fn test_follow_local_markdown_link_loads_target_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("next.md");
+    let current_md = "[Next](next.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Next\n\nLoaded").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert!(model.document.source().contains("# Next"));
+}
+
+#[test]
+fn test_follow_local_non_markdown_link_loads_readable_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("notes.txt");
+    let current_md = "[Notes](notes.txt)";
+    let target_text = "alpha\nbeta";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, target_text).unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert!(model.document.source().contains("alpha"));
+    assert!(model.document.source().contains("beta"));
+    let rendered: Vec<String> = (0..model.document.line_count())
+        .filter_map(|idx| {
+            model
+                .document
+                .line_at(idx)
+                .map(|line| line.content().to_string())
+        })
+        .collect();
+    assert!(rendered.iter().any(|line| line.contains("alpha")));
+    assert!(rendered.iter().any(|line| line.contains("beta")));
+}
+
+#[test]
+fn test_follow_file_url_with_anchor_loads_file_and_jumps() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let target_path = dir.path().join("target.md");
+    std::fs::write(&target_path, "# Intro\n\n## Jump Here\n\nBody").unwrap();
+    let link = format!(
+        "[Jump](<file://{}#jump-here>)",
+        target_path.to_string_lossy()
+    );
+    std::fs::write(&current_path, &link).unwrap();
+
+    let doc = Document::parse_with_layout(&link, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 6));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    let target_line = model.document.resolve_internal_anchor("jump-here").unwrap();
+    assert_eq!(model.file_path, target_path);
+    assert!(model.viewport.offset() >= target_line.saturating_sub(1));
+}
+
+#[test]
+fn test_follow_missing_local_link_keeps_current_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let current_md = "[Missing](does-not-exist.md)";
+    std::fs::write(&current_path, current_md).unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path.clone(), doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, current_path);
+    assert!(
+        model
+            .active_toast()
+            .is_some_and(|(msg, level)| level == ToastLevel::Error && msg.contains("Open failed"))
+    );
+}
+
+#[test]
 fn test_follow_link_jumps_to_footnote_definition() {
     let md = "Alpha[^1]\n\n[^1]: Footnote text";
     let doc = Document::parse_with_layout(md, 80).unwrap();
