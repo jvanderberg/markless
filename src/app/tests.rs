@@ -800,6 +800,28 @@ fn test_follow_local_markdown_link_loads_target_file() {
 }
 
 #[test]
+fn test_follow_local_markdown_link_with_code_styled_label_loads_target_file() {
+    let dir = tempdir().unwrap();
+    let current_path = dir.path().join("current.md");
+    let fixes_dir = dir.path().join("fixes");
+    std::fs::create_dir_all(&fixes_dir).unwrap();
+    let target_path = fixes_dir.join("README.md");
+    let current_md = "See [`fixes/README.md`](fixes/README.md) for details.";
+    std::fs::write(&current_path, current_md).unwrap();
+    std::fs::write(&target_path, "# Fixes\n\nDetails").unwrap();
+
+    let doc = Document::parse_with_layout(current_md, 80).unwrap();
+    let mut model = Model::new(current_path, doc, (80, 8));
+    let mut watcher = None;
+
+    model = update(model, Message::OpenVisibleLinks);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::OpenVisibleLinks);
+
+    assert_eq!(model.file_path, target_path);
+    assert!(model.document.source().contains("# Fixes"));
+}
+
+#[test]
 fn test_follow_local_non_markdown_link_loads_readable_file() {
     let dir = tempdir().unwrap();
     let current_path = dir.path().join("current.md");
