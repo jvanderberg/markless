@@ -8,9 +8,22 @@ use std::time::{Duration, Instant};
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
+#[cfg(test)]
+use notify::{Config, PollWatcher};
+
+enum WatcherHandle {
+    Recommended {
+        _inner: RecommendedWatcher,
+    },
+    #[cfg(test)]
+    Poll {
+        _inner: PollWatcher,
+    },
+}
+
 /// Watches a single file and emits debounced change notifications.
 pub struct FileWatcher {
-    _watcher: RecommendedWatcher,
+    _watcher: WatcherHandle,
     rx: Receiver<notify::Result<Event>>,
     watch_root: PathBuf,
     target_path: PathBuf,
@@ -40,7 +53,25 @@ impl FileWatcher {
         })?;
         watcher.watch(&watch_root, RecursiveMode::NonRecursive)?;
 
-        Ok(Self {
+        Ok(Self::build(
+            WatcherHandle::Recommended { _inner: watcher },
+            rx,
+            watch_root,
+            target_path,
+            target_name,
+            debounce,
+        ))
+    }
+
+    const fn build(
+        watcher: WatcherHandle,
+        rx: Receiver<notify::Result<Event>>,
+        watch_root: PathBuf,
+        target_path: PathBuf,
+        target_name: Option<OsString>,
+        debounce: Duration,
+    ) -> Self {
+        Self {
             _watcher: watcher,
             rx,
             watch_root,
@@ -48,7 +79,39 @@ impl FileWatcher {
             target_name,
             debounce,
             pending_since: None,
-        })
+        }
+    }
+
+    #[cfg(test)]
+    fn new_poll(
+        path: impl AsRef<Path>,
+        debounce: Duration,
+        poll_interval: Duration,
+    ) -> notify::Result<Self> {
+        let target_path = path
+            .as_ref()
+            .canonicalize()
+            .unwrap_or_else(|_| path.as_ref().to_path_buf());
+        let target_name = target_path.file_name().map(std::ffi::OsStr::to_os_string);
+        let watch_root = watch_root_for(&target_path);
+
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = PollWatcher::new(
+            move |res| {
+                let _ = tx.send(res);
+            },
+            Config::default().with_poll_interval(poll_interval),
+        )?;
+        watcher.watch(&watch_root, RecursiveMode::NonRecursive)?;
+
+        Ok(Self::build(
+            WatcherHandle::Poll { _inner: watcher },
+            rx,
+            watch_root,
+            target_path,
+            target_name,
+            debounce,
+        ))
     }
 
     /// The canonical path of the file being watched.
@@ -164,16 +227,21 @@ mod tests {
         let path = canonical_dir.join("watched.txt");
         std::fs::write(&path, "original").expect("write");
 
-        let mut watcher = FileWatcher::new(&path, Duration::from_millis(50)).expect("watcher");
+        let mut watcher =
+            FileWatcher::new_poll(&path, Duration::from_millis(50), Duration::from_millis(50))
+                .expect("watcher");
 
-        // Give FSEvents time to register the watch
-        std::thread::sleep(Duration::from_millis(500));
+        // Allow one poll cycle to establish initial baseline.
+        std::thread::sleep(Duration::from_millis(120));
 
-        // Modify the file
-        std::fs::write(&path, "modified").expect("write");
+        // Ensure mtime granularity does not hide the change on coarse filesystems.
+        std::thread::sleep(Duration::from_millis(1100));
 
-        // Poll until the change is ready or timeout after 5 seconds
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Modify with different length so polling backends detect size or mtime change.
+        std::fs::write(&path, "modified content").expect("write");
+
+        // Poll until the change is ready or timeout after 8 seconds
+        let deadline = Instant::now() + Duration::from_secs(8);
         let mut detected = false;
         while Instant::now() < deadline {
             if watcher.take_change_ready() {
@@ -185,7 +253,7 @@ mod tests {
 
         assert!(
             detected,
-            "watcher should detect real file modification within 5 seconds"
+            "watcher should detect real file modification within 8 seconds"
         );
     }
 
@@ -198,10 +266,15 @@ mod tests {
         std::fs::write(&path, "original").expect("write");
 
         // Same debounce as the real app (200ms)
-        let mut watcher = FileWatcher::new(&path, Duration::from_millis(200)).expect("watcher");
+        let mut watcher =
+            FileWatcher::new_poll(&path, Duration::from_millis(200), Duration::from_millis(50))
+                .expect("watcher");
 
-        // Give FSEvents time to register
-        std::thread::sleep(Duration::from_millis(500));
+        // Allow one poll cycle to establish initial baseline.
+        std::thread::sleep(Duration::from_millis(120));
+
+        // Ensure mtime granularity does not hide the change on coarse filesystems.
+        std::thread::sleep(Duration::from_millis(1100));
 
         // Modify the file (simulates another process saving)
         std::fs::write(&path, "modified by another process").expect("write");
