@@ -6,7 +6,7 @@ authors = ["Josh V"]
 description = "A terminal markdown viewer with image support"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/joshv/markless"
+repository = "https://github.com/jvanderberg/markless"
 keywords = ["markdown", "tui", "terminal", "viewer", "pager"]
 categories = ["command-line-utilities", "text-processing"]
 
