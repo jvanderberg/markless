@@ -151,10 +151,9 @@ pub fn quantize_to_ansi256(image: &DynamicImage) -> DynamicImage {
 
 #[cfg(unix)]
 fn query_options() -> QueryStdioOptions {
-    QueryStdioOptions {
-        timeout: Duration::from_millis(PICKER_QUERY_TIMEOUT_MS),
-        ..QueryStdioOptions::default()
-    }
+    let mut options = QueryStdioOptions::default();
+    options.timeout = Duration::from_millis(PICKER_QUERY_TIMEOUT_MS);
+    options
 }
 
 fn supports_truecolor_from_env(colorterm: Option<&str>, term: Option<&str>) -> bool {
