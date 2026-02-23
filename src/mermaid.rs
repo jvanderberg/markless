@@ -161,8 +161,9 @@ mod tests {
 
     #[test]
     fn test_render_to_svg_does_not_panic_for_invalid_input() {
-        // Invalid mermaid source should not panic (catch_unwind protects us).
-        // The library may return Ok with a best-effort SVG or Err; either is fine.
+        // Verifies that catch_unwind prevents a crash on bad input.
+        // The library may return Ok (best-effort SVG) or Err — we don't
+        // assert either way because the important property is "no panic".
         let _result = render_to_svg("this is not valid mermaid at all }{}{}{");
     }
 

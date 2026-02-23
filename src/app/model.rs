@@ -406,7 +406,6 @@ impl Model {
 
         if mermaid_failed {
             self.show_toast(ToastLevel::Warning, "Mermaid render failed, showing source");
-            self.reparse_current_document();
         }
 
         let current_layout_heights: HashMap<String, usize> = self
@@ -415,15 +414,17 @@ impl Model {
             .map(|(src, (_, _, height_rows))| (src.clone(), *height_rows as usize))
             .collect();
 
-        if current_layout_heights != self.image_layout_heights {
-            crate::perf::log_event(
-                "image.layout.reflow",
-                format!(
-                    "old={} new={}",
-                    self.image_layout_heights.len(),
-                    current_layout_heights.len()
-                ),
-            );
+        if mermaid_failed || current_layout_heights != self.image_layout_heights {
+            if current_layout_heights != self.image_layout_heights {
+                crate::perf::log_event(
+                    "image.layout.reflow",
+                    format!(
+                        "old={} new={}",
+                        self.image_layout_heights.len(),
+                        current_layout_heights.len()
+                    ),
+                );
+            }
             self.image_layout_heights = current_layout_heights;
             self.reflow_layout();
         }
@@ -516,29 +517,14 @@ impl Model {
         if self.document.is_hex_mode() {
             return;
         }
-        let width = self.layout_width();
-        let mermaid = self.should_render_mermaid_as_images();
-        if let Ok(document) = Document::parse_with_all_options_and_failures(
-            self.document.source(),
-            width,
-            &self.image_layout_heights,
-            mermaid,
-            &self.failed_mermaid_srcs,
-        ) {
-            self.document = document;
-            self.viewport.set_total_lines(self.document.line_count());
-            self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
-            let allow_short = self.search_allow_short;
-            refresh_search_matches(self, false, allow_short);
-            self.clamp_selection();
-        }
+        self.reparse_document();
     }
 
     /// Re-parse the current document from its stored source.
     ///
-    /// Used after updating `failed_mermaid_srcs` so that mermaid blocks that
-    /// failed to render fall back to code block display.
-    fn reparse_current_document(&mut self) {
+    /// Shared implementation for `reflow_layout` (on resize / image height
+    /// changes) and the mermaid-failure fallback path.
+    fn reparse_document(&mut self) {
         let width = self.layout_width();
         let mermaid = self.should_render_mermaid_as_images();
         if let Ok(document) = Document::parse_with_all_options_and_failures(
@@ -660,6 +646,7 @@ impl Model {
         self.image_protocols.clear();
         self.original_images.clear();
         self.image_layout_heights.clear();
+        self.failed_mermaid_srcs.clear();
 
         self.viewport.set_total_lines(self.document.line_count());
         self.viewport.go_to_top();
