@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -166,6 +166,8 @@ pub struct Model {
     /// Signals that ratatui's internal buffer is stale and `terminal.clear()` must
     /// be called before the next draw (e.g. after returning from an external process).
     pub needs_full_redraw: bool,
+    /// Mermaid source texts that failed to render; these fall back to code blocks.
+    pub failed_mermaid_srcs: HashSet<String>,
 }
 
 impl std::fmt::Debug for Model {
@@ -176,6 +178,7 @@ impl std::fmt::Debug for Model {
             .field("watch_enabled", &self.watch_enabled)
             .field("editor_mode", &self.editor_mode)
             .field("external_editor", &self.external_editor)
+            .field("failed_mermaid_srcs", &self.failed_mermaid_srcs.len())
             .finish_non_exhaustive()
     }
 }
@@ -238,6 +241,7 @@ impl Model {
             exit_confirmed: false,
             external_editor: None,
             needs_full_redraw: false,
+            failed_mermaid_srcs: HashSet::new(),
         }
     }
 
@@ -321,6 +325,7 @@ impl Model {
         );
 
         let loader = ImageLoader::new(self.base_dir.clone());
+        let mut mermaid_failed = false;
 
         for src in images_to_process {
             // Check if we need to load/reload this image's protocol
@@ -336,22 +341,27 @@ impl Model {
                         Some(img.clone())
                     } else if src.starts_with("mermaid://") {
                         let mermaid_width_px = target_width_px * MERMAID_WIDTH_PERCENT / 100;
-                        self.document
-                            .mermaid_sources()
-                            .get(&src)
-                            .and_then(|mermaid_text| {
-                                crate::mermaid::render_to_image(mermaid_text, mermaid_width_px)
-                                    .inspect_err(|e| {
-                                        crate::perf::log_event(
-                                            "mermaid.render.error",
-                                            format!("src={src} err={e}"),
-                                        );
-                                    })
-                                    .ok()
-                            })
-                            .inspect(|img| {
-                                self.original_images.insert(src.clone(), img.clone());
-                            })
+                        let mermaid_text = self.document.mermaid_sources().get(&src).cloned();
+                        if let Some(mermaid_text) = mermaid_text {
+                            match crate::mermaid::render_to_image(&mermaid_text, mermaid_width_px) {
+                                Ok(img) => {
+                                    self.original_images.insert(src.clone(), img.clone());
+                                    Some(img)
+                                }
+                                Err(e) => {
+                                    crate::perf::log_event(
+                                        "mermaid.render.error",
+                                        format!("src={src} err={e}"),
+                                    );
+                                    if self.failed_mermaid_srcs.insert(mermaid_text) {
+                                        mermaid_failed = true;
+                                    }
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        }
                     } else if let Some(img) = loader.load_sync(&src) {
                         self.original_images.insert(src.clone(), img.clone());
                         Some(img)
@@ -392,6 +402,11 @@ impl Model {
                     );
                 }
             }
+        }
+
+        if mermaid_failed {
+            self.show_toast(ToastLevel::Warning, "Mermaid render failed, showing source");
+            self.reparse_current_document();
         }
 
         let current_layout_heights: HashMap<String, usize> = self
@@ -503,11 +518,35 @@ impl Model {
         }
         let width = self.layout_width();
         let mermaid = self.should_render_mermaid_as_images();
-        if let Ok(document) = Document::parse_with_all_options(
+        if let Ok(document) = Document::parse_with_all_options_and_failures(
             self.document.source(),
             width,
             &self.image_layout_heights,
             mermaid,
+            &self.failed_mermaid_srcs,
+        ) {
+            self.document = document;
+            self.viewport.set_total_lines(self.document.line_count());
+            self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
+            let allow_short = self.search_allow_short;
+            refresh_search_matches(self, false, allow_short);
+            self.clamp_selection();
+        }
+    }
+
+    /// Re-parse the current document from its stored source.
+    ///
+    /// Used after updating `failed_mermaid_srcs` so that mermaid blocks that
+    /// failed to render fall back to code block display.
+    fn reparse_current_document(&mut self) {
+        let width = self.layout_width();
+        let mermaid = self.should_render_mermaid_as_images();
+        if let Ok(document) = Document::parse_with_all_options_and_failures(
+            self.document.source(),
+            width,
+            &self.image_layout_heights,
+            mermaid,
+            &self.failed_mermaid_srcs,
         ) {
             self.document = document;
             self.viewport.set_total_lines(self.document.line_count());
@@ -590,11 +629,12 @@ impl Model {
         // prepare_content wrapped in code fences (code/csv/image).
         // Everything else is plain text — render verbatim.
         if is_md || was_wrapped {
-            Document::parse_with_all_options(
+            Document::parse_with_all_options_and_failures(
                 &content,
                 self.layout_width(),
                 &self.image_layout_heights,
                 self.should_render_mermaid_as_images(),
+                &self.failed_mermaid_srcs,
             )
         } else {
             Ok(Document::from_plain_text(&content))
@@ -915,6 +955,7 @@ impl Default for Model {
             exit_confirmed: false,
             external_editor: None,
             needs_full_redraw: false,
+            failed_mermaid_srcs: HashSet::new(),
         }
     }
 }

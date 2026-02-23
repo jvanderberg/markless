@@ -3,6 +3,7 @@
 //! Renders mermaid diagram source text to raster images using `mermaid-rs-renderer`
 //! for SVG generation and `resvg` for rasterization.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -18,7 +19,10 @@ use resvg::usvg::fontdb;
 ///
 /// Returns an error if the mermaid source cannot be parsed.
 pub fn render_to_svg(mermaid_source: &str) -> Result<String> {
-    let svg = crate::mermaid_renderer::render(mermaid_source)?;
+    let svg = catch_unwind(AssertUnwindSafe(|| {
+        mermaid_rs_renderer::render(mermaid_source)
+    }))
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("mermaid-rs-renderer panicked")))?;
     Ok(fix_svg_font_families(&svg))
 }
 
@@ -153,6 +157,13 @@ mod tests {
         let svg = render_to_svg(source).unwrap();
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
+    fn test_render_to_svg_does_not_panic_for_invalid_input() {
+        // Invalid mermaid source should not panic (catch_unwind protects us).
+        // The library may return Ok with a best-effort SVG or Err; either is fine.
+        let _result = render_to_svg("this is not valid mermaid at all }{}{}{");
     }
 
     #[test]

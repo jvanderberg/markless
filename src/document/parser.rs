@@ -1,6 +1,6 @@
 //! Markdown parsing with comrak.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use anyhow::Result;
@@ -60,7 +60,13 @@ impl Document {
     /// # Errors
     /// Returns an error if markdown parsing fails.
     pub fn parse_with_mermaid_images(source: &str, width: u16) -> Result<Self> {
-        Ok(parse_with_all_options(source, width, &HashMap::new(), true))
+        Ok(parse_with_all_options(
+            source,
+            width,
+            &HashMap::new(),
+            true,
+            &HashSet::new(),
+        ))
     }
 
     /// Parse with all options: layout width, image heights, and mermaid-as-images flag.
@@ -73,11 +79,35 @@ impl Document {
         image_heights: &HashMap<String, usize>,
         mermaid_as_images: bool,
     ) -> Result<Self> {
+        Self::parse_with_all_options_and_failures(
+            source,
+            width,
+            image_heights,
+            mermaid_as_images,
+            &HashSet::new(),
+        )
+    }
+
+    /// Parse with all options plus a set of mermaid sources that failed to render.
+    ///
+    /// Sources in `failed_mermaid_srcs` will be rendered as code blocks even
+    /// when `mermaid_as_images` is true.
+    ///
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
+    pub fn parse_with_all_options_and_failures(
+        source: &str,
+        width: u16,
+        image_heights: &HashMap<String, usize>,
+        mermaid_as_images: bool,
+        failed_mermaid_srcs: &HashSet<String>,
+    ) -> Result<Self> {
         Ok(parse_with_all_options(
             source,
             width,
             image_heights,
             mermaid_as_images,
+            failed_mermaid_srcs,
         ))
     }
 }
@@ -110,7 +140,13 @@ pub fn parse_with_layout<S: BuildHasher>(
     width: u16,
     image_heights: &HashMap<String, usize, S>,
 ) -> Result<Document> {
-    Ok(parse_with_all_options(source, width, image_heights, false))
+    Ok(parse_with_all_options(
+        source,
+        width,
+        image_heights,
+        false,
+        &HashSet::new(),
+    ))
 }
 
 /// Parse markdown with all options including mermaid-as-images flag.
@@ -119,6 +155,7 @@ fn parse_with_all_options<S: BuildHasher>(
     width: u16,
     image_heights: &HashMap<String, usize, S>,
     mermaid_as_images: bool,
+    failed_mermaid_srcs: &HashSet<String>,
 ) -> Document {
     let arena = Arena::new();
     let options = create_options();
@@ -136,6 +173,7 @@ fn parse_with_all_options<S: BuildHasher>(
         image_heights,
         wrap_width,
         mermaid_as_images,
+        failed_mermaid_srcs,
     };
     process_node(root, &mut ctx, 0, None);
 
@@ -184,6 +222,7 @@ struct ParseContext<'h, S: BuildHasher = std::collections::hash_map::RandomState
     image_heights: &'h HashMap<String, usize, S>,
     wrap_width: usize,
     mermaid_as_images: bool,
+    failed_mermaid_srcs: &'h HashSet<String>,
 }
 
 fn process_node<'a, S: BuildHasher>(
@@ -301,11 +340,13 @@ fn process_node<'a, S: BuildHasher>(
 
             // Store mermaid diagram sources for optional image rendering.
             if language == Some("mermaid") {
+                let trimmed_source = literal.trim_end().to_string();
                 let key = format!("mermaid://{}", ctx.mermaid_sources.len());
                 ctx.mermaid_sources
-                    .insert(key.clone(), literal.trim_end().to_string());
+                    .insert(key.clone(), trimmed_source.clone());
 
-                if ctx.mermaid_as_images {
+                let source_failed = ctx.failed_mermaid_srcs.contains(&trimmed_source);
+                if ctx.mermaid_as_images && !source_failed {
                     // Emit as an image placeholder instead of a code block.
                     let height_lines = ctx.image_heights.get(&key).copied().unwrap_or(1).max(1);
                     let has_caption = ctx.image_heights.contains_key(&key);
@@ -2660,6 +2701,36 @@ mod tests {
                 .iter()
                 .any(|l| l.content().contains("[Image: mermaid diagram]"))
         );
+    }
+
+    #[test]
+    fn test_mermaid_block_falls_back_to_code_when_in_failed_set() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let mermaid_source = "graph TD\n    A --> B";
+        let mut failed = HashSet::new();
+        failed.insert(mermaid_source.to_string());
+        let doc =
+            Document::parse_with_all_options_and_failures(md, 80, &HashMap::new(), true, &failed)
+                .unwrap();
+        // Should NOT have an image placeholder
+        assert!(doc.images().is_empty());
+        // Should render as code block lines
+        let lines = doc.visible_lines(0, 20);
+        assert!(lines.iter().any(|l| *l.line_type() == LineType::CodeBlock));
+        // Should still store the mermaid source
+        assert_eq!(doc.mermaid_sources().len(), 1);
+    }
+
+    #[test]
+    fn test_mermaid_block_renders_as_image_when_not_in_failed_set() {
+        let md = "```mermaid\ngraph TD\n    A --> B\n```";
+        let failed = HashSet::new(); // empty set
+        let doc =
+            Document::parse_with_all_options_and_failures(md, 80, &HashMap::new(), true, &failed)
+                .unwrap();
+        // Should have an image placeholder
+        assert_eq!(doc.images().len(), 1);
+        assert!(doc.images()[0].src.starts_with("mermaid://"));
     }
 
     #[test]
