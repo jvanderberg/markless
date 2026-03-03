@@ -162,6 +162,8 @@ pub struct Model {
     pub failed_mermaid_srcs: HashSet<String>,
     /// Math source texts that failed to render; these fall back to text blocks.
     pub failed_math_srcs: HashSet<String>,
+    /// Disable inline (Unicode) math, rendering as images instead.
+    pub no_inline_math: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -237,6 +239,7 @@ impl Model {
             needs_full_redraw: false,
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
+            no_inline_math: false,
         }
     }
 
@@ -568,10 +571,13 @@ impl Model {
             self.document.source(),
             width,
             &self.image_layout_heights,
-            mermaid,
-            &self.failed_mermaid_srcs,
-            math,
-            &self.failed_math_srcs,
+            &crate::document::DiagramRenderOpts {
+                mermaid_as_images: mermaid,
+                failed_mermaid_srcs: &self.failed_mermaid_srcs,
+                math_as_images: math,
+                failed_math_srcs: &self.failed_math_srcs,
+                no_inline_math: self.no_inline_math,
+            },
         ) {
             self.document = document;
             self.viewport.set_total_lines(self.document.line_count());
@@ -658,10 +664,13 @@ impl Model {
                 &content,
                 self.layout_width(),
                 &self.image_layout_heights,
-                self.should_render_mermaid_as_images(),
-                &self.failed_mermaid_srcs,
-                self.should_render_mermaid_as_images(),
-                &self.failed_math_srcs,
+                &crate::document::DiagramRenderOpts {
+                    mermaid_as_images: self.should_render_mermaid_as_images(),
+                    failed_mermaid_srcs: &self.failed_mermaid_srcs,
+                    math_as_images: self.should_render_mermaid_as_images(),
+                    failed_math_srcs: &self.failed_math_srcs,
+                    no_inline_math: self.no_inline_math,
+                },
             )
         } else {
             Ok(Document::from_plain_text(&content))
@@ -1010,6 +1019,7 @@ impl Default for Model {
             needs_full_redraw: false,
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
+            no_inline_math: false,
         }
     }
 }

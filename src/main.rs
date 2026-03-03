@@ -82,6 +82,10 @@ struct Cli {
     #[arg(long, conflicts_with = "editor")]
     no_editor: bool,
 
+    /// Disable inline (Unicode) math, rendering as images instead
+    #[arg(long)]
+    no_inline_math: bool,
+
     /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
     save: bool,
@@ -341,6 +345,7 @@ fn main() -> Result<()> {
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
         .with_wrap_width(effective.wrap_width)
+        .with_no_inline_math(effective.no_inline_math)
         .with_editor(editor)
         .with_config_paths(
             Some(global_path),

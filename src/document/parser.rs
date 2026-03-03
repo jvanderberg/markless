@@ -13,6 +13,34 @@ use super::types::{
     ParsedDocument, RenderedLine,
 };
 
+/// Options controlling how diagrams and math expressions are rendered.
+pub struct DiagramRenderOpts<'a> {
+    /// Render mermaid code blocks as image placeholders.
+    pub mermaid_as_images: bool,
+    /// Mermaid sources that failed to render (fall back to code blocks).
+    pub failed_mermaid_srcs: &'a HashSet<String>,
+    /// Render display math as image placeholders.
+    pub math_as_images: bool,
+    /// Math sources that failed to render (fall back to text blocks).
+    pub failed_math_srcs: &'a HashSet<String>,
+    /// Disable inline (Unicode) math, rendering as images instead.
+    pub no_inline_math: bool,
+}
+
+impl Default for DiagramRenderOpts<'_> {
+    fn default() -> Self {
+        Self {
+            mermaid_as_images: false,
+            failed_mermaid_srcs: EMPTY_HASH_SET.get_or_init(HashSet::new),
+            math_as_images: false,
+            failed_math_srcs: EMPTY_HASH_SET.get_or_init(HashSet::new),
+            no_inline_math: false,
+        }
+    }
+}
+
+static EMPTY_HASH_SET: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+
 /// Parse markdown source into a Document.
 ///
 /// # Example
@@ -60,15 +88,16 @@ impl Document {
     /// # Errors
     /// Returns an error if markdown parsing fails.
     pub fn parse_with_mermaid_images(source: &str, width: u16) -> Result<Self> {
-        Ok(parse_with_all_options(
+        Self::parse_with_all_options_and_failures(
             source,
             width,
             &HashMap::new(),
-            true,
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
-        ))
+            &DiagramRenderOpts {
+                mermaid_as_images: true,
+                math_as_images: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
     }
 
     /// Parse with all options: layout width, image heights, and mermaid-as-images flag.
@@ -85,10 +114,11 @@ impl Document {
             source,
             width,
             image_heights,
-            mermaid_as_images,
-            &HashSet::new(),
-            mermaid_as_images, // math_as_images mirrors mermaid_as_images
-            &HashSet::new(),
+            &DiagramRenderOpts {
+                mermaid_as_images,
+                math_as_images: mermaid_as_images, // mirrors mermaid
+                ..DiagramRenderOpts::default()
+            },
         )
     }
 
@@ -103,19 +133,13 @@ impl Document {
         source: &str,
         width: u16,
         image_heights: &HashMap<String, usize>,
-        mermaid_as_images: bool,
-        failed_mermaid_srcs: &HashSet<String>,
-        math_as_images: bool,
-        failed_math_srcs: &HashSet<String>,
+        diagram_opts: &DiagramRenderOpts<'_>,
     ) -> Result<Self> {
         Ok(parse_with_all_options(
             source,
             width,
             image_heights,
-            mermaid_as_images,
-            failed_mermaid_srcs,
-            math_as_images,
-            failed_math_srcs,
+            diagram_opts,
         ))
     }
 }
@@ -148,26 +172,30 @@ pub fn parse_with_layout<S: BuildHasher>(
     width: u16,
     image_heights: &HashMap<String, usize, S>,
 ) -> Result<Document> {
-    Ok(parse_with_all_options(
+    Ok(parse_with_all_options_internal(
         source,
         width,
         image_heights,
-        false,
-        &HashSet::new(),
-        false,
-        &HashSet::new(),
+        &DiagramRenderOpts::default(),
     ))
 }
 
 /// Parse markdown with all options including mermaid/math-as-images flags.
-fn parse_with_all_options<S: BuildHasher>(
+fn parse_with_all_options(
+    source: &str,
+    width: u16,
+    image_heights: &HashMap<String, usize>,
+    opts: &DiagramRenderOpts<'_>,
+) -> Document {
+    parse_with_all_options_internal(source, width, image_heights, opts)
+}
+
+/// Internal parse implementation that accepts any `BuildHasher` for image heights.
+fn parse_with_all_options_internal<S: BuildHasher>(
     source: &str,
     width: u16,
     image_heights: &HashMap<String, usize, S>,
-    mermaid_as_images: bool,
-    failed_mermaid_srcs: &HashSet<String>,
-    math_as_images: bool,
-    failed_math_srcs: &HashSet<String>,
+    opts: &DiagramRenderOpts<'_>,
 ) -> Document {
     let arena = Arena::new();
     let options = create_options();
@@ -185,10 +213,11 @@ fn parse_with_all_options<S: BuildHasher>(
         math_sources: HashMap::new(),
         image_heights,
         wrap_width,
-        mermaid_as_images,
-        failed_mermaid_srcs,
-        math_as_images,
-        failed_math_srcs,
+        mermaid_as_images: opts.mermaid_as_images,
+        failed_mermaid_srcs: opts.failed_mermaid_srcs,
+        math_as_images: opts.math_as_images,
+        failed_math_srcs: opts.failed_math_srcs,
+        no_inline_math: opts.no_inline_math,
     };
     process_node(root, &mut ctx, 0, None);
 
@@ -246,6 +275,7 @@ struct ParseContext<'h, S: BuildHasher = std::collections::hash_map::RandomState
     failed_mermaid_srcs: &'h HashSet<String>,
     math_as_images: bool,
     failed_math_srcs: &'h HashSet<String>,
+    no_inline_math: bool,
 }
 
 fn process_node<'a, S: BuildHasher>(
@@ -351,31 +381,37 @@ fn process_node<'a, S: BuildHasher>(
             let child_images = collect_paragraph_images(node);
 
             if child_images.is_empty() {
-                // Regular paragraph text with inline styling and wrapping
-                let spans = collect_inline_spans(node);
-                // Collect links with a placeholder line number (will be fixed up after wrapping)
-                let link_start = ctx.link_refs.len();
-                collect_inline_elements(node, 0, &mut ctx.images, &mut ctx.link_refs);
+                // When no_inline_math is enabled, split paragraph at
+                // inline math boundaries so each $...$ gets its own image.
+                if ctx.no_inline_math && ctx.math_as_images && has_inline_math(node) {
+                    emit_paragraph_with_no_inline_math(node, ctx, "", "");
+                } else {
+                    // Regular paragraph text with inline styling and wrapping
+                    let spans = collect_inline_spans(node);
+                    // Collect links with a placeholder line number (will be fixed up after wrapping)
+                    let link_start = ctx.link_refs.len();
+                    collect_inline_elements(node, 0, &mut ctx.images, &mut ctx.link_refs);
 
-                let base_line = ctx.lines.len();
-                let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
-                for line_spans in wrapped {
-                    let content = spans_to_string(&line_spans);
-                    ctx.lines.push(RenderedLine::with_spans(
-                        content,
-                        LineType::Paragraph,
-                        line_spans,
-                    ));
+                    let base_line = ctx.lines.len();
+                    let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
+                    for line_spans in wrapped {
+                        let content = spans_to_string(&line_spans);
+                        ctx.lines.push(RenderedLine::with_spans(
+                            content,
+                            LineType::Paragraph,
+                            line_spans,
+                        ));
+                    }
+
+                    // Fix up link line numbers: find which wrapped line contains each link's text
+                    let extra = fixup_link_lines(
+                        &mut ctx.link_refs[link_start..],
+                        &ctx.lines[base_line..],
+                        base_line,
+                        0,
+                    );
+                    ctx.link_refs.extend(extra);
                 }
-
-                // Fix up link line numbers: find which wrapped line contains each link's text
-                let extra = fixup_link_lines(
-                    &mut ctx.link_refs[link_start..],
-                    &ctx.lines[base_line..],
-                    base_line,
-                    0,
-                );
-                ctx.link_refs.extend(extra);
             } else {
                 for (alt, src) in child_images {
                     let height_lines = ctx.image_heights.get(&src).copied().unwrap_or(1).max(1);
@@ -709,32 +745,36 @@ fn process_node<'a, S: BuildHasher>(
                             ctx.lines
                                 .push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
                         }
-                        let spans = collect_inline_spans(child);
-                        let link_start = ctx.link_refs.len();
-                        collect_inline_elements(child, 0, &mut ctx.images, &mut ctx.link_refs);
                         let prefix = if rendered_any {
                             &prefix_next
                         } else {
                             &prefix_first
                         };
-                        let base_line = ctx.lines.len();
-                        let wrapped = wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
+                        if ctx.no_inline_math && ctx.math_as_images && has_inline_math(child) {
+                            emit_paragraph_with_no_inline_math(child, ctx, prefix, &prefix_next);
+                        } else {
+                            let spans = collect_inline_spans(child);
+                            let link_start = ctx.link_refs.len();
+                            collect_inline_elements(child, 0, &mut ctx.images, &mut ctx.link_refs);
+                            let base_line = ctx.lines.len();
+                            let wrapped = wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
 
-                        for line_spans in wrapped {
-                            let content = spans_to_string(&line_spans);
-                            ctx.lines.push(RenderedLine::with_spans(
-                                content,
-                                LineType::ListItem(depth),
-                                line_spans,
-                            ));
+                            for line_spans in wrapped {
+                                let content = spans_to_string(&line_spans);
+                                ctx.lines.push(RenderedLine::with_spans(
+                                    content,
+                                    LineType::ListItem(depth),
+                                    line_spans,
+                                ));
+                            }
+                            let extra = fixup_link_lines(
+                                &mut ctx.link_refs[link_start..],
+                                &ctx.lines[base_line..],
+                                base_line,
+                                prefix_next.len(),
+                            );
+                            ctx.link_refs.extend(extra);
                         }
-                        let extra = fixup_link_lines(
-                            &mut ctx.link_refs[link_start..],
-                            &ctx.lines[base_line..],
-                            base_line,
-                            prefix_next.len(),
-                        );
-                        ctx.link_refs.extend(extra);
                         rendered_any = true;
                         rendered_paragraphs += 1;
                     }
@@ -986,6 +1026,119 @@ fn emit_math_image_placeholder<S: BuildHasher>(literal: &str, ctx: &mut ParseCon
         src: key,
         line_range: start_line..end_line,
     });
+}
+
+/// Check if a paragraph node contains any non-display inline math ($...$).
+fn has_inline_math<'a>(node: &'a AstNode<'a>) -> bool {
+    for child in node.children() {
+        let data = child.data.borrow();
+        if matches!(&data.value, NodeValue::Math(m) if !m.display_math) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Emit a paragraph, splitting at inline math boundaries so each `$...$`
+/// becomes its own image placeholder line.
+fn emit_paragraph_with_no_inline_math<'a, S: BuildHasher>(
+    node: &'a AstNode<'a>,
+    ctx: &mut ParseContext<'_, S>,
+    prefix_first: &str,
+    prefix_next: &str,
+) {
+    let line_type = if prefix_first.is_empty() {
+        LineType::Paragraph
+    } else {
+        // Infer depth from prefix indentation
+        let indent_chars = prefix_first.len() - prefix_first.trim_start().len();
+        let depth = (indent_chars / 2) + 1;
+        LineType::ListItem(depth)
+    };
+
+    let mut pending_spans: Vec<InlineSpan> = Vec::new();
+    let mut is_first_chunk = true;
+
+    for child in node.children() {
+        let data = child.data.borrow();
+        let math_literal = match &data.value {
+            NodeValue::Math(m) if !m.display_math => Some(m.literal.clone()),
+            _ => None,
+        };
+        drop(data);
+
+        if let Some(literal) = math_literal {
+            // Flush accumulated text spans as paragraph/list-item lines
+            flush_inline_spans(
+                &pending_spans,
+                ctx,
+                line_type,
+                is_first_chunk,
+                prefix_first,
+                prefix_next,
+            );
+            pending_spans.clear();
+            is_first_chunk = false;
+
+            // Emit this inline math as an image placeholder
+            if ctx.failed_math_srcs.contains(&literal) {
+                // Fallback: render as inline Unicode text
+                let text = crate::math::latex_to_unicode(&literal);
+                let math_style = InlineStyle {
+                    math: true,
+                    ..InlineStyle::default()
+                };
+                pending_spans.push(InlineSpan::new(text, math_style));
+            } else {
+                emit_math_image_placeholder(&literal, ctx);
+            }
+        } else {
+            // Accumulate non-math spans
+            collect_inline_spans_recursive(child, InlineStyle::default(), &mut pending_spans);
+        }
+    }
+
+    // Flush remaining text spans
+    flush_inline_spans(
+        &pending_spans,
+        ctx,
+        line_type,
+        is_first_chunk,
+        prefix_first,
+        prefix_next,
+    );
+}
+
+/// Flush accumulated inline spans as wrapped paragraph or list-item lines.
+fn flush_inline_spans<S: BuildHasher>(
+    spans: &[InlineSpan],
+    ctx: &mut ParseContext<'_, S>,
+    line_type: LineType,
+    is_first: bool,
+    prefix_first: &str,
+    prefix_next: &str,
+) {
+    if spans.is_empty() {
+        return;
+    }
+    // Drop leading/trailing whitespace-only spans
+    let mut trimmed: Vec<InlineSpan> = spans.to_vec();
+    while trimmed.last().is_some_and(|s| s.text().trim().is_empty()) {
+        trimmed.pop();
+    }
+    while trimmed.first().is_some_and(|s| s.text().trim().is_empty()) {
+        trimmed.remove(0);
+    }
+    if trimmed.is_empty() {
+        return;
+    }
+    let prefix = if is_first { prefix_first } else { prefix_next };
+    let wrapped = wrap_spans(&trimmed, ctx.wrap_width, prefix, prefix_next);
+    for line_spans in wrapped {
+        let content = spans_to_string(&line_spans);
+        ctx.lines
+            .push(RenderedLine::with_spans(content, line_type, line_spans));
+    }
 }
 
 fn ensure_trailing_empty_lines(lines: &mut Vec<RenderedLine>, count: usize) {
@@ -2982,10 +3135,11 @@ mod tests {
             md,
             80,
             &HashMap::new(),
-            true,
-            &failed,
-            false,
-            &HashSet::new(),
+            &DiagramRenderOpts {
+                mermaid_as_images: true,
+                failed_mermaid_srcs: &failed,
+                ..DiagramRenderOpts::default()
+            },
         )
         .unwrap();
         // Should NOT have an image placeholder
@@ -3005,10 +3159,11 @@ mod tests {
             md,
             80,
             &HashMap::new(),
-            true,
-            &failed,
-            false,
-            &HashSet::new(),
+            &DiagramRenderOpts {
+                mermaid_as_images: true,
+                failed_mermaid_srcs: &failed,
+                ..DiagramRenderOpts::default()
+            },
         )
         .unwrap();
         // Should have an image placeholder
@@ -3539,10 +3694,10 @@ mod tests {
             md,
             80,
             &HashMap::new(),
-            false,
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                ..DiagramRenderOpts::default()
+            },
         )
         .unwrap();
         assert!(
@@ -3571,10 +3726,10 @@ mod tests {
             md,
             80,
             &HashMap::new(),
-            false,
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                ..DiagramRenderOpts::default()
+            },
         )
         .unwrap();
         assert!(
@@ -3631,10 +3786,10 @@ mod tests {
             md,
             80,
             &HashMap::new(),
-            false,
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                ..DiagramRenderOpts::default()
+            },
         )
         .unwrap();
         assert!(
@@ -3652,10 +3807,11 @@ mod tests {
             md,
             80,
             &HashMap::new(),
-            false,
-            &HashSet::new(),
-            true,
-            &failed,
+            &DiagramRenderOpts {
+                math_as_images: true,
+                failed_math_srcs: &failed,
+                ..DiagramRenderOpts::default()
+            },
         )
         .unwrap();
         // Should NOT have an image placeholder since source is in failed set
@@ -3670,5 +3826,112 @@ mod tests {
             has_math_line,
             "failed math should fall through to text block"
         );
+    }
+
+    #[test]
+    fn test_inline_math_as_image_splits_paragraph() {
+        // Paragraph with inline math should split into text + image + text
+        let md = "Before $x^2$ after.";
+        let doc = Document::parse_with_all_options_and_failures(
+            md,
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                no_inline_math: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        // Should have an image placeholder for the inline math
+        assert!(
+            !doc.images().is_empty(),
+            "inline math with no_inline_math=true should produce ImageRef"
+        );
+        assert!(doc.images()[0].src.starts_with("math://"));
+        // Should have paragraph lines for text before and after the math
+        let lines = doc.visible_lines(0, 20);
+        let para_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::Paragraph)
+            .collect();
+        assert!(
+            para_lines.len() >= 2,
+            "should have paragraph lines for text before and after math, got {}",
+            para_lines.len()
+        );
+    }
+
+    #[test]
+    fn test_inline_math_as_image_disabled_uses_unicode() {
+        // With no_inline_math=false, inline math should remain as Unicode text
+        let md = r"The value $\alpha$ is greek.";
+        let doc = Document::parse_with_all_options_and_failures(
+            md,
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        // Should NOT have any image placeholders
+        assert!(
+            doc.images().is_empty(),
+            "inline math with no_inline_math=false should not produce ImageRef"
+        );
+        // Should have inline Unicode text
+        let lines = doc.visible_lines(0, 20);
+        let text: String = lines.iter().map(|l| l.content().to_string()).collect();
+        assert!(
+            text.contains('α'),
+            "inline math should be Unicode text when no_inline_math=false, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_inline_math_as_image_in_list() {
+        let md = "- Item with $x^2$ math";
+        let doc = Document::parse_with_all_options_and_failures(
+            md,
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                no_inline_math: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !doc.images().is_empty(),
+            "inline math in list item with no_inline_math=true should produce ImageRef"
+        );
+        assert!(doc.images()[0].src.starts_with("math://"));
+    }
+
+    #[test]
+    fn test_inline_math_multiple_in_paragraph() {
+        let md = "First $a$ then $b$ last.";
+        let doc = Document::parse_with_all_options_and_failures(
+            md,
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                no_inline_math: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            doc.images().len(),
+            2,
+            "two inline math expressions should produce two ImageRefs, got {}",
+            doc.images().len()
+        );
+        assert!(doc.images()[0].src.starts_with("math://"));
+        assert!(doc.images()[1].src.starts_with("math://"));
     }
 }

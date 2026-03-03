@@ -31,6 +31,7 @@ pub struct App {
     browse_mode: bool,
     wrap_width: Option<u16>,
     editor: Option<String>,
+    no_inline_math: bool,
 }
 
 impl App {
@@ -47,6 +48,7 @@ impl App {
             browse_mode: false,
             wrap_width: None,
             editor: None,
+            no_inline_math: false,
         }
     }
 
@@ -89,6 +91,13 @@ impl App {
     #[must_use]
     pub const fn with_wrap_width(mut self, width: Option<u16>) -> Self {
         self.wrap_width = width;
+        self
+    }
+
+    /// Disable inline (Unicode) math, rendering as images instead.
+    #[must_use]
+    pub const fn with_no_inline_math(mut self, enabled: bool) -> Self {
+        self.no_inline_math = enabled;
         self
     }
 
