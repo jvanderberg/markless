@@ -29,6 +29,12 @@ image = "0.25"
 mermaid-rs-renderer = { version = "0.2", default-features = false }
 resvg = "0.44"
 
+# Math rendering (LaTeX → Unicode / SVG → raster)
+unicodeit = "0.2"
+mitex = "0.2"
+typst = "0.14"
+typst-svg = "0.14"
+
 # Syntax highlighting
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 

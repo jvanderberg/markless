@@ -91,6 +91,15 @@ pub fn style_for_line_type(line_type: &LineType) -> Style {
             })
             .add_modifier(Modifier::ITALIC),
 
+        // Math blocks - green italic
+        LineType::Math => Style::default()
+            .fg(if light_bg {
+                Color::Indexed(22)
+            } else {
+                Color::Green
+            })
+            .add_modifier(Modifier::ITALIC),
+
         // List items, tables, paragraphs, empty lines - normal style
         LineType::ListItem(_) | LineType::Table | LineType::Paragraph | LineType::Empty => {
             Style::default()
@@ -130,6 +139,16 @@ pub fn style_for_inline(base: Style, inline: InlineStyle) -> Style {
                 Color::LightBlue
             });
         }
+    }
+    if inline.math && inline.fg.is_none() {
+        let light_bg = crate::highlight::is_light_background();
+        style = style
+            .fg(if light_bg {
+                Color::Indexed(22)
+            } else {
+                Color::Green
+            })
+            .add_modifier(Modifier::ITALIC);
     }
     if inline.code && inline.fg.is_none() {
         let light_bg = crate::highlight::is_light_background();

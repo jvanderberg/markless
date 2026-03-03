@@ -20,6 +20,8 @@ pub struct ParsedDocument {
     pub code_blocks: Vec<CodeBlockRef>,
     /// Mermaid diagram sources keyed by synthetic image src
     pub mermaid_sources: HashMap<String, String>,
+    /// Math sources keyed by synthetic image src (e.g. `math://0`)
+    pub math_sources: HashMap<String, String>,
 }
 
 /// Backing store for lazy hex dump rendering.
@@ -52,6 +54,8 @@ pub struct Document {
     code_blocks: Vec<CodeBlockRef>,
     /// Mermaid diagram sources keyed by synthetic image src (e.g. `mermaid://0`)
     mermaid_sources: HashMap<String, String>,
+    /// Math sources keyed by synthetic image src (e.g. `math://0`)
+    math_sources: HashMap<String, String>,
     /// Optional hex data for lazy binary file rendering
     hex_data: Option<HexData>,
 }
@@ -68,6 +72,7 @@ impl Document {
             footnotes: HashMap::new(),
             code_blocks: Vec::new(),
             mermaid_sources: HashMap::new(),
+            math_sources: HashMap::new(),
             hex_data: None,
         }
     }
@@ -90,6 +95,7 @@ impl Document {
             footnotes: HashMap::new(),
             code_blocks: Vec::new(),
             mermaid_sources: HashMap::new(),
+            math_sources: HashMap::new(),
             hex_data: None,
         }
     }
@@ -105,6 +111,7 @@ impl Document {
             footnotes: result.footnotes,
             code_blocks: result.code_blocks,
             mermaid_sources: result.mermaid_sources,
+            math_sources: result.math_sources,
             hex_data: None,
         }
     }
@@ -147,6 +154,7 @@ impl Document {
             footnotes: HashMap::new(),
             code_blocks: Vec::new(),
             mermaid_sources: HashMap::new(),
+            math_sources: HashMap::new(),
             hex_data: Some(HexData {
                 bytes,
                 header_line_count,
@@ -185,6 +193,11 @@ impl Document {
     /// Get mermaid diagram sources keyed by synthetic image src.
     pub const fn mermaid_sources(&self) -> &HashMap<String, String> {
         &self.mermaid_sources
+    }
+
+    /// Get math sources keyed by synthetic image src (e.g. `math://0`).
+    pub const fn math_sources(&self) -> &HashMap<String, String> {
+        &self.math_sources
     }
 
     pub fn footnote_line(&self, name: &str) -> Option<usize> {
@@ -446,6 +459,7 @@ pub struct InlineStyle {
     pub code: bool,
     pub strikethrough: bool,
     pub link: bool,
+    pub math: bool,
     pub fg: Option<InlineColor>,
     pub bg: Option<InlineColor>,
 }
@@ -498,6 +512,8 @@ pub enum LineType {
     HorizontalRule,
     /// Image placeholder
     Image,
+    /// Math block (display math fallback)
+    Math,
     /// Empty line
     Empty,
 }
