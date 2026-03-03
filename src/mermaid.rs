@@ -19,8 +19,10 @@ use resvg::usvg::fontdb;
 ///
 /// Returns an error if the mermaid source cannot be parsed.
 pub fn render_to_svg(mermaid_source: &str) -> Result<String> {
+    let mut opts = mermaid_rs_renderer::RenderOptions::default();
+    opts.theme.font_family = "Helvetica, Arial, sans-serif".to_string();
     let svg = catch_unwind(AssertUnwindSafe(|| {
-        mermaid_rs_renderer::render(mermaid_source)
+        mermaid_rs_renderer::render_with_options(mermaid_source, opts)
     }))
     .unwrap_or_else(|_| Err(anyhow::anyhow!("mermaid-rs-renderer panicked")))?;
     Ok(fix_svg_font_families(&svg))
@@ -157,6 +159,17 @@ mod tests {
         let svg = render_to_svg(source).unwrap();
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
+    fn test_render_to_svg_uses_universal_fonts() {
+        let source = "flowchart LR\n    A[Start] --> B[End]";
+        let svg = render_to_svg(source).unwrap();
+        // Should not require Inter (not installed everywhere).
+        assert!(
+            !svg.contains("font-family=\"Inter"),
+            "SVG should not use Inter as primary font"
+        );
     }
 
     #[test]

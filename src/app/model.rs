@@ -22,14 +22,6 @@ pub(super) fn hash_bytes(bytes: &[u8]) -> u64 {
     hasher.finish()
 }
 
-/// Mermaid diagram display width as a percentage of the image target width.
-///
-/// Mermaid SVGs contain their own internal layout and render best at a
-/// narrower width than regular images (which scale to fill available space).
-/// 100 would match regular image width; 60 was chosen empirically as a
-/// good balance between readability and not overwhelming the terminal.
-const MERMAID_WIDTH_PERCENT: u32 = 60;
-
 use super::update::{closest_heading_to_line, refresh_search_matches};
 
 /// The complete application state.
@@ -340,10 +332,9 @@ impl Model {
                     if let Some(img) = self.original_images.get(&src) {
                         Some(img.clone())
                     } else if src.starts_with("mermaid://") {
-                        let mermaid_width_px = target_width_px * MERMAID_WIDTH_PERCENT / 100;
                         let mermaid_text = self.document.mermaid_sources().get(&src).cloned();
                         if let Some(mermaid_text) = mermaid_text {
-                            match crate::mermaid::render_to_image(&mermaid_text, mermaid_width_px) {
+                            match crate::mermaid::render_to_image(&mermaid_text, target_width_px) {
                                 Ok(img) => {
                                     self.original_images.insert(src.clone(), img.clone());
                                     Some(img)
