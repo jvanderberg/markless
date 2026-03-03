@@ -1609,6 +1609,49 @@ fn test_mermaid_as_images_false_when_images_disabled() {
 }
 
 #[test]
+fn test_reflow_after_picker_converts_mermaid_blocks_to_images() {
+    // Reproduces the startup ordering bug: the initial parse in run()
+    // happens before the picker is configured, so mermaid_as_images is
+    // false and mermaid blocks are plain code blocks with no ImageRefs.
+    // After attaching a graphics-capable picker, reflow_layout() must
+    // reparse with the correct flag so mermaid blocks become images.
+    let md = "# Hello\n\n```mermaid\ngraph TD\n    A --> B\n```\n";
+
+    // Parse without mermaid flag — same as prepare_document_from_bytes
+    let doc = Document::parse_with_layout(md, 80).unwrap();
+    assert!(
+        doc.images().is_empty(),
+        "initial parse without picker should have no mermaid ImageRefs"
+    );
+
+    // Build model the way run() does: document first, picker after
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    assert!(!model.should_render_mermaid_as_images());
+
+    // Attach a graphics-capable picker (Kitty protocol)
+    let mut picker = ratatui_image::picker::Picker::halfblocks();
+    picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);
+    model = model.with_picker(Some(picker));
+    assert!(model.should_render_mermaid_as_images());
+
+    // Before reflow: document still has no image refs
+    assert!(
+        model.document.images().is_empty(),
+        "before reflow, mermaid blocks should still be code blocks"
+    );
+
+    // reflow_layout reparses with mermaid_as_images=true
+    model.reflow_layout();
+
+    assert_eq!(
+        model.document.images().len(),
+        1,
+        "after reflow, mermaid block should be an ImageRef"
+    );
+    assert!(model.document.images()[0].src.starts_with("mermaid://"));
+}
+
+#[test]
 fn test_click_on_footnote_superscript_finds_link() {
     let md = "See this[^1] thing.\n\n[^1]: The footnote.";
     let doc = Document::parse_with_layout(md, 80).unwrap();
