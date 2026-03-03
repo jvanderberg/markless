@@ -112,7 +112,7 @@ pub struct Model {
     /// Stores (protocol, `width_cols`, `height_rows`)
     pub image_protocols: HashMap<String, (StatefulProtocol, u16, u16)>,
     /// Cache of original images (before scaling) for fast resize
-    original_images: HashMap<String, DynamicImage>,
+    pub(super) original_images: HashMap<String, DynamicImage>,
     /// Image picker for terminal rendering
     pub picker: Option<Picker>,
     /// Viewport width used when images were last scaled (for detecting resize)
@@ -722,11 +722,33 @@ impl Model {
         !self.link_picker_items.is_empty()
     }
 
+    /// Invalidate cached mermaid images whose source text changed between
+    /// the old and new document. Entries whose source is identical are kept.
+    pub(super) fn invalidate_changed_mermaid_caches(
+        &mut self,
+        old_sources: &HashMap<String, String>,
+        new_sources: &HashMap<String, String>,
+    ) {
+        for (key, old_text) in old_sources {
+            let changed = new_sources.get(key) != Some(old_text);
+            if changed {
+                self.original_images.remove(key);
+                self.image_protocols.remove(key);
+                self.image_layout_heights.remove(key);
+            }
+        }
+    }
+
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
+        let old_mermaid_sources = self.document.mermaid_sources().clone();
         let raw_bytes = std::fs::read(&self.file_path)?;
         let path = self.file_path.clone();
         let document = self.document_from_bytes(&path, raw_bytes)?;
         self.document = document;
+
+        // Invalidate cached mermaid images whose source text changed.
+        let new_mermaid_sources = self.document.mermaid_sources().clone();
+        self.invalidate_changed_mermaid_caches(&old_mermaid_sources, &new_mermaid_sources);
 
         // Drop cached image entries that are no longer present in the document.
         let valid_images: std::collections::HashSet<_> = self

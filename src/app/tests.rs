@@ -107,6 +107,68 @@ fn test_force_reload_reloads_document_from_disk() {
 }
 
 #[test]
+fn test_invalidate_changed_mermaid_caches_removes_changed() {
+    let v1 = "# Doc\n\n```mermaid\nflowchart LR\n    A-->B\n```\n";
+    let v2 = "# Doc\n\n```mermaid\nflowchart LR\n    X-->Y-->Z\n```\n";
+    let old_doc = Document::parse_with_mermaid_images(v1, 80).unwrap();
+    let new_doc = Document::parse_with_mermaid_images(v2, 80).unwrap();
+
+    let mut model = create_test_model();
+    let dummy_img = image::DynamicImage::new_rgba8(1, 1);
+    model
+        .original_images
+        .insert("mermaid://0".to_string(), dummy_img);
+
+    model.invalidate_changed_mermaid_caches(old_doc.mermaid_sources(), new_doc.mermaid_sources());
+
+    assert!(
+        !model.original_images.contains_key("mermaid://0"),
+        "changed mermaid diagram should have been evicted from cache"
+    );
+}
+
+#[test]
+fn test_invalidate_changed_mermaid_caches_preserves_unchanged() {
+    let content = "# Doc\n\n```mermaid\nflowchart LR\n    A-->B\n```\n";
+    let doc1 = Document::parse_with_mermaid_images(content, 80).unwrap();
+    let doc2 = Document::parse_with_mermaid_images(content, 80).unwrap();
+
+    let mut model = create_test_model();
+    let dummy_img = image::DynamicImage::new_rgba8(1, 1);
+    model
+        .original_images
+        .insert("mermaid://0".to_string(), dummy_img);
+
+    model.invalidate_changed_mermaid_caches(doc1.mermaid_sources(), doc2.mermaid_sources());
+
+    assert!(
+        model.original_images.contains_key("mermaid://0"),
+        "unchanged mermaid diagram should remain cached"
+    );
+}
+
+#[test]
+fn test_invalidate_changed_mermaid_caches_removes_deleted() {
+    let v1 = "# Doc\n\n```mermaid\nflowchart LR\n    A-->B\n```\n";
+    let v2 = "# Doc\n\nNo more mermaid.\n";
+    let old_doc = Document::parse_with_mermaid_images(v1, 80).unwrap();
+    let new_doc = Document::parse_with_mermaid_images(v2, 80).unwrap();
+
+    let mut model = create_test_model();
+    let dummy_img = image::DynamicImage::new_rgba8(1, 1);
+    model
+        .original_images
+        .insert("mermaid://0".to_string(), dummy_img);
+
+    model.invalidate_changed_mermaid_caches(old_doc.mermaid_sources(), new_doc.mermaid_sources());
+
+    assert!(
+        !model.original_images.contains_key("mermaid://0"),
+        "deleted mermaid diagram should have been evicted from cache"
+    );
+}
+
+#[test]
 fn test_force_reload_message_triggers_reload_side_effect() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("doc.md");
