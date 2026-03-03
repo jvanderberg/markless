@@ -86,6 +86,10 @@ struct Cli {
     #[arg(long)]
     no_inline_math: bool,
 
+    /// Re-enable inline (Unicode) math (overrides saved --no-inline-math)
+    #[arg(long, conflicts_with = "no_inline_math")]
+    inline_math: bool,
+
     /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
     save: bool,
@@ -345,7 +349,7 @@ fn main() -> Result<()> {
         .with_images_enabled(!effective.no_images)
         .with_browse_mode(is_directory)
         .with_wrap_width(effective.wrap_width)
-        .with_no_inline_math(effective.no_inline_math)
+        .with_no_inline_math(effective.no_inline_math && !effective.inline_math)
         .with_editor(editor)
         .with_config_paths(
             Some(global_path),

@@ -254,7 +254,7 @@ impl Model {
     ///
     /// True only when images are enabled and the terminal supports a real
     /// graphics protocol (Kitty, Sixel, iTerm2) — not half-block fallback.
-    pub fn should_render_mermaid_as_images(&self) -> bool {
+    fn has_real_image_protocol(&self) -> bool {
         if !self.images_enabled {
             return false;
         }
@@ -262,6 +262,16 @@ impl Model {
             return false;
         };
         !matches!(picker.protocol_type(), ProtocolType::Halfblocks)
+    }
+
+    /// Whether mermaid diagrams should be rendered as images.
+    pub fn should_render_mermaid_as_images(&self) -> bool {
+        self.has_real_image_protocol()
+    }
+
+    /// Whether math blocks should be rendered as images.
+    pub fn should_render_math_as_images(&self) -> bool {
+        self.has_real_image_protocol()
     }
 
     /// Load images that are near the viewport (lazy loading with lookahead).
@@ -566,7 +576,7 @@ impl Model {
     fn reparse_document(&mut self) {
         let width = self.layout_width();
         let mermaid = self.should_render_mermaid_as_images();
-        let math = self.should_render_mermaid_as_images(); // same condition as mermaid
+        let math = self.should_render_math_as_images();
         if let Ok(document) = Document::parse_with_all_options_and_failures(
             self.document.source(),
             width,
@@ -667,7 +677,7 @@ impl Model {
                 &crate::document::DiagramRenderOpts {
                     mermaid_as_images: self.should_render_mermaid_as_images(),
                     failed_mermaid_srcs: &self.failed_mermaid_srcs,
-                    math_as_images: self.should_render_mermaid_as_images(),
+                    math_as_images: self.should_render_math_as_images(),
                     failed_math_srcs: &self.failed_math_srcs,
                     no_inline_math: self.no_inline_math,
                 },

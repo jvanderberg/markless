@@ -31,15 +31,16 @@ impl Default for DiagramRenderOpts<'_> {
     fn default() -> Self {
         Self {
             mermaid_as_images: false,
-            failed_mermaid_srcs: EMPTY_HASH_SET.get_or_init(HashSet::new),
+            failed_mermaid_srcs: &EMPTY_HASH_SET,
             math_as_images: false,
-            failed_math_srcs: EMPTY_HASH_SET.get_or_init(HashSet::new),
+            failed_math_srcs: &EMPTY_HASH_SET,
             no_inline_math: false,
         }
     }
 }
 
-static EMPTY_HASH_SET: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+static EMPTY_HASH_SET: std::sync::LazyLock<HashSet<String>> =
+    std::sync::LazyLock::new(HashSet::new);
 
 /// Parse markdown source into a Document.
 ///
@@ -323,41 +324,15 @@ fn process_node<'a, S: BuildHasher>(
             if let Some(literal) = extract_display_math_literal(node) {
                 // If the paragraph has leading text before the math,
                 // render that text first as a regular paragraph.
-                let has_leading_text = node.children().any(|c| {
-                    let d = c.data.borrow();
-                    !matches!(
-                        d.value,
-                        NodeValue::Math(_) | NodeValue::SoftBreak | NodeValue::LineBreak
-                    )
-                });
-                if has_leading_text {
-                    // Render only the non-math children as paragraph text.
-                    // collect_inline_spans already handles all child types
-                    // and will include the math node as inline text, so we
-                    // use collect_inline_spans but stop before the math.
-                    let mut spans = Vec::new();
-                    for child in node.children() {
-                        let d = child.data.borrow();
-                        if matches!(&d.value, NodeValue::Math(m) if m.display_math) {
-                            break;
-                        }
-                        drop(d);
-                        collect_inline_spans_recursive(child, InlineStyle::default(), &mut spans);
-                    }
-                    // Drop trailing whitespace spans
-                    while spans.last().is_some_and(|s| s.text().trim().is_empty()) {
-                        spans.pop();
-                    }
-                    if !spans.is_empty() {
-                        let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
-                        for line_spans in wrapped {
-                            let content = spans_to_string(&line_spans);
-                            ctx.lines.push(RenderedLine::with_spans(
-                                content,
-                                LineType::Paragraph,
-                                line_spans,
-                            ));
-                        }
+                if let Some(spans) = collect_spans_before_display_math(node) {
+                    let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
+                    for line_spans in wrapped {
+                        let content = spans_to_string(&line_spans);
+                        ctx.lines.push(RenderedLine::with_spans(
+                            content,
+                            LineType::Paragraph,
+                            line_spans,
+                        ));
                     }
                 }
 
@@ -679,48 +654,21 @@ fn process_node<'a, S: BuildHasher>(
                         // Check for display math ($$...$$) inside list paragraphs
                         if let Some(literal) = extract_display_math_literal(child) {
                             // Render any text before the math as a list item line
-                            let has_leading_text = child.children().any(|c| {
-                                let d = c.data.borrow();
-                                !matches!(
-                                    d.value,
-                                    NodeValue::Math(_)
-                                        | NodeValue::SoftBreak
-                                        | NodeValue::LineBreak
-                                )
-                            });
-                            if has_leading_text {
-                                let mut spans = Vec::new();
-                                for gc in child.children() {
-                                    let d = gc.data.borrow();
-                                    if matches!(&d.value, NodeValue::Math(m) if m.display_math) {
-                                        break;
-                                    }
-                                    drop(d);
-                                    collect_inline_spans_recursive(
-                                        gc,
-                                        InlineStyle::default(),
-                                        &mut spans,
-                                    );
-                                }
-                                while spans.last().is_some_and(|s| s.text().trim().is_empty()) {
-                                    spans.pop();
-                                }
-                                if !spans.is_empty() {
-                                    let prefix = if rendered_any {
-                                        &prefix_next
-                                    } else {
-                                        &prefix_first
-                                    };
-                                    let wrapped =
-                                        wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
-                                    for line_spans in wrapped {
-                                        let content = spans_to_string(&line_spans);
-                                        ctx.lines.push(RenderedLine::with_spans(
-                                            content,
-                                            LineType::ListItem(depth),
-                                            line_spans,
-                                        ));
-                                    }
+                            if let Some(spans) = collect_spans_before_display_math(child) {
+                                let prefix = if rendered_any {
+                                    &prefix_next
+                                } else {
+                                    &prefix_first
+                                };
+                                let wrapped =
+                                    wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
+                                for line_spans in wrapped {
+                                    let content = spans_to_string(&line_spans);
+                                    ctx.lines.push(RenderedLine::with_spans(
+                                        content,
+                                        LineType::ListItem(depth),
+                                        line_spans,
+                                    ));
                                 }
                             }
                             // Emit the display math block
@@ -941,6 +889,34 @@ fn process_node<'a, S: BuildHasher>(
 /// trailing soft/line breaks) is a display-math node.  This handles both
 /// the simple case (`$$math$$` alone) and paragraphs where text precedes
 /// the display block (e.g. after a hard line break `\`).
+/// Collect inline spans from children that precede a display math block.
+///
+/// Returns `None` if there is no non-whitespace text before the display math.
+fn collect_spans_before_display_math<'a>(node: &'a AstNode<'a>) -> Option<Vec<InlineSpan>> {
+    let has_leading_text = node.children().any(|c| {
+        let d = c.data.borrow();
+        !matches!(d.value, NodeValue::Math(ref m) if m.display_math)
+            && !matches!(d.value, NodeValue::SoftBreak | NodeValue::LineBreak)
+    });
+    if !has_leading_text {
+        return None;
+    }
+    let mut spans = Vec::new();
+    for child in node.children() {
+        let d = child.data.borrow();
+        if matches!(&d.value, NodeValue::Math(m) if m.display_math) {
+            break;
+        }
+        drop(d);
+        collect_inline_spans_recursive(child, InlineStyle::default(), &mut spans);
+    }
+    // Drop trailing whitespace spans
+    while spans.last().is_some_and(|s| s.text().trim().is_empty()) {
+        spans.pop();
+    }
+    if spans.is_empty() { None } else { Some(spans) }
+}
+
 fn extract_display_math_literal<'a>(node: &'a AstNode<'a>) -> Option<String> {
     // Collect children so we can iterate in reverse.
     let children: Vec<_> = node.children().collect();
@@ -1056,6 +1032,12 @@ fn emit_paragraph_with_no_inline_math<'a, S: BuildHasher>(
         LineType::ListItem(depth)
     };
 
+    // Collect links up-front so hyperlinks remain clickable even when
+    // the paragraph is split at inline-math boundaries.
+    let link_start = ctx.link_refs.len();
+    collect_inline_elements(node, 0, &mut ctx.images, &mut ctx.link_refs);
+    let base_line = ctx.lines.len();
+
     let mut pending_spans: Vec<InlineSpan> = Vec::new();
     let mut is_first_chunk = true;
 
@@ -1107,6 +1089,16 @@ fn emit_paragraph_with_no_inline_math<'a, S: BuildHasher>(
         prefix_first,
         prefix_next,
     );
+
+    // Fix up link line numbers to match rendered output lines.
+    let prefix_len = prefix_next.len();
+    let extra = fixup_link_lines(
+        &mut ctx.link_refs[link_start..],
+        &ctx.lines[base_line..],
+        base_line,
+        prefix_len,
+    );
+    ctx.link_refs.extend(extra);
 }
 
 /// Flush accumulated inline spans as wrapped paragraph or list-item lines.
@@ -1122,18 +1114,20 @@ fn flush_inline_spans<S: BuildHasher>(
         return;
     }
     // Drop leading/trailing whitespace-only spans
-    let mut trimmed: Vec<InlineSpan> = spans.to_vec();
-    while trimmed.last().is_some_and(|s| s.text().trim().is_empty()) {
-        trimmed.pop();
-    }
-    while trimmed.first().is_some_and(|s| s.text().trim().is_empty()) {
-        trimmed.remove(0);
-    }
+    let start = spans
+        .iter()
+        .position(|s| !s.text().trim().is_empty())
+        .unwrap_or(spans.len());
+    let end = spans
+        .iter()
+        .rposition(|s| !s.text().trim().is_empty())
+        .map_or(0, |i| i + 1);
+    let trimmed = &spans[start..end];
     if trimmed.is_empty() {
         return;
     }
     let prefix = if is_first { prefix_first } else { prefix_next };
-    let wrapped = wrap_spans(&trimmed, ctx.wrap_width, prefix, prefix_next);
+    let wrapped = wrap_spans(trimmed, ctx.wrap_width, prefix, prefix_next);
     for line_spans in wrapped {
         let content = spans_to_string(&line_spans);
         ctx.lines
@@ -3933,5 +3927,41 @@ mod tests {
         );
         assert!(doc.images()[0].src.starts_with("math://"));
         assert!(doc.images()[1].src.starts_with("math://"));
+    }
+
+    #[test]
+    fn test_inline_math_as_image_preserves_links() {
+        // Hyperlinks in paragraphs with inline math must remain clickable.
+        let md = "See [the paper](https://example.com) for proof that $x^2 > 0$.";
+        let doc = Document::parse_with_all_options_and_failures(
+            md,
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                math_as_images: true,
+                no_inline_math: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !doc.links().is_empty(),
+            "links in paragraph with inline math should be collected"
+        );
+        assert_eq!(doc.links()[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn test_inline_math_before_display_math_counts_as_leading_text() {
+        // Inline math $x$ before display math $$y$$ should be treated as
+        // leading text, not silently dropped.
+        let md = "$x$ then\n\n$$y$$";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+        let has_x = lines.iter().any(|l| l.content().contains('x'));
+        assert!(
+            has_x,
+            "inline math $x$ before display math should be visible"
+        );
     }
 }
