@@ -72,3 +72,45 @@ b_1 \\ b_2 \\ \vdots \\ b_m
 
 **The Cauchy-Schwarz Inequality**\
 $$\left( \sum_{k=1}^n a_k b_k \right)^2 \leq \left( \sum_{k=1}^n a_k^2 \right) \left( \sum_{k=1}^n b_k^2 \right)$$
+
+## Real-World Expressions (from Turso Test Statistics)
+
+Instability score (status flips):
+
+$$F_c = \sum_{i=2}^{n} \mathbf{1}[x_i \ne x_{i-1}]$$
+
+Failure recurrence count:
+
+$$N_f = \sum_{e \in E} \mathbf{1}[g(e) = f]$$
+
+Cross-test spread:
+
+$$A_f = \left| \{ c(e) : g(e) = f \} \right|$$
+
+Mean runtime:
+
+$$\mu_c = \frac{1}{n} \sum_{i=1}^{n} d_i$$
+
+Sample variance:
+
+$$s_c^2 = \frac{1}{n-1} \sum_{i=1}^{n} (d_i - \mu_c)^2$$
+
+Coefficient of variation:
+
+$$\mathrm{CV}_c = \frac{s_c}{\mu_c}$$
+
+Daily pass-rate trend by source:
+
+$$q_{t,s} = \frac{\left| \{ e \in E : d(e) = t \wedge u(e) = s \wedge \sigma(e) = \mathrm{PASSED} \} \right|}{\left| \{ e \in E : d(e) = t \wedge u(e) = s \} \right|}$$
+
+Run-level pass rate:
+
+$$q_r = \frac{\left| \{ e \in E : \rho(e) = r \wedge \sigma(e) = \mathrm{PASSED} \} \right|}{\left| \{ e \in E : \rho(e) = r \} \right|}$$
+
+Failure cohort:
+
+$$\mathcal{F} = \{ e \in E : \mathrm{status}(e) = \texttt{FAILED} \}$$
+
+Failure association rate:
+
+$$P(z \mid \mathcal{F}) \approx \frac{\left| \{ e \in \mathcal{F} : z \text{ is attached to } e \} \right|}{|\mathcal{F}|}$$
