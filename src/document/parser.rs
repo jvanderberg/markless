@@ -287,8 +287,50 @@ fn process_node<'a, S: BuildHasher>(
         }
 
         NodeValue::Paragraph => {
-            // Check if paragraph contains only display math ($$...$$)
+            // Check if paragraph ends with display math ($$...$$).
+            // This handles both standalone display math and paragraphs where
+            // text precedes the $$ block (e.g. after a hard line break `\`).
             if let Some(literal) = extract_display_math_literal(node) {
+                // If the paragraph has leading text before the math,
+                // render that text first as a regular paragraph.
+                let has_leading_text = node.children().any(|c| {
+                    let d = c.data.borrow();
+                    !matches!(
+                        d.value,
+                        NodeValue::Math(_) | NodeValue::SoftBreak | NodeValue::LineBreak
+                    )
+                });
+                if has_leading_text {
+                    // Render only the non-math children as paragraph text.
+                    // collect_inline_spans already handles all child types
+                    // and will include the math node as inline text, so we
+                    // use collect_inline_spans but stop before the math.
+                    let mut spans = Vec::new();
+                    for child in node.children() {
+                        let d = child.data.borrow();
+                        if matches!(&d.value, NodeValue::Math(m) if m.display_math) {
+                            break;
+                        }
+                        drop(d);
+                        collect_inline_spans_recursive(child, InlineStyle::default(), &mut spans);
+                    }
+                    // Drop trailing whitespace spans
+                    while spans.last().is_some_and(|s| s.text().trim().is_empty()) {
+                        spans.pop();
+                    }
+                    if !spans.is_empty() {
+                        let wrapped = wrap_spans(&spans, ctx.wrap_width, "", "");
+                        for line_spans in wrapped {
+                            let content = spans_to_string(&line_spans);
+                            ctx.lines.push(RenderedLine::with_spans(
+                                content,
+                                LineType::Paragraph,
+                                line_spans,
+                            ));
+                        }
+                    }
+                }
+
                 let source_failed = ctx.failed_math_srcs.contains(&literal);
                 if ctx.math_as_images && !source_failed {
                     emit_math_image_placeholder(&literal, ctx);
@@ -598,6 +640,71 @@ fn process_node<'a, S: BuildHasher>(
             for child in node.children() {
                 match &child.data.borrow().value {
                     NodeValue::Paragraph | NodeValue::TaskItem(_) => {
+                        // Check for display math ($$...$$) inside list paragraphs
+                        if let Some(literal) = extract_display_math_literal(child) {
+                            // Render any text before the math as a list item line
+                            let has_leading_text = child.children().any(|c| {
+                                let d = c.data.borrow();
+                                !matches!(
+                                    d.value,
+                                    NodeValue::Math(_)
+                                        | NodeValue::SoftBreak
+                                        | NodeValue::LineBreak
+                                )
+                            });
+                            if has_leading_text {
+                                let mut spans = Vec::new();
+                                for gc in child.children() {
+                                    let d = gc.data.borrow();
+                                    if matches!(&d.value, NodeValue::Math(m) if m.display_math) {
+                                        break;
+                                    }
+                                    drop(d);
+                                    collect_inline_spans_recursive(
+                                        gc,
+                                        InlineStyle::default(),
+                                        &mut spans,
+                                    );
+                                }
+                                while spans.last().is_some_and(|s| s.text().trim().is_empty()) {
+                                    spans.pop();
+                                }
+                                if !spans.is_empty() {
+                                    let prefix = if rendered_any {
+                                        &prefix_next
+                                    } else {
+                                        &prefix_first
+                                    };
+                                    let wrapped =
+                                        wrap_spans(&spans, ctx.wrap_width, prefix, &prefix_next);
+                                    for line_spans in wrapped {
+                                        let content = spans_to_string(&line_spans);
+                                        ctx.lines.push(RenderedLine::with_spans(
+                                            content,
+                                            LineType::ListItem(depth),
+                                            line_spans,
+                                        ));
+                                    }
+                                }
+                            }
+                            // Emit the display math block
+                            let source_failed = ctx.failed_math_srcs.contains(&literal);
+                            if ctx.math_as_images && !source_failed {
+                                emit_math_image_placeholder(&literal, ctx);
+                            } else {
+                                emit_math_text_block(&literal, ctx);
+                            }
+                            if !ctx.math_sources.values().any(|v| v == literal.trim_end()) {
+                                let key = format!("math://{}", ctx.math_sources.len());
+                                ctx.math_sources.insert(key, literal.trim_end().to_string());
+                            }
+                            ctx.lines
+                                .push(RenderedLine::new(String::new(), LineType::Empty));
+                            rendered_any = true;
+                            rendered_paragraphs += 1;
+                            continue;
+                        }
+
                         if rendered_paragraphs > 0 {
                             ctx.lines
                                 .push(RenderedLine::new(String::new(), LineType::ListItem(depth)));
@@ -788,19 +895,24 @@ fn process_node<'a, S: BuildHasher>(
     }
 }
 
-/// Extract a display math literal from a paragraph that contains only a single
-/// display-math node ($$...$$). Returns `None` if the paragraph has other content.
+/// Extract a display math literal from a paragraph containing `$$...$$`.
+///
+/// Returns `Some(literal)` if the paragraph's **last** child (ignoring
+/// trailing soft/line breaks) is a display-math node.  This handles both
+/// the simple case (`$$math$$` alone) and paragraphs where text precedes
+/// the display block (e.g. after a hard line break `\`).
 fn extract_display_math_literal<'a>(node: &'a AstNode<'a>) -> Option<String> {
+    // Collect children so we can iterate in reverse.
     let children: Vec<_> = node.children().collect();
-    if children.len() != 1 {
-        return None;
-    }
-    let child = children[0];
-    let data = child.data.borrow();
-    if let NodeValue::Math(ref math) = data.value
-        && math.display_math
-    {
-        return Some(math.literal.clone());
+    for child in children.iter().rev() {
+        let data = child.data.borrow();
+        match &data.value {
+            NodeValue::Math(math) if math.display_math => {
+                return Some(math.literal.clone());
+            }
+            NodeValue::SoftBreak | NodeValue::LineBreak => {}
+            _ => return None,
+        }
     }
     None
 }
@@ -851,23 +963,16 @@ fn emit_math_image_placeholder<S: BuildHasher>(literal: &str, ctx: &mut ParseCon
         .insert(key.clone(), literal.trim_end().to_string());
 
     let height_lines = ctx.image_heights.get(&key).copied().unwrap_or(1).max(1);
-    let has_caption = ctx.image_heights.contains_key(&key);
     let start_line = ctx.lines.len();
     let label = "[Image: math equation]".to_string();
 
-    if has_caption {
-        ctx.lines.push(RenderedLine::new(
-            "    math equation".to_string(),
-            LineType::Image,
-        ));
-    }
-
+    // No caption for math — "math equation" adds no useful info.
     ctx.lines
         .push(RenderedLine::new(label.clone(), LineType::Image));
     ctx.link_refs.push(LinkRef {
         text: label,
         url: key.clone(),
-        line: start_line + usize::from(has_caption),
+        line: start_line,
     });
 
     for _ in 1..height_lines {
@@ -877,9 +982,9 @@ fn emit_math_image_placeholder<S: BuildHasher>(literal: &str, ctx: &mut ParseCon
 
     let end_line = ctx.lines.len();
     ctx.images.push(ImageRef {
-        alt: "math equation".to_string(),
+        alt: String::new(),
         src: key,
-        line_range: start_line + usize::from(has_caption)..end_line,
+        line_range: start_line..end_line,
     });
 }
 

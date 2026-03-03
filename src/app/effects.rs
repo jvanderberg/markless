@@ -223,6 +223,11 @@ impl App {
             return;
         }
 
+        if url.starts_with("math://") {
+            Self::open_math_svg(model, url);
+            return;
+        }
+
         if let Some((path, anchor)) = resolve_local_file_link(model, url) {
             match model.load_file(&path) {
                 Ok(()) => {
@@ -282,6 +287,35 @@ impl App {
         let path_str = path.to_string_lossy();
         match open_external_link(&path_str) {
             Ok(()) => model.show_toast(ToastLevel::Info, "Opened mermaid SVG"),
+            Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
+        }
+    }
+
+    fn open_math_svg(model: &mut Model, math_url: &str) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let Some(source) = model.document.math_sources().get(math_url).cloned() else {
+            model.show_toast(ToastLevel::Warning, "Math source not found");
+            return;
+        };
+        let svg = match crate::math::render_to_svg(&source) {
+            Ok(s) => s,
+            Err(err) => {
+                model.show_toast(ToastLevel::Error, format!("Math render failed: {err}"));
+                return;
+            }
+        };
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        let hash = hasher.finish();
+        let path = std::env::temp_dir().join(format!("markless-math-{hash:016x}.svg"));
+        if let Err(err) = std::fs::write(&path, &svg) {
+            model.show_toast(ToastLevel::Error, format!("Write SVG failed: {err}"));
+            return;
+        }
+        let path_str = path.to_string_lossy();
+        match open_external_link(&path_str) {
+            Ok(()) => model.show_toast(ToastLevel::Info, "Opened math SVG"),
             Err(err) => model.show_toast(ToastLevel::Error, format!("Open failed: {err}")),
         }
     }

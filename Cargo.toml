@@ -34,6 +34,7 @@ unicodeit = "0.2"
 mitex = "0.2"
 typst = "0.14"
 typst-svg = "0.14"
+typst-assets = { version = "0.14", features = ["fonts"] }
 
 # Syntax highlighting
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
@@ -62,6 +63,8 @@ ropey = "1.6.1"
 # Testing
 proptest = "1"
 tempfile = "3"
+mitex-spec = "0.2"
+mitex-spec-gen = "0.2"
 
 # Benchmarking
 criterion = "0.5"

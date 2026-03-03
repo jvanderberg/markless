@@ -4,11 +4,9 @@
 //! for SVG generation and `resvg` for rasterization.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 
 use anyhow::Result;
 use image::DynamicImage;
-use resvg::usvg::fontdb;
 
 /// Render a mermaid diagram to an SVG string.
 ///
@@ -40,7 +38,7 @@ pub fn render_to_svg(mermaid_source: &str) -> Result<String> {
 /// cannot be rasterized.
 pub fn render_to_image(mermaid_source: &str, target_width_px: u32) -> Result<DynamicImage> {
     let svg = render_to_svg(mermaid_source)?;
-    rasterize_svg(&svg, target_width_px)
+    crate::svg::rasterize_svg(&svg, target_width_px)
 }
 
 /// Fix unescaped double quotes inside font-family attributes.
@@ -87,49 +85,6 @@ fn fix_svg_font_families(svg: &str) -> String {
     }
     result.push_str(rest);
     result
-}
-
-/// Rasterize an SVG string to a `DynamicImage`.
-///
-/// Scales the SVG so its width matches `target_width_px`, preserving aspect
-/// ratio. This avoids lossy upscaling since the vector is rasterized directly
-/// at the final display resolution.
-fn rasterize_svg(svg: &str, target_width_px: u32) -> Result<DynamicImage> {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
-
-    let opts = resvg::usvg::Options {
-        fontdb: Arc::new(db),
-        ..Default::default()
-    };
-
-    let tree = resvg::usvg::Tree::from_str(svg, &opts)?;
-    let size = tree.size();
-
-    let scale = f64::from(target_width_px) / f64::from(size.width());
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let width = (f64::from(size.width()) * scale).ceil() as u32;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let height = (f64::from(size.height()) * scale).ceil() as u32;
-
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
-        .ok_or_else(|| anyhow::anyhow!("failed to create pixmap {width}x{height}"))?;
-
-    #[allow(clippy::cast_possible_truncation)]
-    let scale_f32 = scale as f32;
-
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::from_scale(scale_f32, scale_f32),
-        &mut pixmap.as_mut(),
-    );
-
-    let rgba = pixmap.data().to_vec();
-    let img_buf = image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| anyhow::anyhow!("failed to create image from pixmap data"))?;
-
-    Ok(DynamicImage::ImageRgba8(img_buf))
 }
 
 #[cfg(test)]

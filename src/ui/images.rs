@@ -66,6 +66,23 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
             continue;
         }
 
+        // Center images that are narrower than the document area and
+        // clear the full row width so placeholder text doesn't peek out.
+        let x_offset = (doc_area.width.saturating_sub(visible_cols)) / 2;
+        if visible_cols < doc_area.width {
+            let frame_buf = frame.buffer_mut();
+            for row in 0..visible_rows {
+                let dst_row = dst_y + row;
+                if dst_row < frame_buf.area.height {
+                    for col in 0..doc_area.width {
+                        frame_buf[(doc_area.x + col, dst_row)]
+                            .set_symbol(" ")
+                            .set_skip(false);
+                    }
+                }
+            }
+        }
+
         if matches!(protocol.protocol_type(), StatefulProtocolType::ITerm2(_)) {
             if image_scroll_settling {
                 // iTerm2/Warp can flicker when re-embedding inline images during rapid scroll.
@@ -77,7 +94,7 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
                         continue;
                     }
                     for col in 0..visible_cols {
-                        let dst_cell = &mut frame_buf[(doc_area.x + col, dst_row)];
+                        let dst_cell = &mut frame_buf[(doc_area.x + x_offset + col, dst_row)];
                         dst_cell
                             .set_symbol(" ")
                             .set_bg(Color::DarkGray)
@@ -107,7 +124,7 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
             };
             let image_widget = StatefulImage::default().resize(crop);
             image_widget.render(
-                Rect::new(doc_area.x, dst_y, visible_cols, visible_rows),
+                Rect::new(doc_area.x + x_offset, dst_y, visible_cols, visible_rows),
                 frame.buffer_mut(),
                 protocol,
             );
@@ -164,7 +181,7 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
             if src_row < img_height && dst_row < frame_buf.area.height {
                 for col in 0..visible_cols {
                     let src_cell = &temp_buf[(col, src_row)];
-                    let dst_cell = &mut frame_buf[(doc_area.x + col, dst_row)];
+                    let dst_cell = &mut frame_buf[(doc_area.x + x_offset + col, dst_row)];
                     *dst_cell = src_cell.clone();
                 }
             }
