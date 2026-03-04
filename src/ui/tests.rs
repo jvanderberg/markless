@@ -1056,6 +1056,52 @@ fn test_editor_status_bar_shows_modified_after_edit() {
 }
 
 #[test]
+fn test_image_x_offset_respects_wrap_width() {
+    // RED: When wrap_width is set, image centering should use wrap_width,
+    // not the full doc_area width.
+    // doc_area.width=120, image=30 cols, wrap_width=60
+    // Without fix: x_offset = (120 - 30) / 2 = 45
+    // With fix: x_offset = (60 - 30) / 2 = 15
+    let x_offset = super::images::image_x_offset(120, 30, Some(60));
+    assert_eq!(
+        x_offset, 15,
+        "Image should center within wrap_width (60), not full area (120)"
+    );
+}
+
+#[test]
+fn test_image_x_offset_without_wrap_width() {
+    // Without wrap_width, centering uses full doc_area width.
+    // doc_area.width=120, image=30 cols, no wrap_width
+    // x_offset = (120 - 30) / 2 = 45
+    let x_offset = super::images::image_x_offset(120, 30, None);
+    assert_eq!(
+        x_offset, 45,
+        "Without wrap_width, image should center in full area"
+    );
+}
+
+#[test]
+fn test_image_x_offset_wrap_width_larger_than_area() {
+    // wrap_width larger than doc_area should have no effect
+    let x_offset = super::images::image_x_offset(80, 30, Some(120));
+    assert_eq!(
+        x_offset, 25,
+        "wrap_width larger than doc_area should be ignored"
+    );
+}
+
+#[test]
+fn test_image_x_offset_image_wider_than_wrap_width() {
+    // Image wider than wrap_width should still get offset 0
+    let x_offset = super::images::image_x_offset(120, 80, Some(60));
+    assert_eq!(
+        x_offset, 0,
+        "Image wider than wrap_width should have offset 0"
+    );
+}
+
+#[test]
 fn test_help_overlay_single_column() {
     let doc = Document::parse("# Test\n\nHello world").unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 40));

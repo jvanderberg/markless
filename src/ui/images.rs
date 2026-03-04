@@ -4,6 +4,17 @@ use ratatui_image::{CropOptions, Resize, StatefulImage};
 
 use crate::app::Model;
 
+/// Compute the horizontal offset for centering an image within the effective
+/// content width. When `wrap_width` is set and smaller than `doc_area_width`,
+/// the image is centered within the wrap width instead of the full area.
+pub fn image_x_offset(doc_area_width: u16, image_cols: u16, wrap_width: Option<u16>) -> u16 {
+    let effective_width = match wrap_width {
+        Some(w) if w > 0 => doc_area_width.min(w),
+        _ => doc_area_width,
+    };
+    effective_width.saturating_sub(image_cols) / 2
+}
+
 pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
     // Render images to temp buffer, copy visible portion to frame
     // Terminal scroll offsets fit in i32
@@ -68,7 +79,7 @@ pub fn render_images(model: &mut Model, frame: &mut Frame, doc_area: Rect) {
 
         // Center images that are narrower than the document area and
         // clear the full row width so placeholder text doesn't peek out.
-        let x_offset = (doc_area.width.saturating_sub(visible_cols)) / 2;
+        let x_offset = image_x_offset(doc_area.width, visible_cols, model.wrap_width);
         if visible_cols < doc_area.width {
             let frame_buf = frame.buffer_mut();
             for row in 0..visible_rows {
