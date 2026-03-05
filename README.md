@@ -13,16 +13,24 @@ Markless is a terminal markdown viewer and editor with image support. It is focu
 
 ## Features
 
-- Markdown rendering with headings, lists, tables, block quotes, code blocks, and footnotes
+- Markdown rendering with headings, lists, tables, block quotes, code blocks, footnotes, task lists, and description lists
 - Syntax-highlighted code blocks with lazy highlighting for performance
-- Inline images (Kitty, Sixel, iTerm2, and half-block fallback)
+- Inline images (Kitty, Sixel, iTerm2, and half-block fallback) with auto-detection
+- Mermaid diagram rendering (SVG rasterized inline, click to open full SVG)
+- LaTeX math rendering — inline `$...$` as Unicode, display `$$...$$` and ` ```math ``` ` as images via Typst
+- CSV files and ` ```csv ``` ` code blocks rendered as formatted tables
+- Binary file viewing with hex dump display
 - Built-in editor mode with save, undo-friendly exit, and conflict detection
+- External editor support (`--editor vim`, `--editor hx`, etc.)
 - Directory browse mode with file preview
 - Table of contents sidebar with keyboard and mouse support
-- Search with match navigation and highlight
+- Search with incremental matching, match count, and highlight
+- Anchor and footnote navigation within documents
 - File watching for live reload
-- Link hover and click (including image placeholders)
-- Line selection with mouse drag and copy
+- Link hover and click (including image placeholders and rendered diagrams)
+- Line selection with mouse drag and copy (pbcopy on macOS, OSC 52 fallback)
+- Opens image files directly (png, jpg, gif, webp, svg, avif, and more)
+- Auto theme detection via OSC 11 terminal query
 - Fast scrolling with stable layout and reflow on resize
 
 ## Installation
@@ -58,7 +66,10 @@ When given a directory, markless opens in browse mode: the sidebar shows the fil
 - `--no-images`  Disable inline image rendering (show placeholders only)
 - `--image-mode <kitty|sixel|iterm2|halfblock>`  Force a specific image rendering protocol
 - `--force-half-cell`  Force half-cell image rendering (shortcut for `--image-mode halfblock`)
-- `--theme <auto|light|dark>`  Force highlight theme background
+- `--wrap-width <COLS>`  Maximum content width for word-wrapping
+- `--theme <auto|light|dark>`  Force highlight theme background (`auto` queries the terminal via OSC 11)
+- `--no-inline-math`  Render inline math as images instead of Unicode text
+- `--inline-math`  Re-enable inline Unicode math (overrides saved `--no-inline-math`)
 - `--perf`  Enable startup performance logging
 - `--render-debug-log <PATH>`  Write render/image debug events to a file
 - `--editor <cmd>`  Use an external editor instead of the built-in one (e.g. `--editor vim`, `--editor "emacsclient -t"`)
