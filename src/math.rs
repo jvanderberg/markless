@@ -21,7 +21,11 @@ use image::DynamicImage;
 /// (e.g. `\frac{a}{b}` → `(a)/(b)`, `\sqrt{x}` → `√(x)`).
 pub fn latex_to_unicode(latex: &str) -> String {
     let preprocessed = preprocess_for_unicode(latex);
-    let text = unicodeit::replace(&preprocessed);
+    // unicodeit can panic on certain inputs due to a TryFromIntError in its
+    // subscript/superscript expansion (naive_replace.rs:61).  Fall back to
+    // the preprocessed text rather than crashing the TUI.
+    let text = catch_unwind(AssertUnwindSafe(|| unicodeit::replace(&preprocessed)))
+        .unwrap_or_else(|_| preprocessed.clone());
     simplify_remaining_commands(&text)
 }
 
@@ -811,6 +815,14 @@ mod tests {
             "Turso pass rate should render: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_latex_to_unicode_does_not_panic_on_bad_input() {
+        // unicodeit can panic with TryFromIntError on certain inputs.
+        // catch_unwind should prevent this from crashing the process.
+        let _result = latex_to_unicode("}}}{{{\\invalid\\command");
+        let _result = latex_to_unicode("x_{\\text{very deeply {nested}}}^{\\frac{a}{b}}");
     }
 
     #[test]
