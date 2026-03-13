@@ -169,6 +169,8 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             | Message::TocClick(_)
             | Message::TocCollapse
             | Message::TocExpand
+            | Message::FileChanged
+            | Message::ForceReload
             | Message::HoverLink(_)
     );
     // Reset confirmation flags on any action other than the confirmed one.

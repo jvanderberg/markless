@@ -10,7 +10,7 @@ use ratatui_image::picker::{Picker, ProtocolType};
 use crate::config::ImageMode;
 use ratatui_image::protocol::StatefulProtocol;
 
-use crate::document::Document;
+use crate::document::{Document, HeadingRef};
 use crate::editor::EditorBuffer;
 use crate::image::ImageLoader;
 use crate::ui::viewport::Viewport;
@@ -549,6 +549,48 @@ impl Model {
             .saturating_sub(self.toc_visible_rows())
     }
 
+    pub(super) fn clamp_toc_to_heading_bounds(&mut self) {
+        let Some(max_heading_idx) = self.document.headings().len().checked_sub(1) else {
+            self.toc_selected = None;
+            self.toc_scroll_offset = 0;
+            return;
+        };
+
+        if let Some(selected) = self.toc_selected {
+            self.toc_selected = Some(selected.min(max_heading_idx));
+        }
+        self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
+    }
+
+    pub(super) fn restore_focused_toc_selection(&mut self, old_selected: Option<&HeadingRef>) {
+        let headings = self.document.headings();
+        if headings.is_empty() {
+            self.toc_selected = None;
+            self.toc_scroll_offset = 0;
+            return;
+        }
+
+        let selected = old_selected
+            .and_then(|old| {
+                old.id.as_ref().and_then(|old_id| {
+                    headings
+                        .iter()
+                        .position(|heading| heading.id.as_ref() == Some(old_id))
+                })
+            })
+            .or_else(|| {
+                old_selected.and_then(|old| {
+                    headings
+                        .iter()
+                        .position(|heading| heading.level == old.level && heading.text == old.text)
+                })
+            })
+            .unwrap_or(0);
+
+        self.toc_selected = Some(selected);
+        self.toc_scroll_offset = selected.min(self.max_toc_scroll_offset());
+    }
+
     pub(super) fn sync_toc_to_viewport(&mut self) {
         let Some(selected) =
             closest_heading_to_line(self.document.headings(), self.viewport.offset())
@@ -809,6 +851,13 @@ impl Model {
     }
 
     pub(super) fn reload_from_disk(&mut self) -> Result<()> {
+        let old_selected_heading = if !self.browse_mode && self.toc_focused {
+            self.toc_selected
+                .and_then(|selected| self.document.headings().get(selected))
+                .cloned()
+        } else {
+            None
+        };
         let old_mermaid_sources = self.document.mermaid_sources().clone();
         let old_math_sources = self.document.math_sources().clone();
         let raw_bytes = std::fs::read(&self.file_path)?;
@@ -837,6 +886,13 @@ impl Model {
             .retain(|src, _| valid_images.contains(src));
 
         self.viewport.set_total_lines(self.document.line_count());
+        if !self.browse_mode {
+            if self.toc_focused {
+                self.restore_focused_toc_selection(old_selected_heading.as_ref());
+            } else {
+                self.clamp_toc_to_heading_bounds();
+            }
+        }
         self.toc_scroll_offset = self.toc_scroll_offset.min(self.max_toc_scroll_offset());
         let allow_short = self.search_allow_short;
         refresh_search_matches(self, false, allow_short);
