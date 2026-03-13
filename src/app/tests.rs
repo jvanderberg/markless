@@ -3098,7 +3098,8 @@ fn test_file_changed_preserves_manual_toc_selection_when_focused() {
     model.viewport.go_to_top();
     model.toc_selected = Some(3);
 
-    let updated = "# One\n\nalpha updated\n\n# Two\n\nbeta\n\n# Three\n\ngamma\n\n# Four\n\ndelta\n";
+    let updated =
+        "# One\n\nalpha updated\n\n# Two\n\nbeta\n\n# Three\n\ngamma\n\n# Four\n\ndelta\n";
     std::fs::write(&file_path, updated).unwrap();
 
     let mut watcher = None;
