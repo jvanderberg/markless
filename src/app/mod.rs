@@ -23,6 +23,7 @@ use crate::config::ImageMode;
 pub struct App {
     file_path: PathBuf,
     watch_enabled: bool,
+    mouse_enabled: bool,
     toc_visible: bool,
     image_mode: Option<ImageMode>,
     images_enabled: bool,
@@ -40,6 +41,7 @@ impl App {
         Self {
             file_path,
             watch_enabled: false,
+            mouse_enabled: true,
             toc_visible: false,
             image_mode: None,
             images_enabled: true,
@@ -56,6 +58,13 @@ impl App {
     #[must_use]
     pub const fn with_watch(mut self, enabled: bool) -> Self {
         self.watch_enabled = enabled;
+        self
+    }
+
+    /// Enable or disable terminal mouse capture.
+    #[must_use]
+    pub const fn with_mouse_enabled(mut self, enabled: bool) -> Self {
+        self.mouse_enabled = enabled;
         self
     }
 

@@ -83,6 +83,8 @@ pub struct Model {
     pub toc_scroll_offset: usize,
     /// Whether file watching is enabled
     pub watch_enabled: bool,
+    /// Whether terminal mouse capture is enabled
+    pub mouse_enabled: bool,
     /// Global config path shown in help
     pub config_global_path: Option<PathBuf>,
     /// Local override path shown in help
@@ -200,6 +202,7 @@ impl Model {
             toc_selected: None,
             toc_scroll_offset: 0,
             watch_enabled: false,
+            mouse_enabled: true,
             config_global_path: None,
             config_local_path: None,
             help_visible: false,
@@ -990,6 +993,7 @@ impl Default for Model {
             toc_selected: None,
             toc_scroll_offset: 0,
             watch_enabled: false,
+            mouse_enabled: true,
             config_global_path: None,
             config_local_path: None,
             help_visible: false,

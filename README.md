@@ -61,6 +61,8 @@ When given a directory, markless opens in browse mode: the sidebar shows the fil
 ## Command Line Options
 
 - `--watch`  Auto-reload on file changes
+- `--no-mouse-select`  Disable markless mouse selection capture
+- `--mouse-select`  Re-enable markless mouse selection capture (overrides saved `--no-mouse-select`)
 - `--no-toc`  Hide the table of contents sidebar
 - `--toc`  Start with TOC visible
 - `--no-images`  Disable inline image rendering (show placeholders only)

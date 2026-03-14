@@ -38,6 +38,8 @@ impl std::fmt::Display for ImageMode {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConfigFlags {
     pub watch: bool,
+    pub no_mouse_select: bool,
+    pub mouse_select: bool,
     pub no_toc: bool,
     pub toc: bool,
     pub no_images: bool,
@@ -61,6 +63,8 @@ impl ConfigFlags {
     pub fn union(&self, other: &Self) -> Self {
         Self {
             watch: self.watch || other.watch,
+            no_mouse_select: self.no_mouse_select || other.no_mouse_select,
+            mouse_select: self.mouse_select || other.mouse_select,
             no_toc: self.no_toc || other.no_toc,
             toc: self.toc || other.toc,
             no_images: self.no_images || other.no_images,
@@ -182,6 +186,9 @@ pub fn save_config_flags(path: &Path, flags: &ConfigFlags) -> Result<()> {
     if flags.watch {
         lines.push("--watch".to_string());
     }
+    if flags.no_mouse_select && !flags.mouse_select {
+        lines.push("--no-mouse-select".to_string());
+    }
     if flags.no_toc {
         lines.push("--no-toc".to_string());
     }
@@ -257,6 +264,10 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
         let token = &tokens[i];
         if token == "--watch" {
             flags.watch = true;
+        } else if token == "--no-mouse-select" {
+            flags.no_mouse_select = true;
+        } else if token == "--mouse-select" {
+            flags.mouse_select = true;
         } else if token == "--no-toc" {
             flags.no_toc = true;
         } else if token == "--toc" {
@@ -344,6 +355,7 @@ mod tests {
         let args = vec![
             "markless".to_string(),
             "--watch".to_string(),
+            "--no-mouse-select".to_string(),
             "--toc".to_string(),
             "--no-images".to_string(),
             "--theme".to_string(),
@@ -354,6 +366,7 @@ mod tests {
         ];
         let flags = parse_flag_tokens(&args);
         assert!(flags.watch);
+        assert!(flags.no_mouse_select);
         assert!(flags.toc);
         assert!(flags.no_images);
         assert_eq!(flags.theme, Some(ThemeMode::Dark));
@@ -496,6 +509,70 @@ mod tests {
         assert!(merged.watch);
         assert!(merged.toc);
         assert_eq!(merged.theme, Some(ThemeMode::Dark));
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_no_mouse_select() {
+        let args = vec!["--no-mouse-select".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert!(flags.no_mouse_select);
+    }
+
+    #[test]
+    fn test_parse_flag_tokens_mouse_select() {
+        let args = vec!["--mouse-select".to_string()];
+        let flags = parse_flag_tokens(&args);
+        assert!(flags.mouse_select);
+    }
+
+    #[test]
+    fn test_config_union_mouse_select_overrides_no_mouse_select() {
+        let file = ConfigFlags {
+            no_mouse_select: true,
+            ..ConfigFlags::default()
+        };
+        let cli = ConfigFlags {
+            mouse_select: true,
+            ..ConfigFlags::default()
+        };
+        let merged = file.union(&cli);
+        assert!(merged.no_mouse_select);
+        assert!(merged.mouse_select);
+    }
+
+    #[test]
+    fn test_save_load_no_mouse_select() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            no_mouse_select: true,
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert!(loaded.no_mouse_select);
+    }
+
+    #[test]
+    fn test_mouse_select_overrides_no_mouse_select_in_save() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".marklessrc");
+        let flags = ConfigFlags {
+            no_mouse_select: true,
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &flags).unwrap();
+        let override_flags = ConfigFlags {
+            no_mouse_select: true,
+            mouse_select: true,
+            ..ConfigFlags::default()
+        };
+        save_config_flags(&path, &override_flags).unwrap();
+        let loaded = load_config_flags(&path).unwrap();
+        assert!(
+            !loaded.no_mouse_select,
+            "--mouse-select should prevent --no-mouse-select from being saved"
+        );
     }
 
     #[test]

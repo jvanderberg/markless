@@ -1,4 +1,4 @@
-use std::io::{Write, stdout};
+use std::io::stdout;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -88,6 +88,10 @@ impl App {
     pub fn run(&mut self) -> Result<()> {
         let _run_scope = crate::perf::scope("app.run.total");
 
+        // Clear any stale mouse reporting left behind by a previous run or tmux pane state
+        // before entering raw mode.
+        let _ = set_mouse_capture(false);
+
         // Create image picker BEFORE initializing terminal (queries stdio)
         let picker = if self.images_enabled {
             let picker_scope = crate::perf::scope("app.create_picker");
@@ -146,6 +150,7 @@ impl App {
         let mut model =
             Model::new(effective_file, document, (size.width, size.height)).with_picker(picker);
         model.watch_enabled = self.watch_enabled;
+        model.mouse_enabled = self.mouse_enabled;
         model.toc_visible = toc_visible;
         model.image_mode = self.image_mode;
         model.images_enabled = self.images_enabled;
@@ -194,7 +199,7 @@ impl App {
         let result = Self::event_loop(&mut terminal, &mut model);
 
         // Restore terminal
-        let _ = execute!(stdout(), DisableMouseCapture);
+        let _ = set_mouse_capture(false);
         ratatui::restore();
 
         result
@@ -285,15 +290,9 @@ impl App {
                 }
                 watched_path.clone_from(&model.file_path);
             }
-            let should_enable_mouse = true;
+            let should_enable_mouse = model.mouse_enabled;
             if should_enable_mouse != mouse_capture_enabled {
-                if should_enable_mouse {
-                    execute!(stdout(), EnableMouseCapture)?;
-                    set_mouse_motion_tracking(true)?;
-                } else {
-                    set_mouse_motion_tracking(false)?;
-                    execute!(stdout(), DisableMouseCapture)?;
-                }
+                set_mouse_capture(should_enable_mouse)?;
                 mouse_capture_enabled = should_enable_mouse;
             }
 
@@ -447,21 +446,17 @@ impl App {
             }
         }
         if mouse_capture_enabled {
-            let _ = set_mouse_motion_tracking(false);
-            let _ = execute!(stdout(), DisableMouseCapture);
+            let _ = set_mouse_capture(false);
         }
         Ok(())
     }
 }
 
-pub(super) fn set_mouse_motion_tracking(enable: bool) -> std::io::Result<()> {
-    // Request any-event mouse motion reporting (1003) with SGR encoding (1006).
-    // This improves hover support in terminals like Ghostty.
-    let mut out = stdout();
+pub(super) fn set_mouse_capture(enable: bool) -> std::io::Result<()> {
     if enable {
-        out.write_all(b"\x1b[?1003h\x1b[?1006h")?;
+        execute!(stdout(), EnableMouseCapture)?;
     } else {
-        out.write_all(b"\x1b[?1003l\x1b[?1006l")?;
+        execute!(stdout(), DisableMouseCapture)?;
     }
-    out.flush()
+    Ok(())
 }

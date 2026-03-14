@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use crossterm::event::DisableMouseCapture;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use markless::app::App;
@@ -37,6 +38,14 @@ struct Cli {
     /// Watch file for changes and auto-reload
     #[arg(short, long)]
     watch: bool,
+
+    /// Disable markless mouse selection capture
+    #[arg(long)]
+    no_mouse_select: bool,
+
+    /// Re-enable markless mouse selection capture (overrides saved --no-mouse-select)
+    #[arg(long, conflicts_with = "no_mouse_select")]
+    mouse_select: bool,
 
     /// Hide table of contents sidebar
     #[arg(long)]
@@ -271,6 +280,7 @@ fn main() -> Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stderr(), DisableMouseCapture);
         let _ = crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen);
         default_hook(info);
     }));
@@ -344,6 +354,7 @@ fn main() -> Result<()> {
 
     let mut app = App::new(cli.path)
         .with_watch(effective.watch)
+        .with_mouse_enabled(effective.mouse_select || !effective.no_mouse_select)
         .with_toc_visible(effective.toc && !effective.no_toc)
         .with_image_mode(effective.image_mode)
         .with_images_enabled(!effective.no_images)
