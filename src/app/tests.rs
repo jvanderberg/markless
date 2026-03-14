@@ -3055,6 +3055,66 @@ fn test_file_changed_shows_reload_toast() {
 }
 
 #[test]
+fn test_file_changed_falls_back_to_top_when_selected_heading_disappears() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    let initial = "# One\n\nalpha\n\n# Two\n\nbeta\n\n# Three\n\ngamma\n\n# Four\n\ndelta\n";
+    std::fs::write(&file_path, initial).unwrap();
+
+    let doc = Document::parse_with_layout(initial, 80).unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 8));
+    model.file_path = file_path.clone();
+    model.toc_visible = true;
+    model.toc_focused = true;
+    model.toc_selected = Some(model.document.headings().len() - 1);
+
+    let updated = "# One\n\nalpha\n\n# Two\n\nbeta\n";
+    std::fs::write(&file_path, updated).unwrap();
+
+    let mut watcher = None;
+    let mut model = update(model, Message::FileChanged);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    assert_eq!(model.document.headings().len(), 2);
+    assert_eq!(
+        model.toc_selected,
+        Some(0),
+        "reloading should reset to the top TOC entry when the selected heading is gone"
+    );
+}
+
+#[test]
+fn test_file_changed_preserves_manual_toc_selection_when_focused() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().canonicalize().unwrap().join("test.md");
+    let initial = "# One\n\nalpha\n\n# Two\n\nbeta\n\n# Three\n\ngamma\n\n# Four\n\ndelta\n";
+    std::fs::write(&file_path, initial).unwrap();
+
+    let doc = Document::parse_with_layout(initial, 80).unwrap();
+    let mut model = Model::new(file_path.clone(), doc, (80, 8));
+    model.file_path = file_path.clone();
+    model.toc_visible = true;
+    model.toc_focused = true;
+    model.viewport.go_to_top();
+    model.toc_selected = Some(3);
+
+    let updated =
+        "# One\n\nalpha updated\n\n# Two\n\nbeta\n\n# Three\n\ngamma\n\n# Four\n\ndelta\n";
+    std::fs::write(&file_path, updated).unwrap();
+
+    let mut watcher = None;
+    let mut model = update(model, Message::FileChanged);
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::FileChanged);
+
+    assert_eq!(model.document.headings().len(), 4);
+    assert_eq!(
+        model.toc_selected,
+        Some(3),
+        "focused TOC selection should survive reload instead of snapping back to the viewport"
+    );
+}
+
+#[test]
 fn test_toggle_watch_watches_model_file_path_not_app_path() {
     let dir = tempdir().unwrap();
     let canonical_dir = dir.path().canonicalize().unwrap();
