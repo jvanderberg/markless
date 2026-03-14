@@ -4,12 +4,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
-use super::event_loop::set_mouse_capture;
+use super::event_loop::set_mouse_motion_tracking;
 
 use crate::app::{App, Message, Model, ToastLevel};
 use crate::config::shell_split_tokens;
@@ -447,7 +448,8 @@ impl App {
         let extra_args = tokens.get(1..).unwrap_or_default();
 
         // Suspend TUI: disable mouse, leave alternate screen, disable raw mode
-        let _ = set_mouse_capture(false);
+        let _ = set_mouse_motion_tracking(false);
+        let _ = execute!(stdout(), DisableMouseCapture);
         let _ = execute!(stdout(), LeaveAlternateScreen);
         let _ = disable_raw_mode();
 
@@ -460,7 +462,10 @@ impl App {
         // Restore TUI (always, even on error)
         let _ = enable_raw_mode();
         let _ = execute!(stdout(), EnterAlternateScreen);
-        let _ = set_mouse_capture(model.mouse_enabled);
+        if model.mouse_enabled {
+            let _ = execute!(stdout(), EnableMouseCapture);
+            let _ = set_mouse_motion_tracking(true);
+        }
         model.needs_full_redraw = true;
 
         match result {

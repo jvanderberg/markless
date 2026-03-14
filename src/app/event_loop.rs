@@ -1,4 +1,4 @@
-use std::io::stdout;
+use std::io::{Write, stdout};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -87,10 +87,6 @@ impl App {
     /// or the event loop encounters an I/O or parsing failure.
     pub fn run(&mut self) -> Result<()> {
         let _run_scope = crate::perf::scope("app.run.total");
-
-        // Clear any stale mouse reporting left behind by a previous run or tmux pane state
-        // before entering raw mode.
-        let _ = set_mouse_capture(false);
 
         // Create image picker BEFORE initializing terminal (queries stdio)
         let picker = if self.images_enabled {
@@ -199,7 +195,7 @@ impl App {
         let result = Self::event_loop(&mut terminal, &mut model);
 
         // Restore terminal
-        let _ = set_mouse_capture(false);
+        let _ = execute!(stdout(), DisableMouseCapture);
         ratatui::restore();
 
         result
@@ -292,7 +288,13 @@ impl App {
             }
             let should_enable_mouse = model.mouse_enabled;
             if should_enable_mouse != mouse_capture_enabled {
-                set_mouse_capture(should_enable_mouse)?;
+                if should_enable_mouse {
+                    execute!(stdout(), EnableMouseCapture)?;
+                    set_mouse_motion_tracking(true)?;
+                } else {
+                    set_mouse_motion_tracking(false)?;
+                    execute!(stdout(), DisableMouseCapture)?;
+                }
                 mouse_capture_enabled = should_enable_mouse;
             }
 
@@ -446,17 +448,21 @@ impl App {
             }
         }
         if mouse_capture_enabled {
-            let _ = set_mouse_capture(false);
+            let _ = set_mouse_motion_tracking(false);
+            let _ = execute!(stdout(), DisableMouseCapture);
         }
         Ok(())
     }
 }
 
-pub(super) fn set_mouse_capture(enable: bool) -> std::io::Result<()> {
+pub(super) fn set_mouse_motion_tracking(enable: bool) -> std::io::Result<()> {
+    // Request any-event mouse motion reporting (1003) with SGR encoding (1006).
+    // This improves hover support in terminals like Ghostty.
+    let mut out = stdout();
     if enable {
-        execute!(stdout(), EnableMouseCapture)?;
+        out.write_all(b"\x1b[?1003h\x1b[?1006h")?;
     } else {
-        execute!(stdout(), DisableMouseCapture)?;
+        out.write_all(b"\x1b[?1003l\x1b[?1006l")?;
     }
-    Ok(())
+    out.flush()
 }

@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::DisableMouseCapture;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use markless::app::App;
@@ -280,7 +279,6 @@ fn main() -> Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = crossterm::execute!(std::io::stderr(), DisableMouseCapture);
         let _ = crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen);
         default_hook(info);
     }));
