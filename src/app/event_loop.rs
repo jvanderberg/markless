@@ -152,6 +152,7 @@ impl App {
         model.images_enabled = self.images_enabled;
         model.wrap_width = self.wrap_width;
         model.no_inline_math = self.no_inline_math;
+        model.large_text = self.large_text;
         model.external_editor.clone_from(&self.editor);
         model
             .config_global_path
@@ -177,10 +178,9 @@ impl App {
             }
         }
 
-        // Reparse with mermaid-as-images now that the picker is configured.
-        // The initial parse used mermaid_as_images=false (before the picker
-        // was available), so mermaid blocks are still code blocks.
-        if model.should_render_mermaid_as_images() {
+        // Reparse with mermaid-as-images now that the picker is configured,
+        // or with large_text to strip heading prefixes and reserve extra rows.
+        if model.should_render_mermaid_as_images() || model.large_text {
             model.reflow_layout();
         }
 
@@ -432,6 +432,24 @@ impl App {
                 // Render
                 let draw_start = Instant::now();
                 terminal.draw(|frame| Self::view(model, frame))?;
+
+                // Post-render: write large-text headings via OSC 66 sequences
+                if model.large_text {
+                    let term_size = terminal.size()?;
+                    let term_area =
+                        ratatui::prelude::Rect::new(0, 0, term_size.width, term_size.height);
+                    let doc_area = if model.toc_visible {
+                        let chunks = crate::ui::split_main_columns(term_area);
+                        chunks.get(1).copied().unwrap_or(term_area)
+                    } else {
+                        term_area
+                    };
+                    let headings = crate::ui::collect_large_text_headings(model, doc_area);
+                    if let Err(e) = crate::ui::large_text::write_large_headings(&headings) {
+                        crate::perf::log_event("large_text.write.error", format!("err={e}"));
+                    }
+                }
+
                 crate::perf::log_event(
                     "frame.draw",
                     format!(

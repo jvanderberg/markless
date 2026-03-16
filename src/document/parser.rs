@@ -25,6 +25,8 @@ pub struct DiagramRenderOpts<'a> {
     pub failed_math_srcs: &'a HashSet<String>,
     /// Disable inline (Unicode) math, rendering as images instead.
     pub no_inline_math: bool,
+    /// Use Kitty text sizing protocol for large headings.
+    pub large_text: bool,
 }
 
 impl Default for DiagramRenderOpts<'_> {
@@ -35,6 +37,7 @@ impl Default for DiagramRenderOpts<'_> {
             math_as_images: false,
             failed_math_srcs: &EMPTY_HASH_SET,
             no_inline_math: false,
+            large_text: false,
         }
     }
 }
@@ -219,6 +222,7 @@ fn parse_with_all_options_internal<S: BuildHasher>(
         math_as_images: opts.math_as_images,
         failed_math_srcs: opts.failed_math_srcs,
         no_inline_math: opts.no_inline_math,
+        large_text: opts.large_text,
     };
     process_node(root, &mut ctx, 0, None);
 
@@ -277,6 +281,7 @@ struct ParseContext<'h, S: BuildHasher = std::collections::hash_map::RandomState
     math_as_images: bool,
     failed_math_srcs: &'h HashSet<String>,
     no_inline_math: bool,
+    large_text: bool,
 }
 
 fn process_node<'a, S: BuildHasher>(
@@ -308,11 +313,28 @@ fn process_node<'a, S: BuildHasher>(
 
             collect_inline_elements(node, line_num, &mut ctx.images, &mut ctx.link_refs);
 
-            let prefix = "#".repeat(heading.level as usize);
-            ctx.lines.push(RenderedLine::new(
-                format!("{prefix} {text}"),
-                LineType::Heading(heading.level),
-            ));
+            let scale = if ctx.large_text {
+                crate::ui::large_text::heading_scale(heading.level)
+            } else {
+                1
+            };
+
+            if scale > 1 {
+                // Large text mode: no # prefix, heading text only
+                ctx.lines
+                    .push(RenderedLine::new(text, LineType::Heading(heading.level)));
+                // Reserve extra rows for the scaled text (scale - 1 additional lines)
+                for _ in 1..scale {
+                    ctx.lines
+                        .push(RenderedLine::new(String::new(), LineType::Empty));
+                }
+            } else {
+                let prefix = "#".repeat(heading.level as usize);
+                ctx.lines.push(RenderedLine::new(
+                    format!("{prefix} {text}"),
+                    LineType::Heading(heading.level),
+                ));
+            }
             ctx.lines
                 .push(RenderedLine::new(String::new(), LineType::Empty));
         }
@@ -3963,5 +3985,116 @@ mod tests {
             has_x,
             "inline math $x$ before display math should be visible"
         );
+    }
+
+    #[test]
+    fn test_large_text_h1_no_hash_prefix() {
+        let doc = Document::parse_with_all_options_and_failures(
+            "# Title",
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                large_text: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        let heading_line = doc
+            .visible_lines(0, 20)
+            .into_iter()
+            .find(|l| *l.line_type() == LineType::Heading(1))
+            .expect("should have a heading line");
+        assert_eq!(heading_line.content(), "Title");
+        assert!(
+            !heading_line.content().starts_with('#'),
+            "large text heading should not have # prefix"
+        );
+    }
+
+    #[test]
+    fn test_large_text_h2_no_hash_prefix() {
+        let doc = Document::parse_with_all_options_and_failures(
+            "## Subtitle",
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                large_text: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        let heading_line = doc
+            .visible_lines(0, 20)
+            .into_iter()
+            .find(|l| *l.line_type() == LineType::Heading(2))
+            .expect("should have a heading line");
+        assert_eq!(heading_line.content(), "Subtitle");
+    }
+
+    #[test]
+    fn test_large_text_h3_keeps_hash_prefix() {
+        let doc = Document::parse_with_all_options_and_failures(
+            "### Section",
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                large_text: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        let heading_line = doc
+            .visible_lines(0, 20)
+            .into_iter()
+            .find(|l| *l.line_type() == LineType::Heading(3))
+            .expect("should have a heading line");
+        assert_eq!(heading_line.content(), "### Section");
+    }
+
+    #[test]
+    fn test_large_text_h1_reserves_extra_lines() {
+        let doc = Document::parse_with_all_options_and_failures(
+            "# Title\n\nBody text",
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                large_text: true,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        // H1 at scale 2: heading line + 1 extra empty line + 1 trailing empty line = 3 lines
+        // before body text
+        let lines = doc.visible_lines(0, 20);
+        let heading_idx = lines
+            .iter()
+            .position(|l| *l.line_type() == LineType::Heading(1))
+            .expect("should have heading");
+        // The line after the heading should be empty (reserved for scale)
+        assert_eq!(
+            *lines[heading_idx + 1].line_type(),
+            LineType::Empty,
+            "first line after heading should be empty (scale reservation)"
+        );
+    }
+
+    #[test]
+    fn test_large_text_disabled_keeps_hash_prefix() {
+        let doc = Document::parse_with_all_options_and_failures(
+            "# Title",
+            80,
+            &HashMap::new(),
+            &DiagramRenderOpts {
+                large_text: false,
+                ..DiagramRenderOpts::default()
+            },
+        )
+        .unwrap();
+        let heading_line = doc
+            .visible_lines(0, 20)
+            .into_iter()
+            .find(|l| *l.line_type() == LineType::Heading(1))
+            .expect("should have a heading line");
+        assert_eq!(heading_line.content(), "# Title");
     }
 }

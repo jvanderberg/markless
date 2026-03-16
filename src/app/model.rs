@@ -166,6 +166,8 @@ pub struct Model {
     pub failed_math_srcs: HashSet<String>,
     /// Disable inline (Unicode) math, rendering as images instead.
     pub no_inline_math: bool,
+    /// Use Kitty text sizing protocol for large headings.
+    pub large_text: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -243,6 +245,7 @@ impl Model {
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
             no_inline_math: false,
+            large_text: false,
         }
     }
 
@@ -632,6 +635,7 @@ impl Model {
                 math_as_images: math,
                 failed_math_srcs: &self.failed_math_srcs,
                 no_inline_math: self.no_inline_math,
+                large_text: self.large_text,
             },
         ) {
             self.document = document;
@@ -725,6 +729,7 @@ impl Model {
                     math_as_images: self.should_render_math_as_images(),
                     failed_math_srcs: &self.failed_math_srcs,
                     no_inline_math: self.no_inline_math,
+                    large_text: self.large_text,
                 },
             )
         } else {
@@ -1090,6 +1095,7 @@ impl Default for Model {
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
             no_inline_math: false,
+            large_text: false,
         }
     }
 }

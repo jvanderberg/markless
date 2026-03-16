@@ -56,6 +56,10 @@ pub struct ConfigFlags {
     pub no_inline_math: bool,
     /// Re-enable inline math (overrides saved `--no-inline-math`).
     pub inline_math: bool,
+    /// Use Kitty text sizing protocol for large headings.
+    pub large_text: bool,
+    /// Disable Kitty large text headings (overrides saved `--large-text`).
+    pub no_large_text: bool,
 }
 
 impl ConfigFlags {
@@ -80,6 +84,8 @@ impl ConfigFlags {
             editor: other.editor.clone().or_else(|| self.editor.clone()),
             no_inline_math: self.no_inline_math || other.no_inline_math,
             inline_math: self.inline_math || other.inline_math,
+            large_text: self.large_text || other.large_text,
+            no_large_text: self.no_large_text || other.no_large_text,
         }
     }
 }
@@ -320,6 +326,10 @@ pub fn parse_flag_tokens(tokens: &[String]) -> ConfigFlags {
             flags.no_inline_math = true;
         } else if token == "--inline-math" {
             flags.inline_math = true;
+        } else if token == "--large-text" {
+            flags.large_text = true;
+        } else if token == "--no-large-text" {
+            flags.no_large_text = true;
         }
         i += 1;
     }

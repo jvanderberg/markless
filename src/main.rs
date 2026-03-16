@@ -98,6 +98,14 @@ struct Cli {
     #[arg(long, conflicts_with = "no_inline_math")]
     inline_math: bool,
 
+    /// Use Kitty text sizing protocol for large headings
+    #[arg(long)]
+    large_text: bool,
+
+    /// Disable Kitty large text headings (overrides saved --large-text)
+    #[arg(long, conflicts_with = "large_text")]
+    no_large_text: bool,
+
     /// Save current command-line flags as defaults in .marklessrc
     #[arg(long)]
     save: bool,
@@ -359,6 +367,10 @@ fn main() -> Result<()> {
         .with_browse_mode(is_directory)
         .with_wrap_width(effective.wrap_width)
         .with_no_inline_math(effective.no_inline_math && !effective.inline_math)
+        .with_large_text(
+            !effective.no_large_text
+                && (effective.large_text || markless::ui::large_text::detect_support()),
+        )
         .with_editor(editor)
         .with_config_paths(
             Some(global_path),

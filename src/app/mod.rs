@@ -33,6 +33,7 @@ pub struct App {
     wrap_width: Option<u16>,
     editor: Option<String>,
     no_inline_math: bool,
+    large_text: bool,
 }
 
 impl App {
@@ -51,6 +52,7 @@ impl App {
             wrap_width: None,
             editor: None,
             no_inline_math: false,
+            large_text: false,
         }
     }
 
@@ -107,6 +109,13 @@ impl App {
     #[must_use]
     pub const fn with_no_inline_math(mut self, enabled: bool) -> Self {
         self.no_inline_math = enabled;
+        self
+    }
+
+    /// Use Kitty text sizing protocol for large headings.
+    #[must_use]
+    pub const fn with_large_text(mut self, enabled: bool) -> Self {
+        self.large_text = enabled;
         self
     }
 

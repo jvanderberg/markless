@@ -10,13 +10,14 @@ pub mod viewport;
 pub mod widgets;
 
 mod images;
+pub mod large_text;
 mod overlays;
 mod render;
 mod status;
 
 pub use overlays::{link_picker_content_top, link_picker_rect};
 pub use render::line_number_width;
-pub use render::{document_content_width, render, split_main_columns};
+pub use render::{collect_large_text_headings, document_content_width, render, split_main_columns};
 
 pub const DOCUMENT_LEFT_PADDING: u16 = 2;
 pub const TOC_WIDTH_PERCENT: u16 = 30;

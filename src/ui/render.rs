@@ -166,6 +166,40 @@ fn render_browse_toc(model: &Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(toc, area);
 }
 
+/// Collect large-text heading information after rendering the document.
+///
+/// Called from the event loop to overlay OSC 66 sequences after ratatui draws.
+pub fn collect_large_text_headings(
+    model: &Model,
+    area: Rect,
+) -> Vec<super::large_text::LargeTextHeading> {
+    if !model.large_text {
+        return Vec::new();
+    }
+
+    let search_active = model.search_query.is_some();
+    let toast_active = model.active_toast().is_some();
+    let hover_active = model.hovered_link_url.is_some();
+    let footer_rows =
+        1 + u16::from(search_active) + u16::from(toast_active) + u16::from(hover_active);
+    let doc_outer_area = Rect {
+        height: area.height.saturating_sub(footer_rows),
+        ..area
+    };
+    let doc_block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::NONE)
+        .padding(ratatui::widgets::Padding::left(DOCUMENT_LEFT_PADDING));
+    let doc_area = doc_block.inner(doc_outer_area);
+
+    super::large_text::collect_visible_large_headings(
+        model,
+        doc_area.x,
+        doc_area.y,
+        doc_area.width,
+        doc_area.height,
+    )
+}
+
 fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     let search_active = model.search_query.is_some();
     let toast_active = model.active_toast().is_some();
@@ -263,6 +297,44 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     // Clear doc area first so placeholder/image background styles from previous frames do not leak.
     frame.render_widget(Clear, doc_outer_area);
     frame.render_widget(doc, doc_outer_area);
+
+    // Clear cells occupied by large-text headings so ratatui's text doesn't
+    // show underneath the OSC 66 overlay written after draw().
+    if model.large_text {
+        let vp_offset = model.viewport.offset();
+        for heading_ref in model.document.headings() {
+            let scale = super::large_text::heading_scale(heading_ref.level);
+            if scale <= 1 {
+                continue;
+            }
+            let heading_line = heading_ref.line;
+            if heading_line < vp_offset {
+                continue;
+            }
+            let rel_y = heading_line - vp_offset;
+            if rel_y >= doc_area.height as usize {
+                continue;
+            }
+            let frame_buf = frame.buffer_mut();
+            // rel_y is bounded by doc_area.height (u16), safe to truncate
+            #[allow(clippy::cast_possible_truncation)]
+            let rel_y_u16 = rel_y as u16;
+            // Clear `scale` rows for the heading
+            for row_offset in 0..u16::from(scale) {
+                let dst_row = doc_area.y + rel_y_u16 + row_offset;
+                if dst_row >= doc_area.y + doc_area.height {
+                    break;
+                }
+                for col in 0..doc_area.width {
+                    if doc_area.x + col < frame_buf.area.width {
+                        frame_buf[(doc_area.x + col, dst_row)]
+                            .set_symbol(" ")
+                            .set_skip(false);
+                    }
+                }
+            }
+        }
+    }
 
     if model.images_enabled {
         images::render_images(model, frame, doc_area);
