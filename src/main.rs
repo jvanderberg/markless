@@ -291,11 +291,17 @@ fn main() -> Result<()> {
         default_hook(info);
     }));
 
-    // Initialize logging
+    // Initialize logging — suppress usvg font-matching warnings that corrupt
+    // the TUI when mermaid diagrams are rendered.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::WARN.into()),
+                .add_directive(tracing::Level::WARN.into())
+                .add_directive(
+                    "usvg=error"
+                        .parse()
+                        .unwrap_or_else(|_| tracing::Level::ERROR.into()),
+                ),
         )
         .init();
 

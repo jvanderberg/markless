@@ -52,11 +52,22 @@ pub fn truncate_to_fit(text: &str, available_cols: u16, scale: u8) -> &str {
 
 /// Detect whether the current terminal supports Kitty's text sizing protocol.
 ///
-/// Currently uses a simple heuristic: checks for `KITTY_WINDOW_ID` or Ghostty
-/// (`TERM` containing "ghostty"). A more robust approach would use the CPR-based
-/// detection described in the protocol spec.
+/// Checks `KITTY_WINDOW_ID` (always set by Kitty) and falls back to
+/// `TERM_PROGRAM=kitty` or `TERM` containing `xterm-kitty` for environments
+/// where `KITTY_WINDOW_ID` may not propagate (e.g. some SSH sessions).
 pub fn detect_support() -> bool {
-    std::env::var("KITTY_WINDOW_ID").is_ok()
+    if std::env::var("KITTY_WINDOW_ID").is_ok() {
+        return true;
+    }
+    if std::env::var("TERM_PROGRAM")
+        .ok()
+        .is_some_and(|v| v.eq_ignore_ascii_case("kitty"))
+    {
+        return true;
+    }
+    std::env::var("TERM")
+        .ok()
+        .is_some_and(|v| v.contains("xterm-kitty"))
 }
 
 /// Information about a heading that needs post-render large text output.
