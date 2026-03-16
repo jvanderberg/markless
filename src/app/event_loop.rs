@@ -423,8 +423,12 @@ impl App {
                     ),
                 );
 
-                // Clear stale terminal buffer after returning from external process
-                if model.needs_full_redraw {
+                // Clear stale terminal buffer after returning from external process,
+                // or every frame when large text is active. OSC 66 multi-cell
+                // characters live outside ratatui's buffer; without a full clear
+                // ratatui's differential rendering leaves stale fragments when
+                // the viewport scrolls.
+                if model.needs_full_redraw || model.large_text {
                     terminal.clear()?;
                     model.needs_full_redraw = false;
                 }
