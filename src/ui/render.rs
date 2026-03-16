@@ -298,43 +298,10 @@ fn render_document(model: &mut Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, doc_outer_area);
     frame.render_widget(doc, doc_outer_area);
 
-    // Clear cells occupied by large-text headings so ratatui's text doesn't
-    // show underneath the OSC 66 overlay written after draw().
-    if model.large_text {
-        let vp_offset = model.viewport.offset();
-        for heading_ref in model.document.headings() {
-            let scale = super::large_text::heading_scale(heading_ref.level);
-            if scale <= 1 {
-                continue;
-            }
-            let heading_line = heading_ref.line;
-            if heading_line < vp_offset {
-                continue;
-            }
-            let rel_y = heading_line - vp_offset;
-            if rel_y >= doc_area.height as usize {
-                continue;
-            }
-            let frame_buf = frame.buffer_mut();
-            // rel_y is bounded by doc_area.height (u16), safe to truncate
-            #[allow(clippy::cast_possible_truncation)]
-            let rel_y_u16 = rel_y as u16;
-            // Clear `scale` rows for the heading
-            for row_offset in 0..u16::from(scale) {
-                let dst_row = doc_area.y + rel_y_u16 + row_offset;
-                if dst_row >= doc_area.y + doc_area.height {
-                    break;
-                }
-                for col in 0..doc_area.width {
-                    if doc_area.x + col < frame_buf.area.width {
-                        frame_buf[(doc_area.x + col, dst_row)]
-                            .set_symbol(" ")
-                            .set_skip(false);
-                    }
-                }
-            }
-        }
-    }
+    // Large-text headings: ratatui renders heading text at normal size as a
+    // fallback. The post-render step writes OSC 66 sequences on top, which
+    // Kitty replaces with scaled text. In unsupported terminals the normal
+    // text remains visible — no cells are cleared here.
 
     if model.images_enabled {
         images::render_images(model, frame, doc_area);
