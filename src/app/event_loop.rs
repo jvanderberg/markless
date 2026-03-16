@@ -271,6 +271,7 @@ impl App {
         let mut frame_idx: u64 = 0;
         let mut needs_render = true;
         let mut mouse_capture_enabled = false;
+        let mut last_large_text_vp_offset: Option<usize> = None;
 
         loop {
             // Recreate watcher if the viewed file changed (e.g. browse mode navigation)
@@ -423,14 +424,21 @@ impl App {
                     ),
                 );
 
-                // Clear stale terminal buffer after returning from external process,
-                // or every frame when large text is active. OSC 66 multi-cell
-                // characters live outside ratatui's buffer; without a full clear
-                // ratatui's differential rendering leaves stale fragments when
-                // the viewport scrolls.
-                if model.needs_full_redraw || model.large_text {
+                // Clear stale terminal buffer after returning from external process
+                if model.needs_full_redraw {
                     terminal.clear()?;
                     model.needs_full_redraw = false;
+                }
+
+                // When large text is active, force a full clear only when the
+                // viewport scrolls — that's when stale OSC 66 multi-cell
+                // fragments appear. Mouse moves and other repaints don't need it.
+                if model.large_text {
+                    let current_offset = model.viewport.offset();
+                    if last_large_text_vp_offset != Some(current_offset) {
+                        terminal.clear()?;
+                        last_large_text_vp_offset = Some(current_offset);
+                    }
                 }
 
                 // Render
