@@ -355,11 +355,24 @@ impl EditorBuffer {
         }
     }
 
+    /// Snap a byte offset to the nearest valid char boundary at or before `col`.
+    fn snap_to_char_boundary(&self, line_idx: usize, col: usize) -> usize {
+        let line = self.line_at(line_idx).unwrap_or_default();
+        let col = col.min(line.len());
+        // Walk backwards to find a valid char boundary
+        let mut c = col;
+        while c > 0 && !line.is_char_boundary(c) {
+            c -= 1;
+        }
+        c
+    }
+
     fn move_up(&mut self) {
         if self.cursor.line > 0 {
             self.cursor.line -= 1;
             let max_col = self.line_len(self.cursor.line);
-            self.cursor.col = self.cursor.col_memory.min(max_col);
+            self.cursor.col =
+                self.snap_to_char_boundary(self.cursor.line, self.cursor.col_memory.min(max_col));
         }
     }
 
@@ -367,7 +380,8 @@ impl EditorBuffer {
         if self.cursor.line + 1 < self.line_count() {
             self.cursor.line += 1;
             let max_col = self.line_len(self.cursor.line);
-            self.cursor.col = self.cursor.col_memory.min(max_col);
+            self.cursor.col =
+                self.snap_to_char_boundary(self.cursor.line, self.cursor.col_memory.min(max_col));
         }
     }
 }
@@ -882,5 +896,40 @@ mod tests {
         buf.delete_back();
         assert_eq!(buf.line_count(), 1);
         assert_eq!(buf.line_at(0), Some("helloworld".to_string()));
+    }
+
+    // --- UTF-8 boundary safety on vertical movement ---
+
+    #[test]
+    fn test_move_down_snaps_to_char_boundary_multibyte() {
+        // Line 0: "abc" (3 bytes, col_memory=3 after move_end)
+        // Line 1: "αβγ" (6 bytes, each char is 2 bytes)
+        // col_memory=3 is NOT a char boundary in "αβγ" (it's mid-β)
+        let mut buf = EditorBuffer::from_text("abc\nαβγ");
+        buf.move_end(); // col=3 on "abc"
+        assert_eq!(buf.cursor().col, 3);
+        buf.move_cursor(Direction::Down);
+        let col = buf.cursor().col;
+        let line = buf.line_at(1).unwrap();
+        assert!(
+            line.is_char_boundary(col),
+            "cursor col {col} is not a char boundary in {line:?}"
+        );
+    }
+
+    #[test]
+    fn test_move_up_snaps_to_char_boundary_multibyte() {
+        // Line 0: "αβγ" (6 bytes, each char is 2 bytes)
+        // Line 1: "abcde" (5 bytes)
+        // Move to col=5 on line 1, then up: col_memory=5 on "αβγ" is mid-γ
+        let mut buf = EditorBuffer::from_text("αβγ\nabcde");
+        buf.move_to(1, 5); // end of "abcde"
+        buf.move_cursor(Direction::Up);
+        let col = buf.cursor().col;
+        let line = buf.line_at(0).unwrap();
+        assert!(
+            line.is_char_boundary(col),
+            "cursor col {col} is not a char boundary in {line:?}"
+        );
     }
 }

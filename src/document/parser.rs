@@ -2068,7 +2068,9 @@ fn fixup_link_lines(
                     .get(prefix_len..)
                     .unwrap_or("")
                     .trim_end();
-                let portion = &stripped[overlap_start - ls..overlap_end - ls];
+                let portion = stripped
+                    .get(overlap_start - ls..overlap_end - ls)
+                    .unwrap_or("");
                 if first_set {
                     extra.push(LinkRef {
                         text: portion.to_string(),

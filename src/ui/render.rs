@@ -320,21 +320,25 @@ fn render_editor(model: &Model, frame: &mut Frame, area: Rect) {
         let mut spans = vec![Span::styled(line_num, Style::default().fg(Color::DarkGray))];
 
         if line_idx == cursor.line {
-            // Split line at cursor position for cursor rendering
-            let col = cursor.col.min(line_text.len());
+            // Split line at cursor position for cursor rendering.
+            // Snap col to a valid char boundary to avoid panics on multibyte text.
+            let mut col = cursor.col.min(line_text.len());
+            while col > 0 && !line_text.is_char_boundary(col) {
+                col -= 1;
+            }
             let before = &line_text[..col];
-            let cursor_char = line_text.get(col..col + 1).unwrap_or(" ");
-            let after = if col < line_text.len() {
-                &line_text[col + 1..]
-            } else {
-                ""
-            };
+            let cursor_char_str = line_text
+                .get(col..)
+                .and_then(|s| s.chars().next())
+                .map_or_else(|| " ".to_string(), |c| c.to_string());
+            let after_offset = col + cursor_char_str.len();
+            let after = line_text.get(after_offset..).unwrap_or("");
 
             if !before.is_empty() {
                 spans.push(Span::raw(before.to_string()));
             }
             spans.push(Span::styled(
-                cursor_char.to_string(),
+                cursor_char_str,
                 Style::default().bg(Color::White).fg(Color::Black),
             ));
             if !after.is_empty() {
