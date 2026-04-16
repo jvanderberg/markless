@@ -257,6 +257,9 @@ fn create_options() -> Options {
     options.extension.math_dollars = true;
     options.extension.math_code = true;
 
+    // Enable YAML front matter parsing (--- delimited blocks)
+    options.extension.front_matter_delimiter = Some("---".to_string());
+
     options
 }
 
@@ -874,6 +877,20 @@ fn process_node<'a, S: BuildHasher>(
             }
         }
 
+        NodeValue::FrontMatter(raw) => {
+            // Render YAML front matter as a code block with yaml syntax highlighting.
+            // Strip the leading/trailing `---` delimiter lines that comrak includes.
+            let content: String = raw
+                .lines()
+                .filter(|line| line.trim() != "---")
+                .collect::<Vec<_>>()
+                .join("\n");
+            if content.trim().is_empty() {
+                return;
+            }
+            emit_code_block(ctx, &content, Some("yaml"));
+        }
+
         _ => {
             // Process children for unhandled nodes
             for child in node.children() {
@@ -931,6 +948,78 @@ fn extract_display_math_literal<'a>(node: &'a AstNode<'a>) -> Option<String> {
         }
     }
     None
+}
+
+/// Emit a code block with an optional language label and syntax-highlighting registration.
+fn emit_code_block<S: BuildHasher>(
+    ctx: &mut ParseContext<'_, S>,
+    literal: &str,
+    language: Option<&str>,
+) {
+    const CODE_RIGHT_PADDING: usize = 3;
+    let content_width = literal
+        .lines()
+        .map(UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0)
+        .min(ctx.wrap_width.saturating_sub(4).max(1));
+    let title = language.unwrap_or("code");
+    let label = format!(" {title} ");
+    let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
+    let top_label_width = frame_inner_width.min(UnicodeWidthStr::width(label.as_str()));
+    let visible_label: String = label.chars().take(top_label_width).collect();
+    let top = format!(
+        "┌{}{}┐",
+        visible_label,
+        "─".repeat(
+            frame_inner_width.saturating_sub(UnicodeWidthStr::width(visible_label.as_str()))
+        )
+    );
+    ctx.lines.push(RenderedLine::new(top, LineType::CodeBlock));
+
+    let body_start = ctx.lines.len();
+    let raw_lines: Vec<String> = literal.lines().map(ToString::to_string).collect();
+    for raw_line in &raw_lines {
+        let plain_style = InlineStyle {
+            code: true,
+            ..InlineStyle::default()
+        };
+        let spans = vec![InlineSpan::new(raw_line.clone(), plain_style)];
+        let trimmed_spans = truncate_spans(&spans, content_width);
+        let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
+        let padding = " ".repeat(content_width.saturating_sub(trimmed_len) + CODE_RIGHT_PADDING);
+
+        let mut line_spans = Vec::new();
+        line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
+        line_spans.extend(trimmed_spans);
+        line_spans.push(InlineSpan::new(
+            format!("{padding} │"),
+            InlineStyle::default(),
+        ));
+        let content = spans_to_string(&line_spans);
+        ctx.lines.push(RenderedLine::with_spans(
+            content,
+            LineType::CodeBlock,
+            line_spans,
+        ));
+    }
+    let body_end = ctx.lines.len();
+
+    ctx.code_blocks.push(CodeBlockRef {
+        line_range: body_start..body_end,
+        language: language.map(ToString::to_string),
+        raw_lines,
+        highlighted: false,
+        content_width,
+        right_padding: CODE_RIGHT_PADDING,
+    });
+
+    ctx.lines.push(RenderedLine::new(
+        format!("└{}┘", "─".repeat(frame_inner_width)),
+        LineType::CodeBlock,
+    ));
+    ctx.lines
+        .push(RenderedLine::new(String::new(), LineType::Empty));
 }
 
 /// Emit a display math block as a framed text block with Unicode approximation.
@@ -3962,6 +4051,56 @@ mod tests {
         assert!(
             has_x,
             "inline math $x$ before display math should be visible"
+        );
+    }
+
+    #[test]
+    fn test_front_matter_renders_as_yaml_code_block() {
+        let md = "---\ntitle: My Document\nauthor: Jane Doe\n---\n\n# Content";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 20);
+
+        let code_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::CodeBlock)
+            .collect();
+        assert!(
+            !code_lines.is_empty(),
+            "front matter should render as a code block"
+        );
+        assert!(
+            code_lines.iter().any(|l| l.content().contains("title")),
+            "front matter code block should contain the yaml content"
+        );
+    }
+
+    #[test]
+    fn test_front_matter_does_not_render_as_thematic_break() {
+        let md = "---\ntitle: My Document\n---\n\n# Content";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 20);
+
+        assert!(
+            !lines
+                .iter()
+                .any(|l| *l.line_type() == LineType::HorizontalRule),
+            "front matter delimiters should not render as horizontal rules"
+        );
+    }
+
+    #[test]
+    fn test_front_matter_code_block_has_yaml_label() {
+        let md = "---\ntitle: Test\n---\n\n# Heading";
+        let doc = parse(md).unwrap();
+        let lines = doc.visible_lines(0, 20);
+
+        // The code block top border should contain "yaml" as the language label
+        let has_yaml_label = lines
+            .iter()
+            .any(|l| *l.line_type() == LineType::CodeBlock && l.content().contains("yaml"));
+        assert!(
+            has_yaml_label,
+            "front matter code block should have a yaml language label"
         );
     }
 }
