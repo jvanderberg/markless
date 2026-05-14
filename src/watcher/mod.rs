@@ -134,7 +134,7 @@ impl FileWatcher {
                     irrelevant_events += 1;
                     crate::perf::log_event(
                         "watcher.irrelevant",
-                        format!("kind={:?} paths={:?}", ev.kind, ev.paths,),
+                        format!("kind={:?} paths={:?}", ev.kind, ev.paths),
                     );
                 }
                 Err(err) => {

@@ -134,7 +134,12 @@ impl App {
         );
         let (document, effective_file) = if let Some(ref file) = initial_file {
             let raw_bytes = std::fs::read(file)?;
-            let doc = crate::document::prepare_document_from_bytes(file, raw_bytes, layout_width);
+            let doc = crate::document::prepare_document_from_bytes_with_widths(
+                file,
+                raw_bytes,
+                layout_width,
+                terminal_content_width,
+            );
             (doc, file.clone())
         } else {
             // No viewable file found; show empty document

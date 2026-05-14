@@ -251,9 +251,23 @@ pub fn prepare_document_from_bytes(
     bytes: Vec<u8>,
     layout_width: u16,
 ) -> Document {
+    prepare_document_from_bytes_with_widths(file_path, bytes, layout_width, layout_width)
+}
+
+/// Like [`prepare_document_from_bytes`] but with separate widths for prose
+/// wrapping and the document maximum width.
+///
+/// `wrap_width` controls where prose word-wraps. `max_width` is the upper
+/// bound for elements that don't word-wrap (code blocks, tables).
+pub fn prepare_document_from_bytes_with_widths(
+    file_path: &std::path::Path,
+    bytes: Vec<u8>,
+    wrap_width: u16,
+    max_width: u16,
+) -> Document {
     if is_image_file(file_path) {
         let md = image_markdown(file_path);
-        return Document::parse_with_layout(&md, layout_width)
+        return Document::parse_with_widths(&md, wrap_width, max_width)
             .unwrap_or_else(|_| Document::empty());
     }
     if !is_binary(&bytes) {
@@ -261,7 +275,7 @@ pub fn prepare_document_from_bytes(
             Ok(s) => prepare_content(file_path, s),
             Err(e) => prepare_content(file_path, e.to_string()),
         };
-        return Document::parse_with_layout(&content, layout_width)
+        return Document::parse_with_widths(&content, wrap_width, max_width)
             .unwrap_or_else(|_| Document::empty());
     }
     let name = file_path
