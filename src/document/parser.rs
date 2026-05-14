@@ -567,12 +567,18 @@ fn process_node<'a, S: BuildHasher>(
                 }
                 // Fall through to normal code block rendering if CSV parsing fails
             }
+            // When the longest line doesn't fit, clip to `max_width - 2` so
+            // visible content extends to the edge of the screen. The 5 trailing
+            // frame chars (3 padding + space + `│`) get clipped by the
+            // terminal — the missing right `│` is the visual cue that the
+            // line was truncated. Reserving more room (e.g. `- 4`) just
+            // leaves dead whitespace before the clipped border.
             let content_width = literal
                 .lines()
                 .map(UnicodeWidthStr::width)
                 .max()
                 .unwrap_or(0)
-                .min(ctx.code_block_max_width.saturating_sub(4).max(1));
+                .min(ctx.code_block_max_width.saturating_sub(2).max(1));
             let title = language.unwrap_or("code");
             let label = format!(" {title} ");
             let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
@@ -2818,8 +2824,10 @@ mod tests {
 
     #[test]
     fn test_code_block_clips_to_max_width_when_line_exceeds_terminal() {
-        // When even the terminal width can't fit the line, code blocks are
-        // truncated to max_width - 4 (room for │ borders + padding).
+        // When even the terminal width can't fit the line, content is clipped
+        // to max_width - 2 (just leaving room for the left `│ `). The right
+        // border and trailing padding overflow past max_width and get
+        // clipped by the terminal; the missing right `│` is the visual cue.
         let long_line = "x".repeat(200);
         let md = format!("```\n{long_line}\n```");
         let doc = Document::parse_with_widths(&md, 80, 100).unwrap();
@@ -2836,8 +2844,8 @@ mod tests {
             .expect("code line should have │ borders");
         let x_count = stripped.chars().filter(|c| *c == 'x').count();
         assert_eq!(
-            x_count, 96,
-            "expected line truncated to max_width-4=96; got {x_count}"
+            x_count, 98,
+            "expected line truncated to max_width-2=98; got {x_count}"
         );
     }
 
