@@ -114,26 +114,24 @@ impl App {
                     return Some(Message::UpdateSelection(line));
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => {
-                if model.selection.is_some() {
-                    if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, true) {
-                        if model.selection_dragging() {
-                            return Some(Message::EndSelection(line));
-                        }
-                        let content_col = mouse
-                            .column
-                            .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
-                            as usize;
-                        if Self::link_at_column(model, line, content_col).is_some() {
-                            return Some(Message::FollowLinkAtLine(line, Some(content_col)));
-                        }
-                        if image_at_line(model, line) {
-                            return Some(Message::FollowLinkAtLine(line, None));
-                        }
-                        return Some(Message::ClearSelection);
+            MouseEventKind::Up(MouseButton::Left) if model.selection.is_some() => {
+                if let Some(line) = doc_line_for_row(model, doc_area, mouse.row, true) {
+                    if model.selection_dragging() {
+                        return Some(Message::EndSelection(line));
+                    }
+                    let content_col = mouse
+                        .column
+                        .saturating_sub(doc_area.x + crate::ui::DOCUMENT_LEFT_PADDING)
+                        as usize;
+                    if Self::link_at_column(model, line, content_col).is_some() {
+                        return Some(Message::FollowLinkAtLine(line, Some(content_col)));
+                    }
+                    if image_at_line(model, line) {
+                        return Some(Message::FollowLinkAtLine(line, None));
                     }
                     return Some(Message::ClearSelection);
                 }
+                return Some(Message::ClearSelection);
             }
             _ => {}
         }
@@ -305,25 +303,23 @@ impl App {
 
         // Global keys — always apply regardless of TOC focus
         match key.code {
-            KeyCode::Char(' ') | KeyCode::PageDown => {
-                if model.viewport.can_scroll_down() {
-                    return Some(Message::PageDown);
-                }
+            KeyCode::Char(' ') | KeyCode::PageDown if model.viewport.can_scroll_down() => {
+                return Some(Message::PageDown);
             }
-            KeyCode::Char('b') | KeyCode::PageUp => {
-                if model.viewport.can_scroll_up() {
-                    return Some(Message::PageUp);
-                }
+            KeyCode::Char('b') | KeyCode::PageUp if model.viewport.can_scroll_up() => {
+                return Some(Message::PageUp);
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if model.viewport.can_scroll_down() {
-                    return Some(Message::HalfPageDown);
-                }
+            KeyCode::Char('d')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && model.viewport.can_scroll_down() =>
+            {
+                return Some(Message::HalfPageDown);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if model.viewport.can_scroll_up() {
-                    return Some(Message::HalfPageUp);
-                }
+            KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && model.viewport.can_scroll_up() =>
+            {
+                return Some(Message::HalfPageUp);
             }
             KeyCode::Char('g') | KeyCode::Home => return Some(Message::GoToTop),
             KeyCode::Char('G') | KeyCode::End => return Some(Message::GoToBottom),
