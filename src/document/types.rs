@@ -262,6 +262,23 @@ impl Document {
         &self.source
     }
 
+    /// Return the original (untruncated, undecorated) source line for a code
+    /// block body line at the given document index. Returns `None` for lines
+    /// that aren't inside a code block body (including the top/bottom border
+    /// lines, which sit just outside the recorded `line_range`).
+    ///
+    /// Used by selection/copy so that copied code matches the source even
+    /// when the rendered line was truncated to fit the terminal.
+    pub fn code_block_raw_line(&self, line_idx: usize) -> Option<&str> {
+        for block in &self.code_blocks {
+            if block.line_range.contains(&line_idx) {
+                let offset = line_idx - block.line_range.start;
+                return block.raw_lines.get(offset).map(String::as_str);
+            }
+        }
+        None
+    }
+
     /// Generate the text content for a hex line at the given document index.
     ///
     /// Returns the header line content for header indices, or generates the

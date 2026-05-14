@@ -932,6 +932,12 @@ impl Model {
         let range = self.selection_range()?;
         let mut lines = Vec::new();
         for idx in range {
+            // Code block body lines: copy the original source, not the
+            // (possibly truncated, frame-decorated) rendered text.
+            if let Some(raw) = self.document.code_block_raw_line(idx) {
+                lines.push(raw.to_string());
+                continue;
+            }
             if let Some(line) = self.document.line_at(idx) {
                 let link_refs: Vec<_> = self
                     .document

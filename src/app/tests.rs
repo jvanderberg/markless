@@ -256,6 +256,38 @@ fn test_selected_text_strips_code_block_borders() {
 }
 
 #[test]
+fn test_selected_text_returns_raw_code_line_even_when_rendering_truncates() {
+    // Regression for #55: when a code line is wider than the terminal, the
+    // rendered line is truncated to fit (with no horizontal scroll). Copying
+    // it should still yield the *original* source line, not the truncated
+    // visible text — that's the main complaint in the bug report.
+    let long_line = "abcdefghij".repeat(20); // 200 chars
+    let md = format!("```\n{long_line}\n```");
+    // Terminal/wrap width 80 → rendered code body capped at 76 chars.
+    let doc = Document::parse_with_layout(&md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+
+    let body_idx = (0..model.document.line_count())
+        .find(|i| {
+            model
+                .document
+                .line_at(*i)
+                .is_some_and(|l| l.content().contains("abc"))
+        })
+        .expect("code body line missing");
+
+    model = update(model, Message::StartSelection(body_idx));
+    model = update(model, Message::UpdateSelection(body_idx));
+    model = update(model, Message::EndSelection(body_idx));
+
+    let (text, _lines) = model.selected_text().unwrap();
+    assert_eq!(
+        text, long_line,
+        "copied text should be the full original line, not the truncated rendered one"
+    );
+}
+
+#[test]
 fn test_selection_clears_after_mouse_up() {
     let doc = Document::parse("# Title\n\nLine one\n\nLine two").unwrap();
     let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
