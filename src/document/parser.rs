@@ -313,6 +313,10 @@ fn create_options() -> Options {
     options.extension.math_dollars = true;
     options.extension.math_code = true;
 
+    // Parse YAML front matter (---\n...\n---) as a FrontMatter node instead of
+    // a thematic break followed by paragraph text. Issue #51.
+    options.extension.front_matter_delimiter = Some("---".to_string());
+
     options
 }
 
@@ -484,7 +488,6 @@ fn process_node<'a, S: BuildHasher>(
         }
 
         NodeValue::CodeBlock(code_block) => {
-            const CODE_RIGHT_PADDING: usize = 3;
             let info = code_block.info.clone();
             let literal = code_block.literal.clone();
             let language = info.split_whitespace().next().filter(|s| !s.is_empty());
@@ -567,77 +570,15 @@ fn process_node<'a, S: BuildHasher>(
                 }
                 // Fall through to normal code block rendering if CSV parsing fails
             }
-            // When the longest line doesn't fit, clip to `max_width - 2` so
-            // visible content extends to the edge of the screen. The 5 trailing
-            // frame chars (3 padding + space + `│`) get clipped by the
-            // terminal — the missing right `│` is the visual cue that the
-            // line was truncated. Reserving more room (e.g. `- 4`) just
-            // leaves dead whitespace before the clipped border.
-            let content_width = literal
-                .lines()
-                .map(UnicodeWidthStr::width)
-                .max()
-                .unwrap_or(0)
-                .min(ctx.code_block_max_width.saturating_sub(2).max(1));
-            let title = language.unwrap_or("code");
-            let label = format!(" {title} ");
-            let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
-            let top_label_width = frame_inner_width.min(UnicodeWidthStr::width(label.as_str()));
-            let visible_label: String = label.chars().take(top_label_width).collect();
-            let top = format!(
-                "┌{}{}┐",
-                visible_label,
-                "─".repeat(
-                    frame_inner_width
-                        .saturating_sub(UnicodeWidthStr::width(visible_label.as_str()))
-                )
-            );
-            ctx.lines.push(RenderedLine::new(top, LineType::CodeBlock));
+            emit_code_block(ctx, &literal, language);
+        }
 
-            let body_start = ctx.lines.len();
-            let raw_lines: Vec<String> = literal.lines().map(ToString::to_string).collect();
-            for raw_line in &raw_lines {
-                let plain_style = InlineStyle {
-                    code: true,
-                    ..InlineStyle::default()
-                };
-                let spans = vec![InlineSpan::new(raw_line.clone(), plain_style)];
-                let trimmed_spans = truncate_spans(&spans, content_width);
-                let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
-                let padding =
-                    " ".repeat(content_width.saturating_sub(trimmed_len) + CODE_RIGHT_PADDING);
-
-                let mut line_spans = Vec::new();
-                line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
-                line_spans.extend(trimmed_spans);
-                line_spans.push(InlineSpan::new(
-                    format!("{padding} │"),
-                    InlineStyle::default(),
-                ));
-                let content = spans_to_string(&line_spans);
-                ctx.lines.push(RenderedLine::with_spans(
-                    content,
-                    LineType::CodeBlock,
-                    line_spans,
-                ));
-            }
-            let body_end = ctx.lines.len();
-
-            ctx.code_blocks.push(CodeBlockRef {
-                line_range: body_start..body_end,
-                language: language.map(ToString::to_string),
-                raw_lines,
-                highlighted: false,
-                content_width,
-                right_padding: CODE_RIGHT_PADDING,
-            });
-
-            ctx.lines.push(RenderedLine::new(
-                format!("└{}┘", "─".repeat(frame_inner_width)),
-                LineType::CodeBlock,
-            ));
-            ctx.lines
-                .push(RenderedLine::new(String::new(), LineType::Empty));
+        NodeValue::FrontMatter(literal) => {
+            // Strip the `---` delimiters and trailing blank line that comrak
+            // includes in the FrontMatter literal so only the YAML body
+            // appears inside the code frame.
+            let body = strip_front_matter_delimiters(literal);
+            emit_code_block(ctx, body, Some("yaml"));
         }
 
         NodeValue::List(list) => {
@@ -994,6 +935,110 @@ fn extract_display_math_literal<'a>(node: &'a AstNode<'a>) -> Option<String> {
         }
     }
     None
+}
+
+/// Emit a framed code block with the given literal text and language label.
+///
+/// Shared between fenced code blocks and YAML front matter. The frame has a
+/// `language` label in the top border, `│ … │` body lines, and lazy syntax
+/// highlighting is registered against `ctx.code_blocks`.
+fn emit_code_block<S: BuildHasher>(
+    ctx: &mut ParseContext<'_, S>,
+    literal: &str,
+    language: Option<&str>,
+) {
+    const CODE_RIGHT_PADDING: usize = 3;
+
+    // When the longest line doesn't fit, clip to `max_width - 2` so visible
+    // content extends to the edge of the screen. The 5 trailing frame chars
+    // (3 padding + space + `│`) get clipped by the terminal — the missing
+    // right `│` is the visual cue that the line was truncated. Reserving
+    // more room (e.g. `- 4`) just leaves dead whitespace before the clipped
+    // border.
+    let content_width = literal
+        .lines()
+        .map(UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0)
+        .min(ctx.code_block_max_width.saturating_sub(2).max(1));
+    let title = language.unwrap_or("code");
+    let label = format!(" {title} ");
+    let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
+    let top_label_width = frame_inner_width.min(UnicodeWidthStr::width(label.as_str()));
+    let visible_label: String = label.chars().take(top_label_width).collect();
+    let top = format!(
+        "┌{}{}┐",
+        visible_label,
+        "─".repeat(
+            frame_inner_width.saturating_sub(UnicodeWidthStr::width(visible_label.as_str()))
+        )
+    );
+    ctx.lines.push(RenderedLine::new(top, LineType::CodeBlock));
+
+    let body_start = ctx.lines.len();
+    let raw_lines: Vec<String> = literal.lines().map(ToString::to_string).collect();
+    for raw_line in &raw_lines {
+        let plain_style = InlineStyle {
+            code: true,
+            ..InlineStyle::default()
+        };
+        let spans = vec![InlineSpan::new(raw_line.clone(), plain_style)];
+        let trimmed_spans = truncate_spans(&spans, content_width);
+        let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
+        let padding = " ".repeat(content_width.saturating_sub(trimmed_len) + CODE_RIGHT_PADDING);
+
+        let mut line_spans = Vec::new();
+        line_spans.push(InlineSpan::new("│ ".to_string(), InlineStyle::default()));
+        line_spans.extend(trimmed_spans);
+        line_spans.push(InlineSpan::new(
+            format!("{padding} │"),
+            InlineStyle::default(),
+        ));
+        let content = spans_to_string(&line_spans);
+        ctx.lines.push(RenderedLine::with_spans(
+            content,
+            LineType::CodeBlock,
+            line_spans,
+        ));
+    }
+    let body_end = ctx.lines.len();
+
+    ctx.code_blocks.push(CodeBlockRef {
+        line_range: body_start..body_end,
+        language: language.map(ToString::to_string),
+        raw_lines,
+        highlighted: false,
+        content_width,
+        right_padding: CODE_RIGHT_PADDING,
+    });
+
+    ctx.lines.push(RenderedLine::new(
+        format!("└{}┘", "─".repeat(frame_inner_width)),
+        LineType::CodeBlock,
+    ));
+    ctx.lines
+        .push(RenderedLine::new(String::new(), LineType::Empty));
+}
+
+/// Strip the leading and trailing `---` delimiter lines (and trailing blank
+/// line) that comrak includes in the front-matter literal, leaving only the
+/// YAML body.
+fn strip_front_matter_delimiters(literal: &str) -> &str {
+    let after_first = literal
+        .strip_prefix("---\r\n")
+        .or_else(|| literal.strip_prefix("---\n"))
+        .unwrap_or(literal);
+    // Find the closing `\n---\r?\n` and take everything before it.
+    let closing = after_first
+        .rfind("\n---\r\n")
+        .map(|i| (i, "\n---\r\n".len()))
+        .or_else(|| after_first.rfind("\n---\n").map(|i| (i, "\n---\n".len())))
+        .or_else(|| after_first.rfind("\n---").map(|i| (i, "\n---".len())));
+    let body = match closing {
+        Some((idx, _)) => &after_first[..idx],
+        None => after_first,
+    };
+    body.trim_end_matches(['\n', '\r'])
 }
 
 /// Emit a display math block as a framed text block with Unicode approximation.
@@ -2758,6 +2803,138 @@ mod tests {
             .expect("Code line missing");
         let spans = code_line.spans().expect("Expected code line spans");
         assert!(spans.iter().any(|s| s.style().fg.is_some()));
+    }
+
+    #[test]
+    fn test_strip_front_matter_delimiters_handles_unix_and_windows_endings() {
+        assert_eq!(
+            super::strip_front_matter_delimiters("---\nfoo: 1\nbar: 2\n---\n"),
+            "foo: 1\nbar: 2"
+        );
+        assert_eq!(
+            super::strip_front_matter_delimiters("---\r\nfoo: 1\r\nbar: 2\r\n---\r\n"),
+            "foo: 1\r\nbar: 2"
+        );
+        // Missing trailing blank line (comrak doesn't always include one).
+        assert_eq!(
+            super::strip_front_matter_delimiters("---\nfoo: 1\n---"),
+            "foo: 1"
+        );
+    }
+
+    #[test]
+    fn test_front_matter_renders_as_yaml_code_block() {
+        // Issue #51: YAML front matter delimited by `---` was rendered as two
+        // horizontal rules with the keys/values bleeding through as paragraph
+        // text. It should render as a single framed YAML code block.
+        let md = "---\ntitle: My Document\nauthor: Jane\n---\n\n# Body\n";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 20);
+
+        // No horizontal rules from the `---` delimiters.
+        assert!(
+            !lines
+                .iter()
+                .any(|l| *l.line_type() == LineType::HorizontalRule),
+            "front matter delimiters should not render as horizontal rules"
+        );
+
+        // Front matter content appears inside a framed code block.
+        let code_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| *l.line_type() == LineType::CodeBlock)
+            .collect();
+        assert!(
+            code_lines.iter().any(|l| l.content().contains("title:")),
+            "front matter title key should appear inside the code block"
+        );
+        assert!(
+            code_lines.iter().any(|l| l.content().contains("author:")),
+            "front matter author key should appear inside the code block"
+        );
+
+        // Frame should be labeled `yaml` so the language is visible to the user.
+        let top = code_lines
+            .first()
+            .expect("code block should have a top border");
+        assert!(
+            top.content().contains(" yaml "),
+            "front matter frame should be labeled `yaml`; got {:?}",
+            top.content()
+        );
+
+        // The body content should not leak as paragraph text (regression check
+        // for the original bug where keys appeared verbatim in the document).
+        assert!(
+            !lines.iter().any(|l| {
+                *l.line_type() == LineType::Paragraph && l.content().contains("title: My Document")
+            }),
+            "front matter keys should not appear as paragraph text"
+        );
+
+        // The body heading after the front matter should still render.
+        assert!(
+            lines
+                .iter()
+                .any(|l| *l.line_type() == LineType::Heading(1) && l.content().contains("Body")),
+            "heading after front matter should still render"
+        );
+    }
+
+    #[test]
+    fn test_horizontal_rule_in_body_still_renders_as_thematic_break() {
+        // Detection is positional: `---` only counts as a front-matter opener
+        // when it's the very first line of the file. A horizontal rule that
+        // happens to sit in the middle of a document must still render as one.
+        let md = "# Heading\n\nSome prose.\n\n---\n\nMore prose.\n";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 30);
+
+        assert!(
+            lines
+                .iter()
+                .any(|l| *l.line_type() == LineType::HorizontalRule),
+            "mid-document `---` should still render as a horizontal rule"
+        );
+        // Nothing should leak into a code block from a mid-document rule.
+        assert!(
+            !lines.iter().any(|l| *l.line_type() == LineType::CodeBlock),
+            "a horizontal rule should not be misread as front matter"
+        );
+    }
+
+    #[test]
+    fn test_dashes_after_blank_line_are_not_front_matter() {
+        // If the document doesn't start with `---` on line 1 (e.g. there's a
+        // blank line first), comrak will not treat it as front matter.
+        let md = "\n---\nfoo: bar\n---\n\n# Body\n";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 30);
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.content().contains(" yaml ") && l.content().starts_with('┌')),
+            "delimiters not at line 1 should NOT be parsed as front matter"
+        );
+    }
+
+    #[test]
+    fn test_unclosed_front_matter_falls_back_to_normal_parsing() {
+        // Without a matching closing `---`, comrak's split function returns
+        // None and we fall back to the default (thematic break + paragraphs).
+        let md = "---\nfoo: bar\n\n# Heading\n";
+        let doc = Document::parse_with_layout(md, 80).unwrap();
+        let lines = doc.visible_lines(0, 30);
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.content().contains(" yaml ") && l.content().starts_with('┌')),
+            "front matter without a closing delimiter should not be detected"
+        );
+        assert!(
+            lines.iter().any(|l| *l.line_type() == LineType::Heading(1)),
+            "the heading should still render in the fallback path"
+        );
     }
 
     #[test]
