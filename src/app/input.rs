@@ -422,7 +422,7 @@ impl App {
             KeyCode::Enter => Some(Message::EditorSplitLine),
             KeyCode::Backspace => Some(Message::EditorDeleteBack),
             KeyCode::Delete => Some(Message::EditorDeleteForward),
-            KeyCode::Tab => Some(Message::EditorInsertChar('\t')),
+            KeyCode::Tab => Some(Message::EditorInsertTab),
             KeyCode::Char(c) if !ctrl => Some(Message::EditorInsertChar(c)),
 
             _ => None,

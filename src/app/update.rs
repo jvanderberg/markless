@@ -114,6 +114,8 @@ pub enum Message {
     ExitEditMode,
     /// Insert a character at the cursor
     EditorInsertChar(char),
+    /// Insert spaces to advance to the next tab stop (Tab key, smart-tab behavior)
+    EditorInsertTab,
     /// Delete character before cursor (Backspace)
     EditorDeleteBack,
     /// Delete character at cursor (Delete)
@@ -482,6 +484,18 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         Message::EditorInsertChar(ch) => {
             if let Some(buf) = &mut model.editor_buffer {
                 buf.insert_char(ch);
+                editor_ensure_cursor_visible(&mut model);
+            }
+        }
+        Message::EditorInsertTab => {
+            if let Some(buf) = &mut model.editor_buffer {
+                let cursor = buf.cursor();
+                let line = buf.line_at(cursor.line).unwrap_or_default();
+                let prefix_end = cursor.col.min(line.len());
+                let prefix = line.get(..prefix_end).unwrap_or("");
+                let visual_col = crate::ui::visual_col_after(prefix, 0);
+                let n = crate::ui::EDITOR_TAB_WIDTH - (visual_col % crate::ui::EDITOR_TAB_WIDTH);
+                buf.insert_str(&" ".repeat(n));
                 editor_ensure_cursor_visible(&mut model);
             }
         }

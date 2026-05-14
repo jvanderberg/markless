@@ -1,8 +1,40 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::Model;
 use crate::document::LineType;
+
+/// Visual width of a tab character in the editor.
+pub const EDITOR_TAB_WIDTH: usize = 4;
+
+/// Expand `\t` characters in `text` to spaces, advancing to the next
+/// `EDITOR_TAB_WIDTH` tab stop. Tracks running visual column so callers can
+/// chain segments (e.g. before/after cursor).
+///
+/// Returns the expanded string and the ending visual column.
+pub fn expand_tabs(text: &str, start_col: usize) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let mut col = start_col;
+    for c in text.chars() {
+        if c == '\t' {
+            let n = EDITOR_TAB_WIDTH - (col % EDITOR_TAB_WIDTH);
+            for _ in 0..n {
+                out.push(' ');
+            }
+            col += n;
+        } else {
+            out.push(c);
+            col += UnicodeWidthChar::width(c).unwrap_or(0);
+        }
+    }
+    (out, col)
+}
+
+/// Visual column reached after rendering `text` starting from `start_col`.
+pub fn visual_col_after(text: &str, start_col: usize) -> usize {
+    expand_tabs(text, start_col).1
+}
 
 use super::{
     DOC_WIDTH_PERCENT, DOCUMENT_LEFT_PADDING, TOC_WIDTH_PERCENT, images, overlays, status,
@@ -326,7 +358,7 @@ fn render_editor(model: &Model, frame: &mut Frame, area: Rect) {
             while col > 0 && !line_text.is_char_boundary(col) {
                 col -= 1;
             }
-            let before = &line_text[..col];
+            let before = line_text.get(..col).unwrap_or("");
             let cursor_char_str = line_text
                 .get(col..)
                 .and_then(|s| s.chars().next())
@@ -334,18 +366,35 @@ fn render_editor(model: &Model, frame: &mut Frame, area: Rect) {
             let after_offset = col + cursor_char_str.len();
             let after = line_text.get(after_offset..).unwrap_or("");
 
-            if !before.is_empty() {
-                spans.push(Span::raw(before.to_string()));
+            let cursor_style = Style::default().bg(Color::White).fg(Color::Black);
+
+            let (before_expanded, mut vcol) = expand_tabs(before, 0);
+            if !before_expanded.is_empty() {
+                spans.push(Span::raw(before_expanded));
             }
-            spans.push(Span::styled(
-                cursor_char_str,
-                Style::default().bg(Color::White).fg(Color::Black),
-            ));
-            if !after.is_empty() {
-                spans.push(Span::raw(after.to_string()));
+
+            if cursor_char_str == "\t" {
+                // Tab under cursor: highlight one cell at the tab's start,
+                // fill the remainder of the tab stop with plain spaces.
+                let n = EDITOR_TAB_WIDTH - (vcol % EDITOR_TAB_WIDTH);
+                spans.push(Span::styled(" ".to_string(), cursor_style));
+                if n > 1 {
+                    spans.push(Span::raw(" ".repeat(n - 1)));
+                }
+                vcol += n;
+            } else {
+                let w = UnicodeWidthStr::width(cursor_char_str.as_str()).max(1);
+                spans.push(Span::styled(cursor_char_str, cursor_style));
+                vcol += w;
+            }
+
+            let (after_expanded, _) = expand_tabs(after, vcol);
+            if !after_expanded.is_empty() {
+                spans.push(Span::raw(after_expanded));
             }
         } else {
-            spans.push(Span::raw(line_text));
+            let (expanded, _) = expand_tabs(&line_text, 0);
+            spans.push(Span::raw(expanded));
         }
 
         content.push(Line::from(spans));
