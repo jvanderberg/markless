@@ -2276,7 +2276,7 @@ dependencies = [
 
 [[package]]
 name = "markless"
-version = "0.9.27"
+version = "0.9.28"
 dependencies = [
  "anyhow",
  "base64",
