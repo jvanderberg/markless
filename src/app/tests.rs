@@ -2354,6 +2354,150 @@ fn test_editor_insert_char() {
 }
 
 #[test]
+fn test_editor_insert_tab_at_start_inserts_four_spaces() {
+    let model = create_test_model();
+    let model = enter_edit_mode(model);
+    let model = update(model, Message::EditorInsertTab);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.text().starts_with("    "), "got: {:?}", buf.text());
+    assert_eq!(buf.cursor().col, 4);
+}
+
+#[test]
+fn test_editor_insert_tab_snaps_to_next_tab_stop() {
+    // At col 1, Tab should insert only 3 spaces (reach col 4).
+    let model = create_test_model();
+    let model = enter_edit_mode(model);
+    let model = update(model, Message::EditorInsertChar('X'));
+    let model = update(model, Message::EditorInsertTab);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.text().starts_with("X   "), "got: {:?}", buf.text());
+    assert_eq!(buf.cursor().col, 4);
+}
+
+#[test]
+fn test_editor_preserves_tabs_full_input_pipeline() {
+    // Drives the full input pipeline (handle_key + update + side effects)
+    // to catch any conversion that the message-level test misses.
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("tabs.md");
+    let original = "\thello\nworld\n";
+    std::fs::write(&path, original).unwrap();
+
+    let doc = Document::parse(original).unwrap();
+    let mut model = Model::new(path.clone(), doc, (80, 24));
+    let mut watcher = None;
+
+    let send = |model: &mut Model,
+                watcher: &mut Option<crate::watcher::FileWatcher>,
+                code: KeyCode,
+                mods: KeyModifiers| {
+        let key = event::KeyEvent::new(code, mods);
+        if let Some(msg) = App::handle_key(key, model) {
+            let new_model = update(std::mem::replace(model, create_test_model()), msg.clone());
+            *model = new_model;
+            App::handle_message_side_effects(model, watcher, &msg);
+        }
+    };
+
+    // Enter edit mode
+    send(
+        &mut model,
+        &mut watcher,
+        KeyCode::Char('e'),
+        KeyModifiers::NONE,
+    );
+    assert!(model.editor_mode, "should be in edit mode");
+    assert!(
+        model.editor_buffer.as_ref().unwrap().text().contains('\t'),
+        "buffer should have tab after entering edit mode, got: {:?}",
+        model.editor_buffer.as_ref().unwrap().text()
+    );
+
+    // Move down to line 2, end, type X
+    send(&mut model, &mut watcher, KeyCode::Down, KeyModifiers::NONE);
+    send(&mut model, &mut watcher, KeyCode::End, KeyModifiers::NONE);
+    send(
+        &mut model,
+        &mut watcher,
+        KeyCode::Char('X'),
+        KeyModifiers::NONE,
+    );
+
+    // Ctrl+S save
+    send(
+        &mut model,
+        &mut watcher,
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    );
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains('\t'),
+        "tab should survive: got {:?}",
+        on_disk
+    );
+    assert!(on_disk.contains("worldX"), "edit should be saved");
+}
+
+#[test]
+fn test_editor_preserves_tabs_through_edit_and_save() {
+    // Repro: open a file with tabs, edit a *different* line, save.
+    // Tabs in the unedited line must survive the round-trip.
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("tabs.md");
+    let original = "\thello\nworld\n";
+    std::fs::write(&path, original).unwrap();
+
+    let doc = Document::parse(original).unwrap();
+    let model = Model::new(path.clone(), doc, (80, 24));
+    let mut model = enter_edit_mode(model);
+
+    // Sanity: buffer loaded with the tab intact
+    assert!(
+        model.editor_buffer.as_ref().unwrap().text().contains('\t'),
+        "buffer should contain the tab after load"
+    );
+
+    // Move to line 2 and append an X
+    model = update(
+        model,
+        Message::EditorMoveCursor(crate::editor::Direction::Down),
+    );
+    model = update(model, Message::EditorMoveEnd);
+    model = update(model, Message::EditorInsertChar('X'));
+
+    let mut watcher = None;
+    App::handle_message_side_effects(&mut model, &mut watcher, &Message::EditorSave);
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains('\t'),
+        "tab on the unedited line should survive save, got: {:?}",
+        on_disk
+    );
+    assert!(on_disk.contains("worldX"), "edit should be saved");
+}
+
+#[test]
+fn test_editor_insert_tab_at_exact_stop_inserts_full_width() {
+    // At col 4 (already on a tab stop), Tab should insert a full 4 spaces.
+    let model = create_test_model();
+    let mut model = enter_edit_mode(model);
+    for ch in ['A', 'B', 'C', 'D'] {
+        model = update(model, Message::EditorInsertChar(ch));
+    }
+    let model = update(model, Message::EditorInsertTab);
+
+    let buf = model.editor_buffer.as_ref().unwrap();
+    assert!(buf.text().starts_with("ABCD    "), "got: {:?}", buf.text());
+    assert_eq!(buf.cursor().col, 8);
+}
+
+#[test]
 fn test_editor_delete_back() {
     let model = create_test_model();
     let model = enter_edit_mode(model);

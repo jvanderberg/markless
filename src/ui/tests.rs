@@ -1155,3 +1155,92 @@ fn test_help_overlay_scroll_clamps() {
         "Config section should be visible at max scroll"
     );
 }
+
+#[test]
+fn test_expand_tabs_at_start() {
+    let (out, vcol) = super::render::expand_tabs("\thello", 0);
+    assert_eq!(out, "    hello");
+    assert_eq!(vcol, 9);
+}
+
+#[test]
+fn test_expand_tabs_partial_stop() {
+    // "ab" → vcol 2, then \t expands to 2 spaces (to reach 4)
+    let (out, vcol) = super::render::expand_tabs("ab\tc", 0);
+    assert_eq!(out, "ab  c");
+    assert_eq!(vcol, 5);
+}
+
+#[test]
+fn test_expand_tabs_with_start_col() {
+    // Starting at vcol 1, a tab should expand by 3 to reach vcol 4
+    let (out, vcol) = super::render::expand_tabs("\t", 1);
+    assert_eq!(out, "   ");
+    assert_eq!(vcol, 4);
+}
+
+#[test]
+fn test_expand_tabs_no_tabs() {
+    let (out, vcol) = super::render::expand_tabs("plain", 3);
+    assert_eq!(out, "plain");
+    assert_eq!(vcol, 8);
+}
+
+#[test]
+fn test_editor_renders_existing_tab_as_spaces() {
+    let md = "\thello";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    let mut watcher = None;
+    crate::app::App::handle_message_side_effects(
+        &mut model,
+        &mut watcher,
+        &crate::app::Message::EnterEditMode,
+    );
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let first_row: String = (0..buffer.area.width)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol().to_string())
+        .collect();
+
+    assert!(
+        first_row.contains("    hello") || first_row.contains(" hello"),
+        "Tab should render as spaces to the next tab stop, got: '{first_row}'"
+    );
+    assert!(
+        !first_row.contains('\t'),
+        "Raw tab byte should not appear in rendered output, got: '{first_row}'"
+    );
+}
+
+#[test]
+fn test_editor_renders_tab_mid_line_to_tab_stop() {
+    // "ab\tc": tab at vcol 2 should expand 2 spaces to reach vcol 4,
+    // so the rendered text contains "ab  c".
+    let md = "ab\tc";
+    let doc = Document::parse(md).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (80, 24));
+    model = crate::app::update(model, crate::app::Message::EnterEditMode);
+    let mut watcher = None;
+    crate::app::App::handle_message_side_effects(
+        &mut model,
+        &mut watcher,
+        &crate::app::Message::EnterEditMode,
+    );
+
+    let mut terminal = create_test_terminal();
+    terminal.draw(|frame| render(&mut model, frame)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let first_row: String = (0..buffer.area.width)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol().to_string())
+        .collect();
+    assert!(
+        first_row.contains("ab  c"),
+        "Tab mid-line should expand to next tab stop, got: '{first_row}'"
+    );
+}
