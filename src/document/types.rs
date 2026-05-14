@@ -347,8 +347,7 @@ impl Document {
                 &block.raw_lines.join("\n"),
             );
 
-            for (line_idx, spans) in
-                (block.line_range.start..block.line_range.end).zip(highlighted.into_iter())
+            for (line_idx, spans) in (block.line_range.start..block.line_range.end).zip(highlighted)
             {
                 if line_idx >= self.lines.len() {
                     break;
