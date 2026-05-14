@@ -525,12 +525,19 @@ impl Model {
     }
 
     pub(super) fn layout_width(&self) -> u16 {
-        let terminal_width =
-            crate::ui::document_content_width(self.viewport.width(), self.toc_visible);
+        let terminal_width = self.max_doc_width();
         match self.wrap_width {
             Some(w) if w > 0 => terminal_width.min(w),
             _ => terminal_width,
         }
+    }
+
+    /// The maximum width any document element can occupy — the full document
+    /// area in the terminal, ignoring `--wrap-width`. Elements that don't
+    /// word-wrap (code blocks, tables) use this as their upper bound so the
+    /// user's prose-wrap preference doesn't truncate them.
+    pub(super) fn max_doc_width(&self) -> u16 {
+        crate::ui::document_content_width(self.viewport.width(), self.toc_visible)
     }
 
     pub(super) const fn toc_visible_rows(&self) -> usize {
@@ -619,12 +626,14 @@ impl Model {
     /// Shared implementation for `reflow_layout` (on resize / image height
     /// changes) and the mermaid-failure fallback path.
     fn reparse_document(&mut self) {
-        let width = self.layout_width();
+        let wrap_width = self.layout_width();
+        let max_width = self.max_doc_width();
         let mermaid = self.should_render_mermaid_as_images();
         let math = self.should_render_math_as_images();
-        if let Ok(document) = Document::parse_with_all_options_and_failures(
+        if let Ok(document) = Document::parse_with_all_options_widths(
             self.document.source(),
-            width,
+            wrap_width,
+            max_width,
             &self.image_layout_heights,
             &crate::document::DiagramRenderOpts {
                 mermaid_as_images: mermaid,
@@ -697,11 +706,11 @@ impl Model {
     /// Build a `Document` from raw file bytes, respecting current mermaid and
     /// image-layout settings.
     fn document_from_bytes(&self, path: &Path, raw_bytes: Vec<u8>) -> Result<Document> {
+        let wrap_width = self.layout_width();
+        let max_width = self.max_doc_width();
         if crate::document::is_binary(&raw_bytes) || crate::document::is_image_file(path) {
-            return Ok(crate::document::prepare_document_from_bytes(
-                path,
-                raw_bytes,
-                self.layout_width(),
+            return Ok(crate::document::prepare_document_from_bytes_with_widths(
+                path, raw_bytes, wrap_width, max_width,
             ));
         }
         let text = match String::from_utf8(raw_bytes) {
@@ -715,9 +724,10 @@ impl Model {
         // prepare_content wrapped in code fences (code/csv/image).
         // Everything else is plain text — render verbatim.
         if is_md || was_wrapped {
-            Document::parse_with_all_options_and_failures(
+            Document::parse_with_all_options_widths(
                 &content,
-                self.layout_width(),
+                wrap_width,
+                max_width,
                 &self.image_layout_heights,
                 &crate::document::DiagramRenderOpts {
                     mermaid_as_images: self.should_render_mermaid_as_images(),

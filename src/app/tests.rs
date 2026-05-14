@@ -1958,6 +1958,38 @@ fn test_wrap_width_none_uses_terminal_width() {
 }
 
 #[test]
+fn test_wrap_width_does_not_truncate_code_blocks() {
+    // Regression for #55: prose wraps at wrap_width, but code blocks are not
+    // a prose target — they should keep their natural width up to the
+    // terminal area, so a narrower --wrap-width doesn't silently clip code
+    // lines (which breaks copy/paste).
+    let long_code = "x".repeat(100);
+    let md = format!("Some prose.\n\n```\n{long_code}\n```\n");
+    let doc = Document::parse_with_layout(&md, 80).unwrap();
+    let mut model = Model::new(PathBuf::from("test.md"), doc, (140, 24));
+    model.wrap_width = Some(60);
+    model.reflow_layout();
+
+    let body_line = model
+        .document
+        .visible_lines(0, 50)
+        .into_iter()
+        .find(|l| l.content().contains("xx"))
+        .expect("code body line missing");
+    let stripped = body_line
+        .content()
+        .strip_prefix("│ ")
+        .and_then(|s| s.strip_suffix(" │"))
+        .map(str::trim_end)
+        .expect("code line should have │ borders");
+    let x_count = stripped.chars().filter(|c| *c == 'x').count();
+    assert_eq!(
+        x_count, 100,
+        "code block content was truncated by wrap_width; got {x_count} chars"
+    );
+}
+
+#[test]
 fn test_wrap_width_larger_than_terminal_uses_terminal() {
     let md = "Short text.";
     let doc = Document::parse_with_layout(md, 80).unwrap();

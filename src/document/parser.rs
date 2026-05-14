@@ -65,6 +65,27 @@ impl Document {
         parse_with_layout(source, width, &HashMap::new())
     }
 
+    /// Parse with separate widths for prose wrapping and the document's
+    /// maximum width.
+    ///
+    /// `wrap_width` controls where prose is word-wrapped. `max_width` is the
+    /// usable terminal area and is used as the upper bound for elements that
+    /// don't word-wrap (code blocks, tables). This split lets users set a
+    /// narrow `--wrap-width` for prose without truncating code blocks below
+    /// the terminal width.
+    ///
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
+    pub fn parse_with_widths(source: &str, wrap_width: u16, max_width: u16) -> Result<Self> {
+        Ok(parse_with_all_options_internal(
+            source,
+            wrap_width,
+            max_width,
+            &HashMap::new(),
+            &DiagramRenderOpts::default(),
+        ))
+    }
+
     /// # Errors
     /// Returns an error if markdown parsing fails.
     pub fn parse_with_image_heights(
@@ -143,6 +164,33 @@ impl Document {
             diagram_opts,
         ))
     }
+
+    /// Like [`parse_with_all_options_and_failures`] but with separate widths
+    /// for prose wrapping and the document maximum width.
+    ///
+    /// `wrap_width` controls where prose word-wraps. `max_width` is the upper
+    /// bound for elements that don't word-wrap (code blocks, tables). When
+    /// `--wrap-width` is set, callers should pass it as `wrap_width` and the
+    /// full terminal area as `max_width` so code blocks aren't clipped below
+    /// what the terminal could show.
+    ///
+    /// # Errors
+    /// Returns an error if markdown parsing fails.
+    pub fn parse_with_all_options_widths(
+        source: &str,
+        wrap_width: u16,
+        max_width: u16,
+        image_heights: &HashMap<String, usize>,
+        diagram_opts: &DiagramRenderOpts<'_>,
+    ) -> Result<Self> {
+        Ok(parse_with_all_options_internal(
+            source,
+            wrap_width,
+            max_width,
+            image_heights,
+            diagram_opts,
+        ))
+    }
 }
 
 /// Parse markdown source into a `Document`.
@@ -176,6 +224,7 @@ pub fn parse_with_layout<S: BuildHasher>(
     Ok(parse_with_all_options_internal(
         source,
         width,
+        width,
         image_heights,
         &DiagramRenderOpts::default(),
     ))
@@ -188,13 +237,18 @@ fn parse_with_all_options(
     image_heights: &HashMap<String, usize>,
     opts: &DiagramRenderOpts<'_>,
 ) -> Document {
-    parse_with_all_options_internal(source, width, image_heights, opts)
+    parse_with_all_options_internal(source, width, width, image_heights, opts)
 }
 
 /// Internal parse implementation that accepts any `BuildHasher` for image heights.
+///
+/// `wrap_width` controls where prose is word-wrapped. `max_width` is the
+/// upper bound for elements that don't word-wrap (code blocks, tables);
+/// it usually equals the available terminal width.
 fn parse_with_all_options_internal<S: BuildHasher>(
     source: &str,
-    width: u16,
+    wrap_width: u16,
+    max_width: u16,
     image_heights: &HashMap<String, usize, S>,
     opts: &DiagramRenderOpts<'_>,
 ) -> Document {
@@ -202,7 +256,8 @@ fn parse_with_all_options_internal<S: BuildHasher>(
     let options = create_options();
     let root = parse_document(&arena, source, &options);
 
-    let wrap_width = width.max(1) as usize;
+    let wrap_width = wrap_width.max(1) as usize;
+    let code_block_max_width = (max_width.max(1) as usize).max(wrap_width);
     let mut ctx = ParseContext {
         lines: Vec::new(),
         headings: Vec::new(),
@@ -214,6 +269,7 @@ fn parse_with_all_options_internal<S: BuildHasher>(
         math_sources: HashMap::new(),
         image_heights,
         wrap_width,
+        code_block_max_width,
         mermaid_as_images: opts.mermaid_as_images,
         failed_mermaid_srcs: opts.failed_mermaid_srcs,
         math_as_images: opts.math_as_images,
@@ -272,6 +328,7 @@ struct ParseContext<'h, S: BuildHasher = std::collections::hash_map::RandomState
     math_sources: HashMap<String, String>,
     image_heights: &'h HashMap<String, usize, S>,
     wrap_width: usize,
+    code_block_max_width: usize,
     mermaid_as_images: bool,
     failed_mermaid_srcs: &'h HashSet<String>,
     math_as_images: bool,
@@ -515,7 +572,7 @@ fn process_node<'a, S: BuildHasher>(
                 .map(UnicodeWidthStr::width)
                 .max()
                 .unwrap_or(0)
-                .min(ctx.wrap_width.saturating_sub(4).max(1));
+                .min(ctx.code_block_max_width.saturating_sub(4).max(1));
             let title = language.unwrap_or("code");
             let label = format!(" {title} ");
             let frame_inner_width = content_width + 2 + CODE_RIGHT_PADDING;
@@ -2730,6 +2787,58 @@ mod tests {
                 top_width
             );
         }
+    }
+
+    #[test]
+    fn test_code_block_uses_max_width_not_wrap_width() {
+        // Regression for #55: a code block containing a line wider than the
+        // user's --wrap-width should NOT be truncated. wrap_width controls
+        // prose wrapping; code blocks should preserve their natural width up
+        // to the terminal's available area.
+        let long_line = "x".repeat(100);
+        let md = format!("```\n{long_line}\n```");
+        let doc = Document::parse_with_widths(&md, 80, 120).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let body_line = lines
+            .iter()
+            .find(|l| l.content().contains("xx"))
+            .expect("code body line missing");
+        let content = body_line.content();
+        let stripped = content
+            .strip_prefix("│ ")
+            .and_then(|s| s.strip_suffix(" │"))
+            .map(str::trim_end)
+            .expect("code line should have │ borders");
+        let x_count = stripped.chars().filter(|c| *c == 'x').count();
+        assert_eq!(
+            x_count, 100,
+            "expected all 100 x's preserved; got {x_count} in {stripped:?}"
+        );
+    }
+
+    #[test]
+    fn test_code_block_clips_to_max_width_when_line_exceeds_terminal() {
+        // When even the terminal width can't fit the line, code blocks are
+        // truncated to max_width - 4 (room for │ borders + padding).
+        let long_line = "x".repeat(200);
+        let md = format!("```\n{long_line}\n```");
+        let doc = Document::parse_with_widths(&md, 80, 100).unwrap();
+        let lines = doc.visible_lines(0, 10);
+        let body_line = lines
+            .iter()
+            .find(|l| l.content().contains("xx"))
+            .expect("code body line missing");
+        let stripped = body_line
+            .content()
+            .strip_prefix("│ ")
+            .and_then(|s| s.strip_suffix(" │"))
+            .map(str::trim_end)
+            .expect("code line should have │ borders");
+        let x_count = stripped.chars().filter(|c| *c == 'x').count();
+        assert_eq!(
+            x_count, 96,
+            "expected line truncated to max_width-4=96; got {x_count}"
+        );
     }
 
     #[test]
