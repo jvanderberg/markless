@@ -78,6 +78,25 @@ impl BrowseDebouncer {
     }
 }
 
+/// Pick the timeout (in ms) for the next `event::poll` call.
+///
+/// When a render is pending we still need to give crossterm a few ms to
+/// reassemble multi-byte escape sequences (e.g. `\x1b[A` for arrow keys).
+/// Some SSH/terminal clients — notably Termius on iOS/iPadOS — deliver
+/// these bytes across separate reads, so a zero-timeout poll causes the
+/// leading `\x1b` to be reported as a standalone Escape and the trailing
+/// `[A` to surface as literal text. 5ms is imperceptible to a human and
+/// long enough for the trailing bytes to arrive on the same read.
+pub(super) const fn select_poll_ms(needs_render: bool, has_pending_debouncer: bool) -> u64 {
+    if needs_render {
+        5
+    } else if has_pending_debouncer {
+        10
+    } else {
+        250
+    }
+}
+
 impl App {
     /// Run the main event loop.
     ///
@@ -253,6 +272,16 @@ impl App {
     }
 
     fn event_loop(terminal: &mut DefaultTerminal, model: &mut Model) -> Result<()> {
+        // Drain stale bytes left in the input buffer by startup capability
+        // queries (OSC 11 background query, Kitty/Sixel image-protocol probes).
+        // When a terminal doesn't understand a probe it may echo the payload
+        // back as input or send response bytes after our read timeout; those
+        // bytes would otherwise surface as spurious key events on first use.
+        let drained_startup = drain_stale_input()?;
+        if drained_startup > 0 {
+            crate::perf::log_event("event.drain.startup", format!("drained={drained_startup}"));
+        }
+
         let start = Instant::now();
         let mut resize_debouncer = ResizeDebouncer::new(100);
         let mut file_watcher = if model.watch_enabled {
@@ -351,13 +380,10 @@ impl App {
             model.set_resize_pending(resize_debouncer.is_pending());
 
             // Handle events
-            let poll_ms = if needs_render {
-                0
-            } else if resize_debouncer.is_pending() || browse_debouncer.is_pending() {
-                10
-            } else {
-                250
-            };
+            let poll_ms = select_poll_ms(
+                needs_render,
+                resize_debouncer.is_pending() || browse_debouncer.is_pending(),
+            );
             if event::poll(Duration::from_millis(poll_ms))? {
                 // Refresh timestamp after poll wait so debouncers use accurate times.
                 let event_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -380,9 +406,11 @@ impl App {
                     needs_render = true;
                 }
 
-                // Coalesce key repeat bursts into a single render.
+                // Coalesce key repeat bursts into a single render. The 5ms
+                // timeout (rather than 0) gives split escape sequences time
+                // to reassemble — see `select_poll_ms` for details.
                 let mut drained = 0_u32;
-                while event::poll(Duration::from_millis(0))? {
+                while event::poll(Duration::from_millis(5))? {
                     let drain_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     let msg =
                         Self::handle_event(&event::read()?, model, drain_ms, &mut resize_debouncer);
@@ -458,6 +486,22 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// Drain any pending events from the input buffer. Used at startup to discard
+/// stale bytes from terminal capability probes (OSC 11, Kitty/Sixel queries)
+/// that would otherwise be reported as spurious key events.
+///
+/// Each `poll` waits up to 20ms so late-arriving response bytes are caught
+/// too, but returns immediately when input is queued. The 256-event cap is a
+/// safety bound against runaway loops.
+fn drain_stale_input() -> Result<u32> {
+    let mut drained = 0_u32;
+    while drained < 256 && event::poll(Duration::from_millis(20))? {
+        let _ = event::read()?;
+        drained += 1;
+    }
+    Ok(drained)
 }
 
 pub(super) fn set_mouse_motion_tracking(enable: bool) -> std::io::Result<()> {

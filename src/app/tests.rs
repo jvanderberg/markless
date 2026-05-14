@@ -9,7 +9,7 @@ use tempfile::tempdir;
 
 use crate::document::Document;
 
-use super::event_loop::{BrowseDebouncer, ResizeDebouncer};
+use super::event_loop::{BrowseDebouncer, ResizeDebouncer, select_poll_ms};
 use super::{App, Message, Model, ToastLevel, update};
 
 /// Enter edit mode: runs pure update then side effects (which reads
@@ -1262,6 +1262,30 @@ fn test_browse_debouncer_cancel_clears_pending() {
 
     assert!(debouncer.take_ready(200).is_none());
     assert!(!debouncer.is_pending());
+}
+
+#[test]
+fn test_select_poll_ms_reassembles_escape_sequences_when_render_pending() {
+    // Regression: zero-timeout polling caused arrow-key escape sequences
+    // (`\x1b[A`) to be split across crossterm reads over iOS SSH clients,
+    // surfacing as literal `[A` characters. The poll must wait long enough
+    // for the trailing bytes to arrive — but not so long that input feels
+    // sluggish. A 5–10ms minimum is imperceptible and reliable.
+    let poll = select_poll_ms(true, false);
+    assert!(
+        (5..=10).contains(&poll),
+        "needs_render poll must be 5–10ms for escape sequence reassembly, got {poll}"
+    );
+}
+
+#[test]
+fn test_select_poll_ms_idle_uses_long_timeout() {
+    assert_eq!(select_poll_ms(false, false), 250);
+}
+
+#[test]
+fn test_select_poll_ms_pending_debouncer_uses_short_timeout() {
+    assert_eq!(select_poll_ms(false, true), 10);
 }
 
 #[test]
