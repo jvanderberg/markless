@@ -25,6 +25,8 @@ use markless::config::{
 };
 use markless::highlight::{HighlightBackground, set_background_mode};
 use markless::perf;
+#[cfg(unix)]
+use markless::term_query::{parse_osc11_reply, read_osc_response};
 
 /// A terminal markdown viewer with image support
 #[derive(Parser, Debug)]
@@ -119,54 +121,27 @@ fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
 
 #[cfg(unix)]
 fn query_terminal_background() -> std::io::Result<Option<(u8, u8, u8)>> {
-    use std::io::{Read, Write};
-    use std::sync::mpsc;
+    use std::os::unix::fs::OpenOptionsExt;
 
-    let (tx, rx) = mpsc::channel();
-
+    // Open /dev/tty non-blocking so the bounded read in
+    // `read_osc_response` can poll for the reply without spawning a
+    // background reader that would race crossterm for keystrokes on
+    // terminals that don't reply to OSC 11 (issue #53).
     let mut io = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
+        .custom_flags(libc::O_NONBLOCK)
         .open("/dev/tty")?;
-    let reader = io.try_clone()?;
 
-    // OSC 11 query: ESC ] 11 ; ? BEL
-    io.write_all(b"\x1b]11;?\x07")?;
-    io.flush()?;
-
-    std::thread::spawn(move || {
-        let mut reader = reader;
-        let mut buf = [0u8; 256];
-        let mut collected: Vec<u8> = Vec::new();
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => {}
-                Ok(n) => {
-                    collected.extend_from_slice(&buf[..n]);
-                    if collected.contains(&b'\x07') || collected.windows(2).any(|w| w == b"\x1b\\")
-                    {
-                        let _ = tx.send(collected);
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    let collected: Vec<u8> = rx
-        .recv_timeout(Duration::from_millis(75))
-        .unwrap_or_default();
-
-    let mut found: Option<(u8, u8, u8)> = None;
-    if !collected.is_empty() {
-        let text = String::from_utf8_lossy(&collected);
-        if text.contains("rgb:") {
-            found = parse_osc11_reply(&text);
-        }
+    let collected = read_osc_response(&mut io, Duration::from_millis(75));
+    if collected.is_empty() {
+        return Ok(None);
     }
-
-    Ok(found)
+    let text = String::from_utf8_lossy(&collected);
+    if !text.contains("rgb:") {
+        return Ok(None);
+    }
+    Ok(parse_osc11_reply(&text))
 }
 
 fn theme_from_rgb(r: u8, g: u8, b: u8) -> HighlightBackground {
@@ -245,33 +220,6 @@ fn relaunch_with_theme(mode: HighlightBackground, raw_args: &[String]) -> Result
         anyhow::bail!("failed to relaunch markless with detected theme");
     }
     Ok(())
-}
-
-fn parse_osc11_reply(reply: &str) -> Option<(u8, u8, u8)> {
-    // Expect: ESC ] 11 ; rgb:RRRR/GGGG/BBBB BEL or ST
-    let start = reply.find("rgb:")?;
-    let data = &reply[start + 4..];
-    let mut parts = data.split(['/', '\x07', '\x1b']);
-    let r = parts.next()?;
-    let g = parts.next()?;
-    let b = parts.next()?;
-    Some((
-        parse_osc_component(r)?,
-        parse_osc_component(g)?,
-        parse_osc_component(b)?,
-    ))
-}
-
-fn parse_osc_component(s: &str) -> Option<u8> {
-    let hex = s.trim();
-    if hex.len() >= 4 {
-        let v = u16::from_str_radix(&hex[..4], 16).ok()?;
-        Some((v >> 8) as u8)
-    } else if hex.len() == 2 {
-        u8::from_str_radix(hex, 16).ok()
-    } else {
-        None
-    }
 }
 
 fn main() -> Result<()> {

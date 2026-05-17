@@ -2286,6 +2286,7 @@ dependencies = [
  "crossterm",
  "csv",
  "image",
+ "libc",
  "mermaid-rs-renderer",
  "mitex",
  "mitex-spec",

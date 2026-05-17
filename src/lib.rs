@@ -48,6 +48,7 @@ pub mod mermaid;
 pub mod perf;
 pub mod search;
 pub mod svg;
+pub mod term_query;
 pub mod ui;
 pub mod watcher;
 
