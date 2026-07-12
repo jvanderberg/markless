@@ -6,11 +6,11 @@ use std::hash::BuildHasher;
 use anyhow::Result;
 use comrak::nodes::{AstNode, NodeValue, TableAlignment};
 use comrak::{Arena, Options, parse_document};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use super::types::{
     CodeBlockRef, Document, HeadingRef, ImageRef, InlineSpan, InlineStyle, LineType, LinkRef,
-    ParsedDocument, RenderedLine,
+    ParsedDocument, RenderedLine, spans_to_string, truncate_spans_by_width,
 };
 
 /// Options controlling how diagrams and math expressions are rendered.
@@ -983,7 +983,7 @@ fn emit_code_block<S: BuildHasher>(
             ..InlineStyle::default()
         };
         let spans = vec![InlineSpan::new(raw_line.clone(), plain_style)];
-        let trimmed_spans = truncate_spans(&spans, content_width);
+        let trimmed_spans = truncate_spans_by_width(&spans, content_width);
         let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
         let padding = " ".repeat(content_width.saturating_sub(trimmed_len) + CODE_RIGHT_PADDING);
 
@@ -1471,7 +1471,7 @@ fn render_table_row(
             text: String::new(),
             spans: Vec::new(),
         });
-        let mut content_spans = truncate_spans_by_display_width(&cell.spans, widths[idx]);
+        let mut content_spans = truncate_spans_by_width(&cell.spans, widths[idx]);
         let content_width = display_width(&spans_to_string(&content_spans));
         let padding = widths[idx].saturating_sub(content_width);
 
@@ -1599,30 +1599,6 @@ fn split_tokens_preserve_whitespace(spans: &[InlineSpan]) -> Vec<InlineSpan> {
     let mut out = Vec::new();
     for span in spans {
         out.extend(split_inline_tokens(span));
-    }
-    out
-}
-
-fn truncate_spans_by_display_width(spans: &[InlineSpan], max_width: usize) -> Vec<InlineSpan> {
-    let mut out = Vec::new();
-    let mut used = 0usize;
-
-    for span in spans {
-        if used >= max_width {
-            break;
-        }
-        let mut taken = String::new();
-        for ch in span.text().chars() {
-            let w = ch.width().unwrap_or(0);
-            if used + w > max_width {
-                break;
-            }
-            taken.push(ch);
-            used += w;
-        }
-        if !taken.is_empty() {
-            out.push(InlineSpan::new(taken, span.style()));
-        }
     }
     out
 }
@@ -2027,39 +2003,6 @@ fn split_inline_tokens(span: &InlineSpan) -> Vec<InlineSpan> {
         out.push(InlineSpan::new(buf, span.style()));
     }
 
-    out
-}
-
-fn spans_to_string(spans: &[InlineSpan]) -> String {
-    let mut content = String::new();
-    for span in spans {
-        content.push_str(span.text());
-    }
-    content
-}
-
-fn truncate_spans(spans: &[InlineSpan], max_len: usize) -> Vec<InlineSpan> {
-    let mut out = Vec::new();
-    let mut remaining = max_len;
-    for span in spans {
-        if remaining == 0 {
-            break;
-        }
-        let mut taken = String::new();
-        let mut used = 0usize;
-        for ch in span.text().chars() {
-            let w = ch.width().unwrap_or(0);
-            if used + w > remaining {
-                break;
-            }
-            taken.push(ch);
-            used += w;
-        }
-        if used > 0 {
-            out.push(InlineSpan::new(taken, span.style()));
-            remaining = remaining.saturating_sub(used);
-        }
-    }
     out
 }
 
@@ -2803,6 +2746,51 @@ mod tests {
             .expect("Code line missing");
         let spans = code_line.spans().expect("Expected code line spans");
         assert!(spans.iter().any(|s| s.style().fg.is_some()));
+    }
+
+    #[test]
+    fn test_code_block_right_border_aligns_with_full_width_chars_after_highlight() {
+        // A code block whose lines mix full-width (CJK) and ASCII content.
+        // After lazy syntax highlighting re-renders the body lines, every line
+        // (including the top/bottom border) must have the same display width so
+        // the right `│` stays aligned.
+        let md = "```text\nあいうえお\nx\n```";
+        let mut doc = Document::parse_with_layout(md, 80).unwrap();
+        doc.ensure_highlight_for_range(0..doc.line_count());
+
+        let widths: Vec<usize> = (0..doc.line_count())
+            .filter_map(|i| doc.line_at(i))
+            .filter(|l| matches!(l.line_type(), LineType::CodeBlock))
+            .map(|l| UnicodeWidthStr::width(l.content()))
+            .collect();
+
+        assert!(!widths.is_empty(), "expected code block lines");
+        assert!(
+            widths.iter().all(|w| *w == widths[0]),
+            "code block lines have mismatched display widths: {widths:?}"
+        );
+    }
+
+    #[test]
+    fn test_code_block_right_border_aligns_with_emoji_after_highlight() {
+        // Emoji (single wide code point) and a ZWJ family sequence must not
+        // throw off the right border after lazy highlighting re-renders the
+        // body lines.
+        let md = "```text\n😀 hi\n👩‍👩‍👧‍👦 family\nx\n```";
+        let mut doc = Document::parse_with_layout(md, 80).unwrap();
+        doc.ensure_highlight_for_range(0..doc.line_count());
+
+        let widths: Vec<usize> = (0..doc.line_count())
+            .filter_map(|i| doc.line_at(i))
+            .filter(|l| matches!(l.line_type(), LineType::CodeBlock))
+            .map(|l| UnicodeWidthStr::width(l.content()))
+            .collect();
+
+        assert!(!widths.is_empty(), "expected code block lines");
+        assert!(
+            widths.iter().all(|w| *w == widths[0]),
+            "code block lines have mismatched display widths: {widths:?}"
+        );
     }
 
     #[test]
