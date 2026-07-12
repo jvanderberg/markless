@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 /// Result of parsing markdown, ready to be assembled into a `Document`.
 #[derive(Debug, Clone, Default)]
 pub struct ParsedDocument {
@@ -369,8 +371,8 @@ impl Document {
                 if line_idx >= self.lines.len() {
                     break;
                 }
-                let trimmed_spans = truncate_spans_to_chars(&spans, block.content_width);
-                let trimmed_len = spans_char_len(&trimmed_spans);
+                let trimmed_spans = truncate_spans_by_width(&spans, block.content_width);
+                let trimmed_len = UnicodeWidthStr::width(spans_to_string(&trimmed_spans).as_str());
                 let padding = " "
                     .repeat(block.content_width.saturating_sub(trimmed_len) + block.right_padding);
 
@@ -569,16 +571,12 @@ pub struct LinkRef {
     pub line: usize,
 }
 
-fn spans_to_string(spans: &[InlineSpan]) -> String {
+pub(super) fn spans_to_string(spans: &[InlineSpan]) -> String {
     let mut content = String::new();
     for span in spans {
         content.push_str(span.text());
     }
     content
-}
-
-fn spans_char_len(spans: &[InlineSpan]) -> usize {
-    spans.iter().map(|s| s.text().chars().count()).sum()
 }
 
 fn normalize_anchor(s: &str) -> String {
@@ -597,21 +595,28 @@ fn normalize_anchor(s: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-fn truncate_spans_to_chars(spans: &[InlineSpan], max_len: usize) -> Vec<InlineSpan> {
+/// Truncate `spans` to at most `max_width` display columns, splitting a span
+/// mid-text if needed but never splitting a multi-byte character.
+pub(super) fn truncate_spans_by_width(spans: &[InlineSpan], max_width: usize) -> Vec<InlineSpan> {
     let mut out = Vec::new();
-    let mut remaining = max_len;
+    let mut remaining = max_width;
     for span in spans {
         if remaining == 0 {
             break;
         }
         let mut taken = String::new();
-        for ch in span.text().chars().take(remaining) {
+        let mut used_width = 0usize;
+        for ch in span.text().chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used_width + ch_width > remaining {
+                break;
+            }
             taken.push(ch);
+            used_width += ch_width;
         }
-        let count = taken.chars().count();
-        if count > 0 {
+        if !taken.is_empty() {
             out.push(InlineSpan::new(taken, span.style()));
-            remaining -= count;
+            remaining = remaining.saturating_sub(used_width);
         }
     }
     out
