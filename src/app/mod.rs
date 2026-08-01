@@ -33,6 +33,7 @@ pub struct App {
     wrap_width: Option<u16>,
     editor: Option<String>,
     no_inline_math: bool,
+    stdin_mode: bool,
 }
 
 impl App {
@@ -51,6 +52,7 @@ impl App {
             wrap_width: None,
             editor: None,
             no_inline_math: false,
+            stdin_mode: false,
         }
     }
 
@@ -126,6 +128,14 @@ impl App {
     ) -> Self {
         self.config_global_path = global_path;
         self.config_local_path = local_path;
+        self
+    }
+
+    /// Read the document from standard input instead of a file
+    /// (invoked as `markless -`).
+    #[must_use]
+    pub const fn with_stdin_mode(mut self, enabled: bool) -> Self {
+        self.stdin_mode = enabled;
         self
     }
 }

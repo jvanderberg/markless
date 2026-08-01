@@ -1,4 +1,5 @@
-use std::io::{Write, stdout};
+use std::io::{IsTerminal, Write, stdout};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -107,6 +108,24 @@ impl App {
     pub fn run(&mut self) -> Result<()> {
         let _run_scope = crate::perf::scope("app.run.total");
 
+        // Read piped stdin content BEFORE creating the image picker: the
+        // picker's terminal-capability query reads from stdin and would
+        // otherwise consume the piped markdown.
+        let stdin_source = if self.stdin_mode {
+            if std::io::stdin().is_terminal() {
+                anyhow::bail!(
+                    "markless - reads markdown from standard input.\n\
+                     Pipe input to it instead, e.g.:  echo \"# hello\" | markless -"
+                );
+            }
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)
+                .context("Failed to read markdown from stdin")?;
+            Some(buf)
+        } else {
+            None
+        };
+
         // Create image picker BEFORE initializing terminal (queries stdio)
         let picker = if self.images_enabled {
             let picker_scope = crate::perf::scope("app.create_picker");
@@ -151,7 +170,14 @@ impl App {
                 layout_width
             ),
         );
-        let (document, effective_file) = if let Some(ref file) = initial_file {
+        let (document, effective_file) = if let Some(bytes) = stdin_source {
+            let doc = crate::document::prepare_stdin_document(
+                bytes,
+                layout_width,
+                terminal_content_width,
+            );
+            (doc, self.file_path.clone())
+        } else if let Some(ref file) = initial_file {
             let raw_bytes = std::fs::read(file)?;
             let doc = crate::document::prepare_document_from_bytes_with_widths(
                 file,
@@ -169,7 +195,7 @@ impl App {
         // Create initial model
         let mut model =
             Model::new(effective_file, document, (size.width, size.height)).with_picker(picker);
-        model.watch_enabled = self.watch_enabled;
+        model.watch_enabled = self.watch_enabled && !self.stdin_mode;
         model.mouse_enabled = self.mouse_enabled;
         model.toc_visible = toc_visible;
         model.image_mode = self.image_mode;
@@ -199,6 +225,14 @@ impl App {
                     }
                 }
             }
+        }
+
+        // Piped input: no file to watch/edit/reload, and relative image
+        // paths resolve against the current working directory.
+        if self.stdin_mode {
+            model.from_stdin = true;
+            model.base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            model.show_toast(ToastLevel::Info, "Reading markdown from stdin (pipe)");
         }
 
         // Reparse with mermaid-as-images now that the picker is configured.

@@ -29,7 +29,9 @@ impl App {
     ) {
         match msg {
             Message::ToggleWatch => {
-                if model.watch_enabled {
+                if model.from_stdin {
+                    // update() already showed a warning; don't overwrite it.
+                } else if model.watch_enabled {
                     match Self::make_file_watcher(&model.file_path) {
                         Ok(watcher) => {
                             *file_watcher = Some(watcher);
@@ -54,7 +56,10 @@ impl App {
                 }
             }
             Message::ForceReload | Message::FileChanged => {
-                if model.editor_mode {
+                if model.from_stdin {
+                    // Piped input has no backing file to reload from.
+                    model.show_toast(ToastLevel::Warning, "Piped stdin input cannot be reloaded");
+                } else if model.editor_mode {
                     // Don't reload while editing — check for conflict instead
                     if let Some(new_hash) = model.file_disk_hash()
                         && model.editor_disk_hash != Some(new_hash)

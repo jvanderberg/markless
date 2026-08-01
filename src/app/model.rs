@@ -166,6 +166,8 @@ pub struct Model {
     pub failed_math_srcs: HashSet<String>,
     /// Disable inline (Unicode) math, rendering as images instead.
     pub no_inline_math: bool,
+    /// Whether the document was read from a pipe (`markless -`).
+    pub from_stdin: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -243,6 +245,7 @@ impl Model {
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
             no_inline_math: false,
+            from_stdin: false,
         }
     }
 
@@ -798,7 +801,9 @@ impl Model {
     /// the text-editable whitelist or is recognized by syntect, AND whose
     /// content is not binary (hex mode).  All other files are rejected.
     pub fn can_edit(&self) -> bool {
-        crate::document::is_editable_file(&self.file_path) && !self.document.is_hex_mode()
+        !self.from_stdin
+            && crate::document::is_editable_file(&self.file_path)
+            && !self.document.is_hex_mode()
     }
 
     /// Whether the editor has unsaved changes.
@@ -1106,6 +1111,7 @@ impl Default for Model {
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
             no_inline_math: false,
+            from_stdin: false,
         }
     }
 }
