@@ -166,6 +166,8 @@ pub struct Model {
     pub failed_math_srcs: HashSet<String>,
     /// Disable inline (Unicode) math, rendering as images instead.
     pub no_inline_math: bool,
+    /// Whether the document was read from a pipe (`markless -`).
+    pub from_stdin: bool,
 }
 
 impl std::fmt::Debug for Model {
@@ -243,6 +245,7 @@ impl Model {
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
             no_inline_math: false,
+            from_stdin: false,
         }
     }
 
@@ -752,6 +755,9 @@ impl Model {
         let raw_bytes = std::fs::read(path)?;
         let document = self.document_from_bytes(path, raw_bytes)?;
         self.file_path = path.to_path_buf();
+        // A real on-disk file was just loaded, so it is no longer piped
+        // stdin input, even if the model started out in stdin mode.
+        self.from_stdin = false;
         self.base_dir = path
             .parent()
             .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
@@ -798,7 +804,9 @@ impl Model {
     /// the text-editable whitelist or is recognized by syntect, AND whose
     /// content is not binary (hex mode).  All other files are rejected.
     pub fn can_edit(&self) -> bool {
-        crate::document::is_editable_file(&self.file_path) && !self.document.is_hex_mode()
+        !self.from_stdin
+            && crate::document::is_editable_file(&self.file_path)
+            && !self.document.is_hex_mode()
     }
 
     /// Whether the editor has unsaved changes.
@@ -1106,6 +1114,7 @@ impl Default for Model {
             failed_mermaid_srcs: HashSet::new(),
             failed_math_srcs: HashSet::new(),
             no_inline_math: false,
+            from_stdin: false,
         }
     }
 }

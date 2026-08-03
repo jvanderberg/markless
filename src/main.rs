@@ -10,7 +10,7 @@
 //! markless --no-toc README.md
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -32,7 +32,7 @@ use markless::term_query::{parse_osc11_reply, read_osc_response};
 #[derive(Parser, Debug)]
 #[command(name = "markless", version, about, long_about = None)]
 struct Cli {
-    /// Markdown file or directory to view
+    /// Markdown file, directory to browse, or `-` to read markdown from stdin
     #[arg(value_name = "PATH", default_value = ".")]
     path: PathBuf,
 
@@ -222,6 +222,19 @@ fn relaunch_with_theme(mode: HighlightBackground, raw_args: &[String]) -> Result
     Ok(())
 }
 
+/// Resolve the CLI path argument, mapping the stdin sentinel `-` to the
+/// pseudo-path `<stdin>` used throughout the app.
+///
+/// Returns the resolved path and whether the document should be read from
+/// standard input (`markless -`).
+fn resolve_path(path: PathBuf) -> (PathBuf, bool) {
+    if path == Path::new("-") {
+        (PathBuf::from("<stdin>"), true)
+    } else {
+        (path, false)
+    }
+}
+
 fn main() -> Result<()> {
     // Restore terminal state on panic so the shell isn't left in raw mode
     let default_hook = std::panic::take_hook();
@@ -241,6 +254,7 @@ fn main() -> Result<()> {
 
     let raw_args = std::env::args().collect::<Vec<_>>();
     let cli = Cli::parse();
+    let (path, stdin_mode) = resolve_path(cli.path.clone());
     let global_path = global_config_path();
     let local_path = local_override_path();
     let cli_flags = parse_flag_tokens(&raw_args);
@@ -287,18 +301,19 @@ fn main() -> Result<()> {
         ThemeMode::Dark => set_background_mode(Some(HighlightBackground::Dark)),
     }
 
-    // Verify path exists
-    if !cli.path.exists() {
+    // Verify path exists (skipped for `markless -`, which reads stdin)
+    if !stdin_mode && !cli.path.exists() {
         anyhow::bail!("Path not found: {}", cli.path.display());
     }
 
-    let is_directory = cli.path.is_dir();
+    let is_directory = !stdin_mode && cli.path.is_dir();
 
     // Run the application
     // Normalize editor: empty string from --no-editor becomes None
     let editor = effective.editor.filter(|e| !e.is_empty());
 
-    let mut app = App::new(cli.path)
+    let mut app = App::new(path)
+        .with_stdin_mode(stdin_mode)
         .with_watch(effective.watch)
         .with_mouse_enabled(effective.mouse_select || !effective.no_mouse_select)
         .with_toc_visible(effective.toc && !effective.no_toc)
@@ -318,4 +333,43 @@ fn main() -> Result<()> {
         );
 
     app.run().context("Application error")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn dash_path_resolves_to_stdin_mode() {
+        let (path, stdin_mode) = resolve_path(PathBuf::from("-"));
+        assert!(stdin_mode, "`-` should enable stdin mode");
+        assert_eq!(path, PathBuf::from("<stdin>"));
+    }
+
+    #[test]
+    fn ordinary_path_is_not_stdin_mode() {
+        let (path, stdin_mode) = resolve_path(PathBuf::from("README.md"));
+        assert!(!stdin_mode);
+        assert_eq!(path, PathBuf::from("README.md"));
+    }
+
+    #[test]
+    fn default_path_is_current_directory() {
+        let cli = Cli::try_parse_from(["markless"]).unwrap();
+        assert_eq!(cli.path, PathBuf::from("."));
+    }
+
+    #[test]
+    fn cli_accepts_dash_as_path() {
+        let cli = Cli::try_parse_from(["markless", "-"]).unwrap();
+        assert_eq!(cli.path, PathBuf::from("-"));
+    }
+
+    #[test]
+    fn cli_accepts_flags_with_dash_path() {
+        let cli = Cli::try_parse_from(["markless", "--no-toc", "-"]).unwrap();
+        assert!(cli.no_toc);
+        assert_eq!(cli.path, PathBuf::from("-"));
+    }
 }

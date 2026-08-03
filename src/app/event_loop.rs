@@ -1,4 +1,5 @@
-use std::io::{Write, stdout};
+use std::io::{IsTerminal, Write, stdout};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -107,10 +108,30 @@ impl App {
     pub fn run(&mut self) -> Result<()> {
         let _run_scope = crate::perf::scope("app.run.total");
 
+        // Read piped stdin content early, before terminal/picker init, so the
+        // document is available up front. The image picker skips its stdio
+        // capability query entirely in stdin mode (query_stdio=false below):
+        // that query would otherwise consume/block on the pipe, and the
+        // terminal's response to it can't arrive through a piped stdin anyway.
+        let stdin_source = if self.stdin_mode {
+            if std::io::stdin().is_terminal() {
+                anyhow::bail!(
+                    "markless - reads markdown from standard input.\n\
+                     Pipe input to it instead, e.g.:  echo \"# hello\" | markless -"
+                );
+            }
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)
+                .context("Failed to read markdown from stdin")?;
+            Some(buf)
+        } else {
+            None
+        };
+
         // Create image picker BEFORE initializing terminal (queries stdio)
         let picker = if self.images_enabled {
             let picker_scope = crate::perf::scope("app.create_picker");
-            let picker = crate::image::create_picker(self.image_mode);
+            let picker = crate::image::create_picker(self.image_mode, !self.stdin_mode);
             drop(picker_scope);
             picker
         } else {
@@ -151,7 +172,14 @@ impl App {
                 layout_width
             ),
         );
-        let (document, effective_file) = if let Some(ref file) = initial_file {
+        let (document, effective_file) = if let Some(bytes) = stdin_source {
+            let doc = crate::document::prepare_stdin_document(
+                bytes,
+                layout_width,
+                terminal_content_width,
+            );
+            (doc, self.file_path.clone())
+        } else if let Some(ref file) = initial_file {
             let raw_bytes = std::fs::read(file)?;
             let doc = crate::document::prepare_document_from_bytes_with_widths(
                 file,
@@ -169,7 +197,7 @@ impl App {
         // Create initial model
         let mut model =
             Model::new(effective_file, document, (size.width, size.height)).with_picker(picker);
-        model.watch_enabled = self.watch_enabled;
+        model.watch_enabled = self.watch_enabled && !self.stdin_mode;
         model.mouse_enabled = self.mouse_enabled;
         model.toc_visible = toc_visible;
         model.image_mode = self.image_mode;
@@ -198,6 +226,21 @@ impl App {
                         model.toc_selected = Some(idx);
                     }
                 }
+            }
+        }
+
+        // Piped input: no file to watch/edit/reload, and relative image
+        // paths resolve against the current working directory.
+        if self.stdin_mode {
+            model.from_stdin = true;
+            model.base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if self.watch_enabled {
+                model.show_toast(
+                    ToastLevel::Info,
+                    "Reading markdown from stdin (pipe) — --watch is not supported for piped input",
+                );
+            } else {
+                model.show_toast(ToastLevel::Info, "Reading markdown from stdin (pipe)");
             }
         }
 

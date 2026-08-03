@@ -304,7 +304,14 @@ pub fn update(mut model: Model, msg: Message) -> Model {
 
         // File watching
         Message::ToggleWatch => {
-            model.watch_enabled = !model.watch_enabled;
+            if model.from_stdin {
+                model.show_toast(
+                    crate::app::ToastLevel::Warning,
+                    "Cannot watch piped stdin input",
+                );
+            } else {
+                model.watch_enabled = !model.watch_enabled;
+            }
         }
         Message::ToggleHelp => {
             model.help_visible = !model.help_visible;
@@ -424,7 +431,9 @@ pub fn update(mut model: Model, msg: Message) -> Model {
         // Editor
         Message::EnterEditMode => {
             if !model.can_edit() {
-                let reason = if model.document.is_hex_mode() {
+                let reason = if model.from_stdin {
+                    "Cannot edit piped stdin input".to_string()
+                } else if model.document.is_hex_mode() {
                     "Cannot edit binary files".to_string()
                 } else {
                     let ext = model

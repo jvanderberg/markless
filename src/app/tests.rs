@@ -90,6 +90,86 @@ fn test_toggle_watch_changes_state() {
     assert!(model.watch_enabled);
 }
 
+// --- Stdin pipe tests (`markless -`) ---
+
+fn create_stdin_model() -> Model {
+    let doc = Document::parse("# Piped\n\nContent from stdin").unwrap();
+    let mut model = Model::new(PathBuf::from("<stdin>"), doc, (80, 24));
+    model.from_stdin = true;
+    model.base_dir = PathBuf::from(".");
+    model
+}
+
+#[test]
+fn test_stdin_model_cannot_edit() {
+    let model = create_stdin_model();
+    assert!(
+        !model.can_edit(),
+        "piped input has no backing file and must not be editable"
+    );
+
+    let model = update(model, Message::EnterEditMode);
+    assert!(!model.editor_mode, "edit mode must not engage for stdin");
+    let (msg, level) = model.active_toast().expect("warning toast expected");
+    assert_eq!(level, ToastLevel::Warning);
+    assert!(
+        msg.contains("stdin"),
+        "toast should mention stdin, got: {msg}"
+    );
+}
+
+#[test]
+fn test_stdin_model_watch_is_off_and_cannot_be_toggled() {
+    let model = create_stdin_model();
+    assert!(
+        !model.watch_enabled,
+        "watching is meaningless for piped input"
+    );
+
+    let model = update(model, Message::ToggleWatch);
+    assert!(
+        !model.watch_enabled,
+        "watch must stay disabled for piped input"
+    );
+    let (msg, level) = model.active_toast().expect("warning toast expected");
+    assert_eq!(level, ToastLevel::Warning);
+    assert!(
+        msg.contains("stdin"),
+        "toast should mention stdin, got: {msg}"
+    );
+}
+
+#[test]
+fn test_stdin_model_base_dir_is_current_directory() {
+    let model = create_stdin_model();
+    assert_eq!(
+        model.base_dir,
+        PathBuf::from("."),
+        "relative image paths in piped markdown resolve against the cwd"
+    );
+}
+
+#[test]
+fn test_load_file_clears_from_stdin_for_real_file() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("doc.md");
+    std::fs::write(&file_path, "# Real\n\nfrom disk").unwrap();
+
+    let mut model = create_stdin_model();
+    assert!(model.from_stdin);
+
+    model.load_file(&file_path).unwrap();
+
+    assert!(
+        !model.from_stdin,
+        "loading a real file must clear the stdin flag"
+    );
+    assert!(
+        model.can_edit(),
+        "a real on-disk markdown file must be editable after load_file"
+    );
+}
+
 #[test]
 fn test_force_reload_reloads_document_from_disk() {
     let dir = tempdir().unwrap();

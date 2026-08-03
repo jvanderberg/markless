@@ -55,7 +55,60 @@ fn picker_with_protocol(protocol_type: ProtocolType, reason: &str) -> Picker {
 ///
 /// When `image_mode` is `Some`, the picker is forced to use that protocol.
 /// Otherwise, terminal capabilities are auto-detected.
-pub fn create_picker(image_mode: Option<ImageMode>) -> Option<Picker> {
+///
+/// When `query_stdio` is `false`, the terminal-capability stdio query is
+/// skipped entirely. This must be used whenever stdin is piped input (e.g.
+/// `markless -`): the query reads from stdin and would otherwise hang
+/// forever reading EOF from an already-consumed pipe, and the terminal's
+/// response to the query would arrive on `/dev/tty` rather than the piped
+/// stdin anyway, so the query could never succeed in that case.
+///
+/// Without the stdio query, `image_mode` is honored directly when `Some`,
+/// and when `None` the protocol is still auto-detected from environment
+/// variables (see [`detect_protocol`]) so that Kitty/iTerm2/WezTerm/Ghostty
+/// users piping markdown keep a real image protocol instead of always
+/// falling back to half-blocks. In all cases the returned picker uses the
+/// hardcoded half-blocks font size (10x20) rather than the terminal's real
+/// cell metrics, since that information can only come from the stdio query.
+/// This can cause image scaling misalignment for piped content with images
+/// even when a pixel protocol (kitty/sixel/iterm2) is in use.
+pub fn create_picker(image_mode: Option<ImageMode>, query_stdio: bool) -> Option<Picker> {
+    if !query_stdio {
+        let picker = image_mode.map_or_else(
+            || {
+                let detected = detect_protocol();
+                let mut picker = Picker::halfblocks();
+                if detected == ImageMode::Halfblock {
+                    crate::perf::log_event(
+                        "image.create_picker",
+                        "stdio query skipped protocol=Halfblocks",
+                    );
+                } else {
+                    let protocol_type = image_mode_to_protocol_type(detected);
+                    picker.set_protocol_type(protocol_type);
+                    crate::perf::log_event(
+                        "image.create_picker",
+                        format!("stdio query skipped env-detected protocol={protocol_type:?}"),
+                    );
+                }
+                picker
+            },
+            |mode| {
+                let protocol_type = image_mode_to_protocol_type(mode);
+                let mut picker = Picker::halfblocks();
+                if protocol_type != ProtocolType::Halfblocks {
+                    picker.set_protocol_type(protocol_type);
+                }
+                crate::perf::log_event(
+                    "image.create_picker",
+                    format!("stdio query skipped protocol={protocol_type:?}"),
+                );
+                picker
+            },
+        );
+        return Some(picker);
+    }
+
     if let Some(mode) = image_mode {
         let protocol_type = image_mode_to_protocol_type(mode);
         if protocol_type == ProtocolType::Halfblocks {
@@ -262,5 +315,56 @@ mod tests {
         let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(1, 1, Rgba([12, 34, 56, 77])));
         let quantized = quantize_to_ansi256(&image).to_rgba8();
         assert_eq!(quantized.get_pixel(0, 0)[3], 77);
+    }
+
+    // `create_picker(_, false)` never performs the stdio capability query, so
+    // the returned picker always uses the hardcoded half-blocks font size
+    // regardless of which protocol ends up selected.
+    #[test]
+    fn test_create_picker_no_query_stdio_uses_halfblocks_font_size() {
+        let picker = create_picker(None, false).expect("picker should be created");
+        assert_eq!(picker.font_size(), (10, 20));
+        // Auto-detect now consults `detect_protocol()`, which reads
+        // environment variables that vary by CI/test environment, so only
+        // assert the protocol is one of the known variants (env-independent).
+        assert!(matches!(
+            picker.protocol_type(),
+            ProtocolType::Halfblocks
+                | ProtocolType::Kitty
+                | ProtocolType::Sixel
+                | ProtocolType::Iterm2
+        ));
+    }
+
+    #[test]
+    fn test_create_picker_no_query_stdio_forced_kitty() {
+        let picker =
+            create_picker(Some(ImageMode::Kitty), false).expect("picker should be created");
+        assert_eq!(picker.protocol_type(), ProtocolType::Kitty);
+        assert_eq!(picker.font_size(), (10, 20));
+    }
+
+    #[test]
+    fn test_create_picker_no_query_stdio_forced_iterm2() {
+        let picker =
+            create_picker(Some(ImageMode::ITerm2), false).expect("picker should be created");
+        assert_eq!(picker.protocol_type(), ProtocolType::Iterm2);
+        assert_eq!(picker.font_size(), (10, 20));
+    }
+
+    #[test]
+    fn test_create_picker_no_query_stdio_forced_sixel() {
+        let picker =
+            create_picker(Some(ImageMode::Sixel), false).expect("picker should be created");
+        assert_eq!(picker.protocol_type(), ProtocolType::Sixel);
+        assert_eq!(picker.font_size(), (10, 20));
+    }
+
+    #[test]
+    fn test_create_picker_no_query_stdio_forced_halfblock() {
+        let picker =
+            create_picker(Some(ImageMode::Halfblock), false).expect("picker should be created");
+        assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
+        assert_eq!(picker.font_size(), (10, 20));
     }
 }
