@@ -150,6 +150,27 @@ fn test_stdin_model_base_dir_is_current_directory() {
 }
 
 #[test]
+fn test_load_file_clears_from_stdin_for_real_file() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("doc.md");
+    std::fs::write(&file_path, "# Real\n\nfrom disk").unwrap();
+
+    let mut model = create_stdin_model();
+    assert!(model.from_stdin);
+
+    model.load_file(&file_path).unwrap();
+
+    assert!(
+        !model.from_stdin,
+        "loading a real file must clear the stdin flag"
+    );
+    assert!(
+        model.can_edit(),
+        "a real on-disk markdown file must be editable after load_file"
+    );
+}
+
+#[test]
 fn test_force_reload_reloads_document_from_disk() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("doc.md");

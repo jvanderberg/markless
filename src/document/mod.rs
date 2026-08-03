@@ -288,9 +288,14 @@ pub fn prepare_document_from_bytes_with_widths(
 ///
 /// Text input is parsed as markdown. Binary input is displayed as a
 /// hex dump, mirroring how binary files are handled on disk.
+///
+/// # Panics
+///
+/// Panics if `bytes` is not valid UTF-8 despite `is_binary()` reporting it as
+/// text; `is_binary()` is expected to guarantee this never happens.
 pub fn prepare_stdin_document(bytes: Vec<u8>, wrap_width: u16, max_width: u16) -> Document {
     if !is_binary(&bytes) {
-        let content = String::from_utf8(bytes).unwrap_or_default();
+        let content = String::from_utf8(bytes).expect("is_binary() already validated UTF-8");
         return Document::parse_with_widths(&content, wrap_width, max_width)
             .unwrap_or_else(|_| Document::empty());
     }

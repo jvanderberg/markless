@@ -755,6 +755,9 @@ impl Model {
         let raw_bytes = std::fs::read(path)?;
         let document = self.document_from_bytes(path, raw_bytes)?;
         self.file_path = path.to_path_buf();
+        // A real on-disk file was just loaded, so it is no longer piped
+        // stdin input, even if the model started out in stdin mode.
+        self.from_stdin = false;
         self.base_dir = path
             .parent()
             .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);

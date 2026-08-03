@@ -10,7 +10,7 @@
 //! markless --no-toc README.md
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -228,7 +228,7 @@ fn relaunch_with_theme(mode: HighlightBackground, raw_args: &[String]) -> Result
 /// Returns the resolved path and whether the document should be read from
 /// standard input (`markless -`).
 fn resolve_path(path: PathBuf) -> (PathBuf, bool) {
-    if path == *"-" {
+    if path == Path::new("-") {
         (PathBuf::from("<stdin>"), true)
     } else {
         (path, false)

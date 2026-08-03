@@ -66,7 +66,7 @@ echo "# Hello" | markless -
 printf '# Hello\n\nSome *markdown*' | markless -
 ```
 
-Piped input has no backing file, so watching, reloading, and editing are disabled (a toast explains each). Relative image paths in piped markdown resolve against the current working directory. Binary input is shown as a hex dump.
+Piped input has no backing file, so watching, reloading, and editing are disabled (a toast explains each). Relative image paths in piped markdown resolve against the current working directory. Binary input is shown as a hex dump. Piped content is always parsed as markdown — there's no filename or extension to trigger code-block wrapping for e.g. piped source code or CSV — so pipe markdown specifically. In stdin mode markless skips its terminal-capability query, so even with a real image protocol (kitty/sixel/iterm2), image scaling uses a fixed font size rather than the terminal's actual metrics and may be slightly misaligned.
 
 ## Command Line Options
 

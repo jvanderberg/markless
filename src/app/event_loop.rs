@@ -108,9 +108,11 @@ impl App {
     pub fn run(&mut self) -> Result<()> {
         let _run_scope = crate::perf::scope("app.run.total");
 
-        // Read piped stdin content BEFORE creating the image picker: the
-        // picker's terminal-capability query reads from stdin and would
-        // otherwise consume the piped markdown.
+        // Read piped stdin content early, before terminal/picker init, so the
+        // document is available up front. The image picker skips its stdio
+        // capability query entirely in stdin mode (query_stdio=false below):
+        // that query would otherwise consume/block on the pipe, and the
+        // terminal's response to it can't arrive through a piped stdin anyway.
         let stdin_source = if self.stdin_mode {
             if std::io::stdin().is_terminal() {
                 anyhow::bail!(
@@ -129,7 +131,7 @@ impl App {
         // Create image picker BEFORE initializing terminal (queries stdio)
         let picker = if self.images_enabled {
             let picker_scope = crate::perf::scope("app.create_picker");
-            let picker = crate::image::create_picker(self.image_mode);
+            let picker = crate::image::create_picker(self.image_mode, !self.stdin_mode);
             drop(picker_scope);
             picker
         } else {
@@ -232,7 +234,14 @@ impl App {
         if self.stdin_mode {
             model.from_stdin = true;
             model.base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            model.show_toast(ToastLevel::Info, "Reading markdown from stdin (pipe)");
+            if self.watch_enabled {
+                model.show_toast(
+                    ToastLevel::Info,
+                    "Reading markdown from stdin (pipe) — --watch is not supported for piped input",
+                );
+            } else {
+                model.show_toast(ToastLevel::Info, "Reading markdown from stdin (pipe)");
+            }
         }
 
         // Reparse with mermaid-as-images now that the picker is configured.
