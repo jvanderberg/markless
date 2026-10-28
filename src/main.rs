@@ -237,6 +237,8 @@ fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing::Level::WARN.into()),
         )
+        .with_writer(|| perf::DebugLogWriter)
+        .with_ansi(false)
         .init();
 
     let raw_args = std::env::args().collect::<Vec<_>>();
