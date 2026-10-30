@@ -3847,3 +3847,32 @@ fn test_enter_edit_mode_allowed_for_text_file() {
     let model = update(model, Message::EnterEditMode);
     assert!(model.editor_mode, "should enter edit mode for text files");
 }
+
+#[test]
+fn test_toggle_toc_after_browse_mode_shows_headings() {
+    let model = create_many_headings_model();
+    let model = update(model, Message::EnterBrowseMode);
+    let model = update(model, Message::ToggleToc); // switch straight to headings
+    assert!(model.toc_visible);
+    assert!(!model.browse_mode);
+}
+
+#[test]
+fn test_toggle_toc_focus_after_browse_mode_shows_headings() {
+    let model = create_many_headings_model();
+    let model = update(model, Message::EnterBrowseMode);
+    let model = update(model, Message::ToggleTocFocus);
+    assert!(model.toc_visible);
+    assert!(model.toc_focused);
+    assert!(!model.browse_mode);
+}
+
+#[test]
+fn test_enter_browse_mode_twice_closes_browser() {
+    let model = create_many_headings_model();
+    let model = update(model, Message::EnterBrowseMode);
+    let model = update(model, Message::EnterBrowseMode);
+    assert!(!model.browse_mode);
+    assert!(!model.toc_visible);
+    assert!(!model.toc_focused);
+}

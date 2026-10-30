@@ -104,7 +104,7 @@ pub enum Message {
     // Browse mode
     /// Switch to file-only mode (TOC shows headings)
     EnterFileMode,
-    /// Switch to browse mode (TOC shows directory listing)
+    /// Toggle browse mode (TOC shows directory listing)
     EnterBrowseMode,
 
     // Editor
@@ -232,14 +232,14 @@ pub fn update(mut model: Model, msg: Message) -> Model {
 
         // TOC
         Message::ToggleToc => {
-            model.toc_visible = !model.toc_visible;
+            toggle_toc_visibility(&mut model);
             if model.toc_visible && model.toc_selected.is_none() {
                 model.toc_selected = Some(0);
             }
             model.reflow_layout();
         }
         Message::ToggleTocFocus => {
-            model.toc_visible = !model.toc_visible;
+            toggle_toc_visibility(&mut model);
             model.toc_focused = model.toc_visible;
             if model.toc_visible && model.toc_selected.is_none() {
                 model.toc_selected = Some(0);
@@ -582,6 +582,13 @@ pub fn update(mut model: Model, msg: Message) -> Model {
             // heading indices rather than stale browse-entry indices.
             model.sync_toc_to_viewport();
         }
+        Message::EnterBrowseMode if model.browse_mode && model.toc_visible => {
+            // Pressing B again closes the browser.
+            model.browse_mode = false;
+            model.toc_visible = false;
+            model.toc_focused = false;
+            model.reflow_layout();
+        }
         Message::EnterBrowseMode => {
             model.browse_mode = true;
             model.toc_visible = true;
@@ -691,5 +698,17 @@ pub(super) fn refresh_search_matches(model: &mut Model, jump_to_first: bool, all
     } else if let Some(idx) = model.search_match_index {
         let clamped = idx.min(model.search_matches.len() - 1);
         model.search_match_index = Some(clamped);
+    }
+}
+
+/// The TOC key shows the heading list: from browse mode it switches the
+/// sidebar to headings instead of hiding it.
+fn toggle_toc_visibility(model: &mut Model) {
+    if model.browse_mode {
+        model.browse_mode = false;
+        model.toc_visible = true;
+        model.sync_toc_to_viewport();
+    } else {
+        model.toc_visible = !model.toc_visible;
     }
 }

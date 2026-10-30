@@ -106,7 +106,7 @@ TOC
 - `l` / `Right`: expand (enter directory in browse mode)
 
 Browse
-- `B`: enter directory browse mode
+- `B`: toggle directory browse mode
 - `F`: return to file-only mode (heading TOC)
 - `Backspace`: navigate to parent directory (in TOC)
 

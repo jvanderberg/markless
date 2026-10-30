@@ -119,7 +119,7 @@ pub fn render_help_overlay(model: &Model, frame: &mut Frame, area: Rect) {
 
     // Browse
     all_lines.push(Line::styled("Browse", section_style));
-    all_lines.push(Line::raw("  B                   Browse directory"));
+    all_lines.push(Line::raw("  B                   Browse directory (toggle)"));
     all_lines.push(Line::raw("  F                   Focus on file only"));
     all_lines.push(Line::raw("  Backspace           Parent directory (in TOC)"));
     all_lines.push(Line::raw(""));

@@ -109,7 +109,7 @@ impl App {
             Message::EditorSave => {
                 Self::save_editor_buffer(model);
             }
-            Message::EnterBrowseMode => {
+            Message::EnterBrowseMode if model.browse_mode => {
                 let dir = model
                     .file_path
                     .parent()
